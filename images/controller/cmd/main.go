@@ -94,7 +94,8 @@ func main() {
 	log.Info("[main] kubernetes manager created")
 
 	// TODO: register sds-object reconcilers on the manager here, e.g.
-	//   if err := controller.AddObjectStorageClassReconcilerToManager(mgr, cfgParams, log); err != nil { ... }
+	//   if err := controller.AddObjectStorageClusterReconcilerToManager(mgr, cfgParams, log); err != nil { ... }
+	//   if err := controller.AddObjectBucketReconcilerToManager(mgr, cfgParams, log); err != nil { ... }
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		log.Error(err, "[main] unable to AddHealthzCheck")

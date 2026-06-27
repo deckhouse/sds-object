@@ -10,7 +10,8 @@ rules:
 - apiGroups:
   - storage.deckhouse.io
   resources:
-  - objectstorageclasses
+  - objectstorageclusters
+  - objectbuckets
   verbs:
   - get
   - list
@@ -27,7 +28,8 @@ rules:
 - apiGroups:
   - storage.deckhouse.io
   resources:
-  - objectstorageclasses
+  - objectstorageclusters
+  - objectbuckets
   verbs:
   - create
   - delete

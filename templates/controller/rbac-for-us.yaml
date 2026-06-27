@@ -20,7 +20,7 @@
     (dict "apiGroups" (list "coordination.k8s.io") "resources" (list "leases") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete"))
   )
   "clusterRoleRules" (list
-    (dict "apiGroups" (list "storage.deckhouse.io") "resources" (list "objectstorageclasses" "objectstorageclasses/status" "objectstorageclasses/finalizers") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete"))
+    (dict "apiGroups" (list "storage.deckhouse.io") "resources" (list "objectstorageclusters" "objectstorageclusters/status" "objectstorageclusters/finalizers" "objectbuckets" "objectbuckets/status" "objectbuckets/finalizers") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete"))
     (dict "apiGroups" (list "") "resources" (list "secrets" "configmaps") "verbs" (list "get" "list" "watch"))
   )
 }}

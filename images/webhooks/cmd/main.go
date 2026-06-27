@@ -55,7 +55,8 @@ func initFlags() (config, error) {
 const (
 	port = ":8443"
 
-	ObjectStorageClassValidatorID = "ObjectStorageClassValidator"
+	ObjectStorageClusterValidatorID = "ObjectStorageClusterValidator"
+	ObjectBucketValidatorID         = "ObjectBucketValidator"
 )
 
 func main() {
@@ -70,8 +71,8 @@ func main() {
 	}
 
 	oscValidatingWebhookHandler, err := handlers.GetValidatingWebhookHandler(
-		handlers.ObjectStorageClassValidate,
-		ObjectStorageClassValidatorID,
+		handlers.ObjectStorageClusterValidate,
+		ObjectStorageClusterValidatorID,
 		&unstructured.Unstructured{},
 		logger,
 	)
@@ -80,8 +81,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	obValidatingWebhookHandler, err := handlers.GetValidatingWebhookHandler(
+		handlers.ObjectBucketValidate,
+		ObjectBucketValidatorID,
+		&unstructured.Unstructured{},
+		logger,
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error creating obValidatingWebhookHandler: %s", err)
+		os.Exit(1)
+	}
+
 	mux := http.NewServeMux()
 	mux.Handle("/osc-validate", oscValidatingWebhookHandler)
+	mux.Handle("/ob-validate", obValidatingWebhookHandler)
 	mux.HandleFunc("/healthz", httpHandlerHealthz)
 
 	logger.Infof("Listening on %s", port)
