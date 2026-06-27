@@ -1,0 +1,2 @@
+Changes:
+- Initial module framework (assembly, CI, helm chart, Go application templates).

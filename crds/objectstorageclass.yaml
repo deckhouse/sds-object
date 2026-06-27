@@ -1,0 +1,52 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: objectstorageclasses.storage.deckhouse.io
+  labels:
+    heritage: deckhouse
+    module: sds-object
+spec:
+  group: storage.deckhouse.io
+  scope: Cluster
+  names:
+    plural: objectstorageclasses
+    singular: objectstorageclass
+    kind: ObjectStorageClass
+    shortNames:
+      - osc
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          jsonPath: .status.phase
+          type: string
+        - name: Age
+          jsonPath: .metadata.creationTimestamp
+          type: date
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: |
+            ObjectStorageClass is a placeholder custom resource for the sds-object
+            module. Replace its schema with the real contract as the module is
+            implemented.
+          properties:
+            spec:
+              type: object
+              properties:
+                reclaimPolicy:
+                  type: string
+                  description: Placeholder field; defines the desired reclaim policy.
+                  enum:
+                    - Delete
+                    - Retain
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  description: Observed lifecycle stage of the resource.

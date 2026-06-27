@@ -1,0 +1,8 @@
+name: "sds-object"
+stage: "Experimental"
+descriptions:
+  en: "Manages object storage."
+  ru: "Управляет объектным хранилищем."
+requirements:
+  deckhouse: ">= 1.72"
+namespace: d8-sds-object

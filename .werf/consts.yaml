@@ -1,0 +1,2 @@
+# Edition module settings, default ce
+{{- $_ := set . "MODULE_EDITION" (env "MODULE_EDITION" "ce") }}
