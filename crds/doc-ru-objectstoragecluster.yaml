@@ -1,0 +1,147 @@
+spec:
+  versions:
+    - name: v1alpha1
+      schema:
+        openAPIV3Schema:
+          description: |
+            Описывает желаемое состояние S3-совместимого кластера объектного
+            хранилища, управляемого модулем sds-object. Поле `spec.type` выбирает
+            один из четырёх готовых профилей; бэкенд (Garage / SeaweedFS / Ceph RGW)
+            и его низкоуровневые настройки скрыты от пользователя (noops).
+
+            Бакеты и их S3-учётные данные описываются отдельно — в namespaced-ресурсах
+            ObjectBucket, ссылающихся на этот кластер по имени.
+          properties:
+            spec:
+              description: |
+                Желаемое состояние кластера объектного хранилища.
+              properties:
+                type:
+                  description: |
+                    Профиль кластера. Выбирает бэкенд и модель размещения:
+
+                    - `System` — Garage, разворачивается как DaemonSet на
+                      control-plane узлах с хранением в `hostPath`. Для системных
+                      нужд платформы (бэкапы, registry, логи). `storage.class`
+                      игнорируется.
+                    - `Lightweight` — Garage, StatefulSet с PVC на `storage.class`.
+                      Для небольших прикладных нагрузок.
+                    - `Full` — SeaweedFS (master/volume/filer + S3-gateway) с PVC на
+                      `storage.class`. Масштабируемое полнофункциональное хранилище.
+                    - `Heavy` — Ceph RADOS Gateway (CephObjectStore) поверх
+                      существующего кластера sds-elastic, заданного через
+                      `elasticClusterRef`. Переиспользует ёмкость и отказоустойчивость
+                      Ceph.
+
+                    Неизменяемо после создания.
+                storage:
+                  description: |
+                    Ёмкость и нижележащее хранилище. Игнорируется для `type: Heavy`
+                    (ёмкость берётся у Ceph-кластера).
+                  properties:
+                    size:
+                      description: |
+                        Суммарная полезная ёмкость в формате Kubernetes Quantity
+                        (BinarySI), например `50Gi` или `2Ti`. Для `type: System` —
+                        ёмкость, добавляемая каждым control-plane узлом.
+                    class:
+                      description: |
+                        Имя Kubernetes StorageClass для создания PVC. Обязательно для
+                        `Lightweight` и `Full`; игнорируется для `System` (hostPath)
+                        и `Heavy` (Ceph).
+                redundancy:
+                  description: |
+                    Высокоуровневый интент отказоустойчивости. Контроллер транслирует
+                    его в настройки бэкенда (фактор репликации / erasure coding). Если
+                    не задано, значение по умолчанию выводится из `spec.type`.
+
+                    - `Single` — без избыточности (одна копия). Минимальные накладные
+                      расходы.
+                    - `Replicated` — реплицированные копии по узлам/зонам (типовое
+                      значение по умолчанию).
+                    - `HighRedundancy` — максимальная надёжность (дополнительные
+                      реплики или erasure coding), требует больше узлов.
+                placement:
+                  description: |
+                    Размещение дата-плейна кластера. Для `type: System` размещение
+                    принудительно на control-plane узлах, эти поля игнорируются.
+                  properties:
+                    nodeSelector:
+                      description: |
+                        Метки узлов, которым должны соответствовать поды дата-плейна
+                        (как `spec.nodeSelector` у пода).
+                    tolerations:
+                      description: |
+                        Tolerations для подов дата-плейна (как `spec.tolerations`
+                        у пода).
+                elasticClusterRef:
+                  description: |
+                    Имя ElasticCluster (sds-elastic), на котором создаётся
+                    CephObjectStore. Обязательно и допустимо только при
+                    `spec.type: Heavy`. Неизменяемо после создания.
+            status:
+              description: |
+                Наблюдаемое состояние кластера объектного хранилища.
+              properties:
+                observedGeneration:
+                  description: |
+                    Последнее значение `metadata.generation`, обработанное контроллером.
+                phase:
+                  description: |
+                    Агрегатная фаза: `Pending`, `InProgress`, `Ready`, `Error`.
+                backend:
+                  description: |
+                    Фактический бэкенд, реализующий выбранный профиль.
+                  properties:
+                    type:
+                      description: Бэкенд, реализующий профиль.
+                    version:
+                      description: Запущенная версия бэкенда.
+                endpoint:
+                  description: |
+                    S3-эндпойнт, через который клиенты обращаются к кластеру.
+                  properties:
+                    internal:
+                      description: |
+                        Внутрикластерный URL S3-эндпойнта (DNS Service).
+                    region:
+                      description: Регион S3 по умолчанию.
+                capacity:
+                  description: |
+                    Использование хранилища по данным бэкенда.
+                  properties:
+                    total:
+                      description: Полная ёмкость, Kubernetes Quantity (BinarySI).
+                    used:
+                      description: Занятая ёмкость, Kubernetes Quantity (BinarySI).
+                    available:
+                      description: Свободная ёмкость, Kubernetes Quantity (BinarySI).
+                    usedPercent:
+                      description: "`used / total * 100`, с двумя знаками после запятой."
+                    lastUpdated:
+                      description: Время последнего замера ёмкости.
+                adminSecretRef:
+                  description: |
+                    Ссылка на Secret (в namespace модуля) с админ-учёткой бэкенда,
+                    которую контроллер использует для управления бакетами и ключами.
+                  properties:
+                    name:
+                      description: Имя Secret.
+                conditions:
+                  description: |
+                    Покомпонентные condition: `BackendReady`, `EndpointReady` и
+                    агрегатное `Ready`.
+                  items:
+                    properties:
+                      type:
+                        description: Тип condition.
+                      status:
+                        description: Текущий статус condition.
+                      observedGeneration:
+                        description: Значение `metadata.generation`, для которого выставлен condition.
+                      lastTransitionTime:
+                        description: Время последнего перехода condition.
+                      reason:
+                        description: Машинно-читаемая причина текущего статуса.
+                      message:
+                        description: Человекочитаемое описание текущего статуса.

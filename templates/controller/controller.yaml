@@ -24,12 +24,12 @@
 {{ include "helm_lib_module_webhook_service" (list . dict) }}
 
 {{- /*
-  ValidatingWebhookConfiguration for ObjectStorageClass.
+  ValidatingWebhookConfiguration for ObjectStorageCluster.
   Placeholder admission rule wired to the webhooks container (/osc-validate).
 */ -}}
 {{- $oscWebhookConfig := dict
-  "name" "object-storage-class-validation"
-  "webhookName" "object-storage-class-validation"
+  "name" "object-storage-cluster-validation"
+  "webhookName" "object-storage-cluster-validation"
   "valuesKey" "sdsObject"
   "path" "/osc-validate"
   "failurePolicy" "Fail"
@@ -38,9 +38,31 @@
       "apiGroups" (list "storage.deckhouse.io")
       "apiVersions" (list "v1alpha1")
       "operations" (list "CREATE" "UPDATE")
-      "resources" (list "objectstorageclasses")
+      "resources" (list "objectstorageclusters")
       "scope" "Cluster"
     )
   )
 }}
 {{ include "helm_lib_module_validating_webhook_configuration" (list . $oscWebhookConfig) }}
+
+{{- /*
+  ValidatingWebhookConfiguration for ObjectBucket.
+  Placeholder admission rule wired to the webhooks container (/ob-validate).
+*/ -}}
+{{- $obWebhookConfig := dict
+  "name" "object-bucket-validation"
+  "webhookName" "object-bucket-validation"
+  "valuesKey" "sdsObject"
+  "path" "/ob-validate"
+  "failurePolicy" "Fail"
+  "rules" (list
+    (dict
+      "apiGroups" (list "storage.deckhouse.io")
+      "apiVersions" (list "v1alpha1")
+      "operations" (list "CREATE" "UPDATE")
+      "resources" (list "objectbuckets")
+      "scope" "Namespaced"
+    )
+  )
+}}
+{{ include "helm_lib_module_validating_webhook_configuration" (list . $obWebhookConfig) }}

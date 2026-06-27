@@ -3,9 +3,11 @@
 
   The controller-runtime cache is cluster-scoped by default, so any namespaced
   resource the manager watches (Secret, ConfigMap) requires cluster-wide
-  get/list/watch on the ServiceAccount. Keep mutation verbs for those resources
-  in the namespaced Role - we only ever create/update/delete them in
-  d8-sds-object. The webhooks share the same ServiceAccount but exercise only
+  get/list/watch on the ServiceAccount. ConfigMap mutation stays in the
+  namespaced Role (we only ever write them in d8-sds-object). Secrets are the
+  exception: the ObjectBucket reconciler writes the S3 credentials Secret into
+  the consuming application's namespace, so secret write verbs are granted
+  cluster-wide. The webhooks share the same ServiceAccount but exercise only
   the read verbs.
 
   Note for future editors: do not place Helm/Go-template comments inside the
@@ -20,8 +22,9 @@
     (dict "apiGroups" (list "coordination.k8s.io") "resources" (list "leases") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete"))
   )
   "clusterRoleRules" (list
-    (dict "apiGroups" (list "storage.deckhouse.io") "resources" (list "objectstorageclasses" "objectstorageclasses/status" "objectstorageclasses/finalizers") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete"))
-    (dict "apiGroups" (list "") "resources" (list "secrets" "configmaps") "verbs" (list "get" "list" "watch"))
+    (dict "apiGroups" (list "storage.deckhouse.io") "resources" (list "objectstorageclusters" "objectstorageclusters/status" "objectstorageclusters/finalizers" "objectbuckets" "objectbuckets/status" "objectbuckets/finalizers") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete"))
+    (dict "apiGroups" (list "") "resources" (list "secrets") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete"))
+    (dict "apiGroups" (list "") "resources" (list "configmaps") "verbs" (list "get" "list" "watch"))
   )
 }}
 {{ include "helm_lib_module_controller_rbac" (list . $rbacConfig) }}

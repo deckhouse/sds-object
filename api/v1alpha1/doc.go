@@ -17,8 +17,10 @@ limitations under the License.
 // Package v1alpha1 contains API Schema definitions for the storage.deckhouse.io
 // resources managed by the sds-object module.
 //
-//   - ObjectStorageClass — placeholder custom resource; replace it with the
-//     real sds-object API types as the module is implemented.
+//   - ObjectStorageCluster — cluster-scoped CR describing an S3-compatible
+//     object storage cluster (one of four turnkey profiles).
+//   - ObjectBucket — namespaced CR declaring a single bucket plus its S3
+//     credentials Secret.
 //
 // +groupName=storage.deckhouse.io
 // +k8s:deepcopy-gen=package

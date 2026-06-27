@@ -1,0 +1,96 @@
+spec:
+  versions:
+    - name: v1alpha1
+      schema:
+        openAPIV3Schema:
+          description: |
+            Описывает один S3-бакет в кластере ObjectStorageCluster и учётные данные
+            доступа к нему. Контроллер создаёт бакет в бэкенде, генерирует пару
+            access key / secret key с доступом только к этому бакету и кладёт в тот же
+            namespace Secret (см. `status.secretRef`) со стандартными переменными
+            подключения к S3 — чтобы приложение могло использовать его напрямую через
+            `envFrom`.
+          properties:
+            spec:
+              description: |
+                Желаемое состояние бакета.
+              properties:
+                clusterRef:
+                  description: |
+                    Имя ObjectStorageCluster, к которому относится бакет. Кластер
+                    должен существовать и быть в фазе `Ready` до создания бакета.
+                    Неизменяемо после создания.
+                bucketName:
+                  description: |
+                    Имя бакета в S3. Если не задано — используется `metadata.name`.
+                    Должно соответствовать правилам именования бакетов S3.
+                    Неизменяемо после создания.
+                accessPolicy:
+                  description: |
+                    Политика доступа к бакету.
+
+                    - `Private` (по умолчанию) — доступ только с сгенерированными
+                      учётными данными.
+                    - `PublicRead` — объекты доступны на чтение анонимно; запись
+                      по-прежнему требует учётных данных.
+                reclaimPolicy:
+                  description: |
+                    Что происходит с данными бакета при удалении ObjectBucket.
+
+                    - `Retain` (по умолчанию) — ключ доступа удаляется, бакет и его
+                      объекты сохраняются в бэкенде.
+                    - `Delete` — бакет и все его объекты удаляются.
+                quota:
+                  description: |
+                    Необязательные лимиты использования бакета. Применение зависит от
+                    возможностей бэкенда.
+                  properties:
+                    maxSize:
+                      description: |
+                        Максимальный суммарный размер бакета в формате Kubernetes
+                        Quantity (BinarySI), например `10Gi`. Без значения — без лимита.
+                    maxObjects:
+                      description: |
+                        Максимальное число объектов. `0` (по умолчанию) — без лимита.
+            status:
+              description: |
+                Наблюдаемое состояние бакета.
+              properties:
+                observedGeneration:
+                  description: |
+                    Последнее значение `metadata.generation`, обработанное контроллером.
+                phase:
+                  description: |
+                    Агрегатная фаза: `Pending`, `InProgress`, `Ready`, `Error`.
+                endpoint:
+                  description: |
+                    Внутрикластерный URL S3-эндпойнта кластера-владельца.
+                bucketName:
+                  description: |
+                    Фактическое имя бакета, созданного в бэкенде.
+                secretRef:
+                  description: |
+                    Ссылка на Secret (в namespace этого ObjectBucket) с переменными
+                    подключения и учётными данными S3: `S3_ENDPOINT`, `S3_REGION`,
+                    `S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`.
+                  properties:
+                    name:
+                      description: Имя Secret.
+                conditions:
+                  description: |
+                    Покомпонентные condition: `BucketReady`, `CredentialsReady` и
+                    агрегатное `Ready`.
+                  items:
+                    properties:
+                      type:
+                        description: Тип condition.
+                      status:
+                        description: Текущий статус condition.
+                      observedGeneration:
+                        description: Значение `metadata.generation`, для которого выставлен condition.
+                      lastTransitionTime:
+                        description: Время последнего перехода condition.
+                      reason:
+                        description: Машинно-читаемая причина текущего статуса.
+                      message:
+                        description: Человекочитаемое описание текущего статуса.

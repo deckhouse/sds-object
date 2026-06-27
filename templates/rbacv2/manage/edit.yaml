@@ -13,7 +13,8 @@ rules:
   - apiGroups:
       - storage.deckhouse.io
     resources:
-      - objectstorageclasses
+      - objectstorageclusters
+      - objectbuckets
     verbs:
       - create
       - update

@@ -1,0 +1,315 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: objectstorageclusters.storage.deckhouse.io
+  labels:
+    heritage: deckhouse
+    module: sds-object
+    backup.deckhouse.io/cluster-config: "true"
+spec:
+  group: storage.deckhouse.io
+  scope: Cluster
+  names:
+    plural: objectstorageclusters
+    singular: objectstoragecluster
+    kind: ObjectStorageCluster
+    shortNames:
+      - osc
+  preserveUnknownFields: false
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: |
+            ObjectStorageCluster describes the desired state of an S3-compatible
+            object storage cluster managed by the sds-object module. A single
+            `spec.type` selects one of four turnkey profiles; the backend
+            (Garage / SeaweedFS / Ceph RGW) and its low-level settings are hidden
+            from the user (noops).
+
+            Buckets and their S3 credentials are declared separately in
+            namespaced ObjectBucket resources that reference this cluster by name.
+          required:
+            - spec
+          x-kubernetes-validations:
+            - rule: "size(self.metadata.name) <= 30"
+              message: "ObjectStorageCluster metadata.name must not exceed 30 characters (used as a prefix in derived resource names)."
+            - rule: "self.metadata.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')"
+              message: "ObjectStorageCluster metadata.name must be a valid DNS-1123 label."
+          properties:
+            spec:
+              type: object
+              description: |
+                Desired state of the object storage cluster.
+              required:
+                - type
+              x-kubernetes-validations:
+                - rule: "oldSelf == null || self.type == oldSelf.type"
+                  message: "spec.type is immutable after creation."
+                - rule: "oldSelf == null || (has(self.elasticClusterRef) == has(oldSelf.elasticClusterRef) && (!has(self.elasticClusterRef) || self.elasticClusterRef == oldSelf.elasticClusterRef))"
+                  message: "spec.elasticClusterRef is immutable after creation."
+                - rule: "self.type != 'Heavy' || (has(self.elasticClusterRef) && size(self.elasticClusterRef) > 0)"
+                  message: "spec.elasticClusterRef is required when spec.type is Heavy."
+                - rule: "self.type == 'Heavy' || !has(self.elasticClusterRef) || size(self.elasticClusterRef) == 0"
+                  message: "spec.elasticClusterRef is only allowed when spec.type is Heavy."
+                - rule: "!(self.type in ['Lightweight', 'Full']) || (has(self.storage) && has(self.storage.class) && size(self.storage.class) > 0)"
+                  message: "spec.storage.class is required when spec.type is Lightweight or Full."
+              properties:
+                type:
+                  type: string
+                  description: |
+                    Cluster profile. Selects the backend and placement model:
+
+                    - `System` — Garage, deployed as a DaemonSet on control-plane
+                      nodes with `hostPath` storage. For platform/system needs
+                      (backups, registry, logs). `storage.class` is ignored.
+                    - `Lightweight` — Garage, deployed as a StatefulSet backed by
+                      PVCs on `storage.class`. For small application workloads.
+                    - `Full` — SeaweedFS (master/volume/filer + S3 gateway),
+                      backed by PVCs on `storage.class`. Scalable, full-featured.
+                    - `Heavy` — Ceph RADOS Gateway (CephObjectStore) on top of an
+                      existing sds-elastic cluster referenced by
+                      `elasticClusterRef`. Reuses Ceph capacity and HA.
+
+                    Immutable after creation.
+                  enum:
+                    - System
+                    - Lightweight
+                    - Full
+                    - Heavy
+                storage:
+                  type: object
+                  description: |
+                    Capacity and backing storage. Ignored for `type: Heavy`
+                    (capacity comes from the referenced Ceph cluster).
+                  properties:
+                    size:
+                      type: string
+                      description: |
+                        Total usable capacity as a Kubernetes Quantity (BinarySI),
+                        e.g. `50Gi` or `2Ti`. For `type: System` it is the capacity
+                        contributed per control-plane node.
+                      pattern: '^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$'
+                    class:
+                      type: string
+                      description: |
+                        Name of the Kubernetes StorageClass used to provision PVCs.
+                        Required for `Lightweight` and `Full`; ignored for `System`
+                        (hostPath) and `Heavy` (Ceph).
+                      minLength: 1
+                      maxLength: 253
+                redundancy:
+                  type: string
+                  description: |
+                    High-level fault-tolerance intent. The controller maps it to
+                    backend-specific settings (replication factor / erasure coding).
+                    When omitted, a sensible default is derived from `spec.type`.
+
+                    - `Single` — no redundancy (single copy). Lowest overhead.
+                    - `Replicated` — replicated copies across nodes/zones
+                      (typical default).
+                    - `HighRedundancy` — maximum durability (extra replicas or
+                      erasure coding), requires more nodes.
+                  enum:
+                    - Single
+                    - Replicated
+                    - HighRedundancy
+                placement:
+                  type: object
+                  description: |
+                    Scheduling of the cluster data plane. For `type: System`
+                    placement is forced onto control-plane nodes and these fields
+                    are ignored.
+                  properties:
+                    nodeSelector:
+                      type: object
+                      additionalProperties:
+                        type: string
+                      description: |
+                        Node labels the data-plane Pods must match (same semantics
+                        as a Pod's `spec.nodeSelector`).
+                    tolerations:
+                      type: array
+                      description: |
+                        Tolerations for the data-plane Pods (same shape as a Pod's
+                        `spec.tolerations`).
+                      items:
+                        type: object
+                        properties:
+                          effect:
+                            type: string
+                            enum:
+                              - ""
+                              - NoSchedule
+                              - PreferNoSchedule
+                              - NoExecute
+                          key:
+                            type: string
+                          operator:
+                            type: string
+                            enum:
+                              - Exists
+                              - Equal
+                          value:
+                            type: string
+                          tolerationSeconds:
+                            type: integer
+                            format: int64
+                elasticClusterRef:
+                  type: string
+                  description: |
+                    Name of the ElasticCluster (sds-elastic) the Ceph
+                    CephObjectStore is provisioned on. Required and only allowed
+                    when `spec.type` is `Heavy`. Immutable after creation.
+                  maxLength: 30
+                  pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+            status:
+              type: object
+              description: |
+                Observed state of the object storage cluster.
+              properties:
+                observedGeneration:
+                  type: integer
+                  format: int64
+                  description: |
+                    Most recent `metadata.generation` reconciled by the controller.
+                phase:
+                  type: string
+                  description: |
+                    Coarse-grained summary derived from Conditions.
+                  enum:
+                    - Pending
+                    - InProgress
+                    - Ready
+                    - Error
+                backend:
+                  type: object
+                  description: |
+                    Resolved backend implementation behind `spec.type`.
+                  properties:
+                    type:
+                      type: string
+                      description: |
+                        Backend implementing the selected profile.
+                      enum:
+                        - Garage
+                        - SeaweedFS
+                        - CephRGW
+                    version:
+                      type: string
+                      description: Running backend version.
+                endpoint:
+                  type: object
+                  description: |
+                    S3 endpoint clients use to reach this cluster.
+                  properties:
+                    internal:
+                      type: string
+                      description: |
+                        In-cluster S3 endpoint URL (Service DNS), e.g.
+                        `http://system.d8-sds-object.svc.cluster.local`.
+                    region:
+                      type: string
+                      description: Default S3 region advertised by the endpoint.
+                capacity:
+                  type: object
+                  description: |
+                    Cluster-wide storage usage reported by the backend.
+                  properties:
+                    total:
+                      type: string
+                      description: Total usable capacity, Kubernetes Quantity (BinarySI).
+                    used:
+                      type: string
+                      description: Consumed capacity, Kubernetes Quantity (BinarySI).
+                    available:
+                      type: string
+                      description: Free capacity, Kubernetes Quantity (BinarySI).
+                    usedPercent:
+                      type: string
+                      description: "`used / total * 100`, formatted with two decimals."
+                    lastUpdated:
+                      type: string
+                      format: date-time
+                      description: Timestamp of the latest capacity probe.
+                adminSecretRef:
+                  type: object
+                  description: |
+                    Reference to the Secret (in the module namespace) holding the
+                    backend admin credentials used by the controller to manage
+                    buckets and access keys.
+                  properties:
+                    name:
+                      type: string
+                conditions:
+                  type: array
+                  description: |
+                    Per-component conditions: `BackendReady`, `EndpointReady`,
+                    and the aggregate `Ready`.
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                      - lastTransitionTime
+                    properties:
+                      type:
+                        type: string
+                        description: |
+                          Condition type, for example `Ready`, `BackendReady`, or
+                          `EndpointReady`.
+                      status:
+                        type: string
+                        description: Current status of the condition.
+                        enum:
+                          - "True"
+                          - "False"
+                          - "Unknown"
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                        description: |
+                          Value of `metadata.generation` the condition was last set against.
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                        description: |
+                          Timestamp of the last status transition for this condition.
+                      reason:
+                        type: string
+                        description: |
+                          Machine-readable reason for the current status, suitable for
+                          log filtering.
+                      message:
+                        type: string
+                        description: |
+                          Human-readable explanation of the current status.
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - jsonPath: .spec.type
+          name: Type
+          type: string
+        - jsonPath: .status.phase
+          name: Phase
+          type: string
+        - jsonPath: .status.endpoint.internal
+          name: Endpoint
+          type: string
+        - jsonPath: .status.capacity.usedPercent
+          name: Used%
+          type: string
+          priority: 1
+        - jsonPath: .status.capacity.total
+          name: Capacity
+          type: string
+          priority: 1
+        - jsonPath: .status.conditions[?(@.type=="Ready")].status
+          name: Ready
+          type: string
+        - jsonPath: .metadata.creationTimestamp
+          name: Age
+          type: date

@@ -26,15 +26,17 @@ import (
 	"k8s.io/klog/v2"
 )
 
-// ObjectStorageClassValidate is a placeholder admission validator for the
-// ObjectStorageClass custom resource. It accepts every request; add the real
-// cross-field / immutability checks here as the sds-object contract is defined.
-func ObjectStorageClassValidate(_ context.Context, _ *model.AdmissionReview, obj metav1.Object) (*kwhvalidating.ValidatorResult, error) {
+// ObjectBucketValidate is a placeholder admission validator for the ObjectBucket
+// custom resource. It accepts every request; add the real cross-field checks
+// here (e.g. clusterRef points to an existing ObjectStorageCluster) as the
+// controller is implemented. Note that the schema-level CEL rules in the CRD
+// already enforce clusterRef/bucketName immutability.
+func ObjectBucketValidate(_ context.Context, _ *model.AdmissionReview, obj metav1.Object) (*kwhvalidating.ValidatorResult, error) {
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok {
 		return &kwhvalidating.ValidatorResult{Valid: true}, nil
 	}
 
-	klog.Infof("ObjectStorageClass %s admitted (placeholder validator)", u.GetName())
+	klog.Infof("ObjectBucket %s/%s admitted (placeholder validator)", u.GetNamespace(), u.GetName())
 	return &kwhvalidating.ValidatorResult{Valid: true}, nil
 }
