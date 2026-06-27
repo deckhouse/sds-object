@@ -76,6 +76,11 @@ func s3Endpoint(cluster *v1alpha1.ObjectStorageCluster, namespace string) string
 	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", s3SvcName(cluster), namespace, s3Port)
 }
 
+// adminEndpoint is the in-cluster admin API URL of the cluster's Service.
+func adminEndpoint(cluster *v1alpha1.ObjectStorageCluster, namespace string) string {
+	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", s3SvcName(cluster), namespace, adminPort)
+}
+
 // replicationFactor maps the high-level redundancy intent to a Garage
 // replication_factor. The empty value defaults to Replicated.
 func replicationFactor(cluster *v1alpha1.ObjectStorageCluster) int32 {

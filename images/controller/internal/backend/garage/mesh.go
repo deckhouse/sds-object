@@ -61,7 +61,7 @@ func (d *Driver) ensureMeshAndLayout(ctx context.Context, cluster *v1alpha1.Obje
 		return meshResult{msg: "waiting for Garage pods to report a node identity"}, nil
 	}
 
-	svc := newAdminClient(fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", s3SvcName(cluster), d.namespace, adminPort), token)
+	svc := newAdminClient(adminEndpoint(cluster, d.namespace), token)
 
 	// 1. Connect peers (idempotent gossip seed).
 	peerSpecs := make([]string, 0, len(peers))

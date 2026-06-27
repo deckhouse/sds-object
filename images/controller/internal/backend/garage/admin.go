@@ -20,9 +20,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -164,7 +166,7 @@ func (c *adminClient) do(ctx context.Context, method, path string, body, out any
 
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("garage admin %s %s: status %d: %s", method, path, resp.StatusCode, string(data))
+		return &apiError{Method: method, Path: path, StatusCode: resp.StatusCode, Body: string(data)}
 	}
 	if out != nil && len(data) > 0 {
 		if err := json.Unmarshal(data, out); err != nil {
@@ -172,4 +174,121 @@ func (c *adminClient) do(ctx context.Context, method, path string, body, out any
 		}
 	}
 	return nil
+}
+
+// apiError is returned for non-2xx admin API responses.
+type apiError struct {
+	Method     string
+	Path       string
+	StatusCode int
+	Body       string
+}
+
+func (e *apiError) Error() string {
+	return fmt.Sprintf("garage admin %s %s: status %d: %s", e.Method, e.Path, e.StatusCode, e.Body)
+}
+
+// isNotFound reports whether err is an admin API 404.
+func isNotFound(err error) bool {
+	var ae *apiError
+	return errors.As(err, &ae) && ae.StatusCode == http.StatusNotFound
+}
+
+// --- Bucket / key management ------------------------------------------------
+//
+// NOTE: as with the cluster-management calls above, these target the documented
+// Garage v1 admin API and are the most likely place to need adjustment on the
+// first live-cluster pass; they are localised here on purpose.
+
+// keyInfo is the response of POST /v1/key and GET /v1/key. secretAccessKey is
+// only populated by the server at creation time.
+type keyInfo struct {
+	AccessKeyID     string `json:"accessKeyId"`
+	SecretAccessKey string `json:"secretAccessKey"`
+	Name            string `json:"name"`
+}
+
+// bucketInfo is the response of POST/GET /v1/bucket.
+type bucketInfo struct {
+	ID            string   `json:"id"`
+	GlobalAliases []string `json:"globalAliases"`
+}
+
+// permissions is the access granted to a key on a bucket.
+type permissions struct {
+	Read  bool `json:"read"`
+	Write bool `json:"write"`
+	Owner bool `json:"owner"`
+}
+
+// createKey creates a new access key with the given display name.
+func (c *adminClient) createKey(ctx context.Context, name string) (*keyInfo, error) {
+	var out keyInfo
+	if err := c.do(ctx, http.MethodPost, "/v1/key", map[string]string{"name": name}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// keyExists reports whether an access key with the given id exists.
+func (c *adminClient) keyExists(ctx context.Context, accessKeyID string) (bool, error) {
+	err := c.do(ctx, http.MethodGet, "/v1/key?id="+url.QueryEscape(accessKeyID), nil, nil)
+	if err == nil {
+		return true, nil
+	}
+	if isNotFound(err) {
+		return false, nil
+	}
+	return false, err
+}
+
+// deleteKey removes an access key (idempotent: a missing key is not an error).
+func (c *adminClient) deleteKey(ctx context.Context, accessKeyID string) error {
+	err := c.do(ctx, http.MethodDelete, "/v1/key?id="+url.QueryEscape(accessKeyID), nil, nil)
+	if isNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+// getBucketByAlias returns the bucket with the given global alias, or (nil,
+// false, nil) when it does not exist.
+func (c *adminClient) getBucketByAlias(ctx context.Context, alias string) (*bucketInfo, bool, error) {
+	var out bucketInfo
+	err := c.do(ctx, http.MethodGet, "/v1/bucket?globalAlias="+url.QueryEscape(alias), nil, &out)
+	if err == nil {
+		return &out, true, nil
+	}
+	if isNotFound(err) {
+		return nil, false, nil
+	}
+	return nil, false, err
+}
+
+// createBucket creates a bucket with the given global alias.
+func (c *adminClient) createBucket(ctx context.Context, alias string) (*bucketInfo, error) {
+	var out bucketInfo
+	if err := c.do(ctx, http.MethodPost, "/v1/bucket", map[string]string{"globalAlias": alias}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// deleteBucket removes a bucket by id (idempotent).
+func (c *adminClient) deleteBucket(ctx context.Context, bucketID string) error {
+	err := c.do(ctx, http.MethodDelete, "/v1/bucket?id="+url.QueryEscape(bucketID), nil, nil)
+	if isNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+// allow grants the given permissions to a key on a bucket (idempotent).
+func (c *adminClient) allow(ctx context.Context, bucketID, accessKeyID string, perms permissions) error {
+	body := map[string]any{
+		"bucketId":    bucketID,
+		"accessKeyId": accessKeyID,
+		"permissions": perms,
+	}
+	return c.do(ctx, http.MethodPost, "/v1/bucket/allow", body, nil)
 }

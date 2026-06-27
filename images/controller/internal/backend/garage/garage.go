@@ -134,16 +134,7 @@ func (d *Driver) DeleteCluster(_ context.Context, _ *v1alpha1.ObjectStorageClust
 	return nil
 }
 
-// EnsureBucket is not implemented in this milestone (bucket/key provisioning
-// lands with the Garage admin-API integration).
-func (d *Driver) EnsureBucket(_ context.Context, _ *v1alpha1.ObjectStorageCluster, _ *v1alpha1.ObjectBucket) (backend.BucketState, error) {
-	return backend.BucketState{Message: "Garage bucket provisioning is not implemented yet"}, nil
-}
-
-// DeleteBucket is not implemented in this milestone.
-func (d *Driver) DeleteBucket(_ context.Context, _ *v1alpha1.ObjectStorageCluster, _ *v1alpha1.ObjectBucket) error {
-	return nil
-}
+// EnsureBucket and DeleteBucket are implemented in buckets.go.
 
 // ensureSecret creates the per-cluster Garage secret (rpc secret + admin token)
 // on first reconcile and never overwrites existing values.
