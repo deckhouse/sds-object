@@ -1,0 +1,22 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    heritage: deckhouse
+    module: sds-object
+    rbac.deckhouse.io/aggregate-to-storage-as: manager
+    rbac.deckhouse.io/kind: manage
+    rbac.deckhouse.io/level: module
+    rbac.deckhouse.io/namespace: d8-sds-object
+  name: d8:manage:permission:module:sds-object:edit
+rules:
+  - apiGroups:
+      - storage.deckhouse.io
+    resources:
+      - objectstorageclasses
+    verbs:
+      - create
+      - update
+      - patch
+      - delete
+      - deletecollection

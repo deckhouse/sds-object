@@ -1,0 +1,46 @@
+{{- /* Webhook TLS Certs Secret */ -}}
+{{- $secretConfig := dict
+  "valuesKey" "sdsObject"
+  "webhookCertPath" "internal.customWebhookCert"
+}}
+{{ include "helm_lib_module_webhook_certs_secret" (list . $secretConfig) }}
+
+{{- /* Controller Deployment + VPA + PDB */ -}}
+{{- /*
+  helm_lib_module_controller_manifests already injects LOG_LEVEL (from
+  .Values.sdsObject.logLevel via helm_lib_module_controller_log_level) and
+  CONTROLLER_NAMESPACE (valueFrom fieldRef metadata.namespace).
+*/ -}}
+{{- $config := dict
+  "valuesKey" "sdsObject"
+  "onMasterNode" true
+  "podSecurityContext" "deckhouse"
+  "webhookEnabled" true
+  "webhookCertPath" "internal.customWebhookCert"
+}}
+{{ include "helm_lib_module_controller_manifests" (list . $config) }}
+
+{{- /* Webhook Service */ -}}
+{{ include "helm_lib_module_webhook_service" (list . dict) }}
+
+{{- /*
+  ValidatingWebhookConfiguration for ObjectStorageClass.
+  Placeholder admission rule wired to the webhooks container (/osc-validate).
+*/ -}}
+{{- $oscWebhookConfig := dict
+  "name" "object-storage-class-validation"
+  "webhookName" "object-storage-class-validation"
+  "valuesKey" "sdsObject"
+  "path" "/osc-validate"
+  "failurePolicy" "Fail"
+  "rules" (list
+    (dict
+      "apiGroups" (list "storage.deckhouse.io")
+      "apiVersions" (list "v1alpha1")
+      "operations" (list "CREATE" "UPDATE")
+      "resources" (list "objectstorageclasses")
+      "scope" "Cluster"
+    )
+  )
+}}
+{{ include "helm_lib_module_validating_webhook_configuration" (list . $oscWebhookConfig) }}

@@ -1,0 +1,3 @@
+properties:
+  logLevel:
+    description: Уровень логирования модуля.

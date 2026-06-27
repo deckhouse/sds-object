@@ -1,0 +1,31 @@
+x-extend:
+  schema: config-values.yaml
+type: object
+properties:
+  namespace:
+    type: string
+    default: d8-sds-object
+  registry:
+    type: object
+    description: "System field, overwritten by Deckhouse. Don't use"
+  internal:
+    type: object
+    default: {}
+    properties:
+      customWebhookCert:
+        type: object
+        default: {}
+        x-required-for-helm:
+          - crt
+          - key
+          - ca
+        properties:
+          crt:
+            type: string
+            x-examples: ["YjY0ZW5jX3N0cmluZwo="]
+          key:
+            type: string
+            x-examples: ["YjY0ZW5jX3N0cmluZwo="]
+          ca:
+            type: string
+            x-examples: ["YjY0ZW5jX3N0cmluZwo="]
