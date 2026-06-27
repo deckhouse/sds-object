@@ -18,6 +18,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/slok/kubewebhook/v2/pkg/model"
 	kwhvalidating "github.com/slok/kubewebhook/v2/pkg/webhook/validating"
@@ -26,18 +27,51 @@ import (
 	"k8s.io/klog/v2"
 )
 
-// ObjectStorageClusterValidate is a placeholder admission validator for the
-// ObjectStorageCluster custom resource. It accepts every request; add the real
-// cross-field checks here as the controller is implemented. Note that the
-// schema-level CEL rules in the CRD already enforce the immutability and
-// conditional-requirement contract (type immutable, elasticClusterRef required
-// for type=Heavy, storage.class required for Lightweight/Full).
-func ObjectStorageClusterValidate(_ context.Context, _ *model.AdmissionReview, obj metav1.Object) (*kwhvalidating.ValidatorResult, error) {
+// ObjectStorageClusterValidate admits ObjectStorageCluster resources. The
+// schema/immutability contract is enforced by the CRD CEL rules; this validator
+// adds the cross-resource checks:
+//
+//   - at most one cluster of type System may exist (hard deny);
+//   - for type Heavy, the referenced ElasticCluster should already exist
+//     (soft warning — the cluster reconciles to Pending until it does, so we do
+//     not block create-before-dependency ordering).
+func (v *Validator) ObjectStorageClusterValidate(ctx context.Context, _ *model.AdmissionReview, obj metav1.Object) (*kwhvalidating.ValidatorResult, error) {
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok {
 		return &kwhvalidating.ValidatorResult{Valid: true}, nil
 	}
 
-	klog.Infof("ObjectStorageCluster %s admitted (placeholder validator)", u.GetName())
-	return &kwhvalidating.ValidatorResult{Valid: true}, nil
+	name := u.GetName()
+	clusterType, _, _ := unstructured.NestedString(u.Object, "spec", "type")
+	var warnings []string
+
+	if clusterType == "System" {
+		list, err := v.dyn.Resource(objectStorageClusterGVR).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("could not verify System cluster uniqueness: %v", err))
+		} else {
+			for i := range list.Items {
+				other := &list.Items[i]
+				if other.GetName() == name {
+					continue
+				}
+				if t, _, _ := unstructured.NestedString(other.Object, "spec", "type"); t == "System" {
+					return reject(fmt.Sprintf(
+						"only one System ObjectStorageCluster is allowed; %q already exists", other.GetName())), nil
+				}
+			}
+		}
+	}
+
+	if clusterType == "Heavy" {
+		if ref, _, _ := unstructured.NestedString(u.Object, "spec", "elasticClusterRef"); ref != "" {
+			if _, err := v.dyn.Resource(elasticClusterGVR).Get(ctx, ref, metav1.GetOptions{}); err != nil {
+				warnings = append(warnings, fmt.Sprintf(
+					"referenced ElasticCluster %q not found (%v); the cluster will stay pending until it exists", ref, err))
+			}
+		}
+	}
+
+	klog.Infof("ObjectStorageCluster %s admitted (warnings: %d)", name, len(warnings))
+	return &kwhvalidating.ValidatorResult{Valid: true, Warnings: warnings}, nil
 }

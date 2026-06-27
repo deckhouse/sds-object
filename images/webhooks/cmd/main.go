@@ -25,6 +25,8 @@ import (
 	"github.com/sirupsen/logrus"
 	kwhlogrus "github.com/slok/kubewebhook/v2/pkg/log/logrus"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
 
 	"github.com/deckhouse/sds-object/images/webhooks/handlers"
 )
@@ -70,8 +72,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	restConfig, err := rest.InClusterConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "unable to build in-cluster config: %s", err)
+		os.Exit(1)
+	}
+	dynClient, err := dynamic.NewForConfig(restConfig)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "unable to build dynamic client: %s", err)
+		os.Exit(1)
+	}
+	validator := handlers.NewValidator(dynClient)
+
 	oscValidatingWebhookHandler, err := handlers.GetValidatingWebhookHandler(
-		handlers.ObjectStorageClusterValidate,
+		validator.ObjectStorageClusterValidate,
 		ObjectStorageClusterValidatorID,
 		&unstructured.Unstructured{},
 		logger,
@@ -82,7 +96,7 @@ func main() {
 	}
 
 	obValidatingWebhookHandler, err := handlers.GetValidatingWebhookHandler(
-		handlers.ObjectBucketValidate,
+		validator.ObjectBucketValidate,
 		ObjectBucketValidatorID,
 		&unstructured.Unstructured{},
 		logger,
