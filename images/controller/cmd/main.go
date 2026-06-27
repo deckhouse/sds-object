@@ -29,6 +29,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
 	v1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
+	"github.com/deckhouse/sds-object/images/controller/internal/backend"
+	"github.com/deckhouse/sds-object/images/controller/internal/controller"
 	"github.com/deckhouse/sds-object/images/controller/pkg/config"
 	"github.com/deckhouse/sds-object/images/controller/pkg/kubutils"
 	"github.com/deckhouse/sds-object/images/controller/pkg/logger"
@@ -93,9 +95,19 @@ func main() {
 	}
 	log.Info("[main] kubernetes manager created")
 
-	// TODO: register sds-object reconcilers on the manager here, e.g.
-	//   if err := controller.AddObjectStorageClusterReconcilerToManager(mgr, cfgParams, log); err != nil { ... }
-	//   if err := controller.AddObjectBucketReconcilerToManager(mgr, cfgParams, log); err != nil { ... }
+	// Backend drivers are stubbed (NotImplementedDriver) until per-backend
+	// data-plane logic lands; the reconcile loop, status FSM and finalizers
+	// are fully wired and run against them.
+	registry := backend.DefaultRegistry()
+
+	if err := controller.AddObjectStorageClusterReconcilerToManager(mgr, cfgParams, log, registry); err != nil {
+		log.Error(err, "[main] unable to register ObjectStorageCluster reconciler")
+		os.Exit(1)
+	}
+	if err := controller.AddObjectBucketReconcilerToManager(mgr, cfgParams, log, registry); err != nil {
+		log.Error(err, "[main] unable to register ObjectBucket reconciler")
+		os.Exit(1)
+	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		log.Error(err, "[main] unable to AddHealthzCheck")
