@@ -31,6 +31,7 @@ const (
 	HealthProbeBindAddressEnv  = "HEALTH_PROBE_BIND_ADDRESS"
 	MaxConcurrentReconcilesEnv = "MAX_CONCURRENT_RECONCILES"
 	RequeueIntervalEnv         = "REQUEUE_INTERVAL_SECONDS"
+	GarageImageEnv             = "GARAGE_IMAGE"
 
 	DefaultControllerNamespace     = "d8-sds-object"
 	DefaultControllerName          = "sds-object-controller"
@@ -45,6 +46,9 @@ type Options struct {
 	ControllerNamespace     string
 	MaxConcurrentReconciles int
 	RequeueInterval         time.Duration
+	// GarageImage is the module registry reference for the Garage server
+	// image, injected via the GARAGE_IMAGE env var from Helm.
+	GarageImage string
 }
 
 func NewConfig() *Options {
@@ -85,6 +89,8 @@ func NewConfig() *Options {
 			opts.RequeueInterval = time.Duration(n) * time.Second
 		}
 	}
+
+	opts.GarageImage = os.Getenv(GarageImageEnv)
 
 	return &opts
 }

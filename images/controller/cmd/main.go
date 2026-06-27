@@ -30,6 +30,7 @@ import (
 
 	v1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 	"github.com/deckhouse/sds-object/images/controller/internal/backend"
+	"github.com/deckhouse/sds-object/images/controller/internal/backend/garage"
 	"github.com/deckhouse/sds-object/images/controller/internal/controller"
 	"github.com/deckhouse/sds-object/images/controller/pkg/config"
 	"github.com/deckhouse/sds-object/images/controller/pkg/kubutils"
@@ -95,10 +96,14 @@ func main() {
 	}
 	log.Info("[main] kubernetes manager created")
 
-	// Backend drivers are stubbed (NotImplementedDriver) until per-backend
-	// data-plane logic lands; the reconcile loop, status FSM and finalizers
-	// are fully wired and run against them.
-	registry := backend.DefaultRegistry()
+	// Garage backs the System and Lightweight profiles; SeaweedFS (Full) and
+	// Ceph RGW (Heavy) are still stubbed (NotImplementedDriver) until their
+	// drivers land.
+	registry := backend.NewRegistry(
+		garage.New(mgr.GetClient(), log, cfgParams.ControllerNamespace, cfgParams.GarageImage),
+		backend.NotImplementedDriver{BackendType: v1alpha1.BackendSeaweedFS},
+		backend.NotImplementedDriver{BackendType: v1alpha1.BackendCephRGW},
+	)
 
 	if err := controller.AddObjectStorageClusterReconcilerToManager(mgr, cfgParams, log, registry); err != nil {
 		log.Error(err, "[main] unable to register ObjectStorageCluster reconciler")

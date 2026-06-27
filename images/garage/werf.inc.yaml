@@ -1,0 +1,32 @@
+{{- /*
+  Garage object storage server image.
+
+  Garage ships a single static (musl) binary. We pull the official upstream
+  image as a build artifact and copy the binary into the module's distroless
+  base — mirroring how images/ceph in sds-elastic vendors an upstream artifact.
+
+  NOTE: the upstream tag below is the only place the Garage version is pinned;
+  keep it in sync with garageVersion in
+  images/controller/internal/backend/garage.
+*/ -}}
+{{- $garageVersion := "v1.0.1" }}
+---
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
+from: dxflrs/garage:{{ $garageVersion }}
+final: false
+
+---
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}
+fromImage: base/distroless
+
+import:
+  - image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
+    add: /garage
+    to: /garage
+    before: setup
+
+imageSpec:
+  config:
+    entrypoint: ["/garage"]
+    env:
+      GARAGE_VERSION: "{{ $garageVersion }}"

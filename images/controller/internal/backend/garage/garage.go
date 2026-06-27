@@ -1,0 +1,257 @@
+/*
+Copyright 2026 Flant JSC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+// Package garage implements the backend.Driver for the Garage object storage
+// backend (the System and Lightweight cluster profiles).
+//
+// Scope of the current milestone: it reconciles the Garage data plane — the
+// ServiceAccount, RPC/admin secret, garage.toml ConfigMap, the workload
+// (DaemonSet on control-plane + hostPath for System, StatefulSet + PVC for
+// Lightweight) and the S3/RPC Services — and reports workload readiness.
+//
+// Cluster meshing (connecting the RPC peers) and layout assignment via the
+// Garage admin API, plus bucket/key provisioning, are the next milestone:
+// until then a cluster reports BackendReady=false with an explanatory message
+// and does not yet serve S3.
+package garage
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+
+	v1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
+	"github.com/deckhouse/sds-object/images/controller/internal/backend"
+	"github.com/deckhouse/sds-object/images/controller/pkg/logger"
+)
+
+// garageVersion is the Garage release this driver targets. Keep it in sync with
+// the upstream tag pinned in images/garage/werf.inc.yaml.
+const garageVersion = "v1.0.1"
+
+// Keys in the per-cluster Garage secret.
+const (
+	secretKeyRPC   = "rpc-secret"
+	secretKeyAdmin = "admin-token"
+)
+
+// Driver reconciles Garage clusters. It is constructed once at startup with the
+// manager's client; the module namespace; and the Garage image reference.
+type Driver struct {
+	client    client.Client
+	log       *logger.Logger
+	namespace string
+	image     string
+}
+
+var _ backend.Driver = (*Driver)(nil)
+
+// New builds a Garage Driver.
+func New(c client.Client, log *logger.Logger, namespace, image string) *Driver {
+	return &Driver{client: c, log: log, namespace: namespace, image: image}
+}
+
+func (d *Driver) Type() v1alpha1.BackendType { return v1alpha1.BackendGarage }
+
+// EnsureCluster reconciles the Garage data plane and reports its state.
+func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) (backend.ClusterState, error) {
+	state := backend.ClusterState{
+		Backend: v1alpha1.BackendStatus{Type: v1alpha1.BackendGarage, Version: garageVersion},
+	}
+
+	if d.image == "" {
+		state.Message = "GARAGE_IMAGE is not configured on the controller"
+		return state, nil
+	}
+
+	if err := d.ensureSecret(ctx, cluster); err != nil {
+		return state, fmt.Errorf("ensure secret: %w", err)
+	}
+	if err := d.apply(ctx, cluster, buildConfigMap(cluster, d.namespace)); err != nil {
+		return state, fmt.Errorf("ensure configmap: %w", err)
+	}
+	if err := d.apply(ctx, cluster, buildServiceAccount(cluster, d.namespace)); err != nil {
+		return state, fmt.Errorf("ensure serviceaccount: %w", err)
+	}
+	if err := d.apply(ctx, cluster, buildS3Service(cluster, d.namespace)); err != nil {
+		return state, fmt.Errorf("ensure s3 service: %w", err)
+	}
+	if err := d.apply(ctx, cluster, buildRPCService(cluster, d.namespace)); err != nil {
+		return state, fmt.Errorf("ensure rpc service: %w", err)
+	}
+
+	ready, workloadMsg, err := d.ensureWorkload(ctx, cluster)
+	if err != nil {
+		return state, err
+	}
+
+	// The S3 endpoint is published for visibility, but it does not serve until
+	// the upcoming meshing + layout milestone, so the cluster stays not-ready.
+	state.Endpoint = v1alpha1.EndpointStatus{Internal: s3Endpoint(cluster, d.namespace), Region: "garage"}
+	state.Ready = false
+	if ready {
+		state.Message = "Garage pods are running; cluster meshing and layout assignment are the next milestone (S3 not yet served)"
+	} else {
+		state.Message = workloadMsg
+	}
+	return state, nil
+}
+
+// DeleteCluster is a no-op: every object the driver creates carries an owner
+// reference to the ObjectStorageCluster, so Kubernetes garbage-collects them
+// once the CR is removed (after the controller drops its finalizer).
+func (d *Driver) DeleteCluster(_ context.Context, _ *v1alpha1.ObjectStorageCluster) error {
+	return nil
+}
+
+// EnsureBucket is not implemented in this milestone (bucket/key provisioning
+// lands with the Garage admin-API integration).
+func (d *Driver) EnsureBucket(_ context.Context, _ *v1alpha1.ObjectStorageCluster, _ *v1alpha1.ObjectBucket) (backend.BucketState, error) {
+	return backend.BucketState{Message: "Garage bucket provisioning is not implemented yet"}, nil
+}
+
+// DeleteBucket is not implemented in this milestone.
+func (d *Driver) DeleteBucket(_ context.Context, _ *v1alpha1.ObjectStorageCluster, _ *v1alpha1.ObjectBucket) error {
+	return nil
+}
+
+// ensureSecret creates the per-cluster Garage secret (rpc secret + admin token)
+// on first reconcile and never overwrites existing values.
+func (d *Driver) ensureSecret(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) error {
+	key := client.ObjectKey{Namespace: d.namespace, Name: secretName(cluster)}
+	existing := &corev1.Secret{}
+	err := d.client.Get(ctx, key, existing)
+	if err == nil {
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return err
+	}
+
+	rpcSecret, err := randomHex(32)
+	if err != nil {
+		return err
+	}
+	adminToken, err := randomHex(32)
+	if err != nil {
+		return err
+	}
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName(cluster),
+			Namespace: d.namespace,
+			Labels:    commonLabels(cluster),
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{
+			secretKeyRPC:   []byte(rpcSecret),
+			secretKeyAdmin: []byte(adminToken),
+		},
+	}
+	if err := controllerutil.SetControllerReference(cluster, secret, d.client.Scheme()); err != nil {
+		return err
+	}
+	return d.client.Create(ctx, secret)
+}
+
+// ensureWorkload creates/updates the profile workload (DaemonSet for System,
+// StatefulSet otherwise) and reports whether its pods are ready.
+func (d *Driver) ensureWorkload(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) (bool, string, error) {
+	if cluster.Spec.Type == v1alpha1.ClusterTypeSystem {
+		ds := buildDaemonSet(cluster, d.namespace, d.image)
+		if err := d.apply(ctx, cluster, ds); err != nil {
+			return false, "", fmt.Errorf("ensure daemonset: %w", err)
+		}
+		desired := ds.Status.DesiredNumberScheduled
+		ready := ds.Status.NumberReady
+		if desired == 0 || ready < desired {
+			return false, fmt.Sprintf("Garage DaemonSet rolling out (%d/%d pods ready)", ready, desired), nil
+		}
+		return true, "", nil
+	}
+
+	sts := buildStatefulSet(cluster, d.namespace, d.image)
+	if err := d.apply(ctx, cluster, sts); err != nil {
+		return false, "", fmt.Errorf("ensure statefulset: %w", err)
+	}
+	desired := int32(0)
+	if sts.Spec.Replicas != nil {
+		desired = *sts.Spec.Replicas
+	}
+	if sts.Status.ReadyReplicas < desired {
+		return false, fmt.Sprintf("Garage StatefulSet rolling out (%d/%d pods ready)", sts.Status.ReadyReplicas, desired), nil
+	}
+	return true, "", nil
+}
+
+// apply creates or updates obj, setting the cluster as its controller owner.
+// On update it overwrites the spec-bearing fields with the desired object.
+func (d *Driver) apply(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, obj client.Object) error {
+	desired := obj.DeepCopyObject().(client.Object)
+	_, err := controllerutil.CreateOrUpdate(ctx, d.client, obj, func() error {
+		mergeDesired(obj, desired)
+		return controllerutil.SetControllerReference(cluster, obj, d.client.Scheme())
+	})
+	return err
+}
+
+// mergeDesired copies the desired spec/data onto the live object fetched by
+// CreateOrUpdate, preserving server-managed metadata. Immutable fields
+// (StatefulSet selector/volumeClaimTemplates, headless ClusterIP) are not
+// changed once set.
+func mergeDesired(live, desired client.Object) {
+	switch l := live.(type) {
+	case *corev1.ConfigMap:
+		l.Data = desired.(*corev1.ConfigMap).Data
+		l.Labels = desired.GetLabels()
+	case *corev1.ServiceAccount:
+		l.AutomountServiceAccountToken = desired.(*corev1.ServiceAccount).AutomountServiceAccountToken
+		l.Labels = desired.GetLabels()
+	case *corev1.Service:
+		d := desired.(*corev1.Service)
+		l.Labels = d.Labels
+		l.Spec.Selector = d.Spec.Selector
+		l.Spec.Ports = d.Spec.Ports
+		l.Spec.PublishNotReadyAddresses = d.Spec.PublishNotReadyAddresses
+	case *appsv1.StatefulSet:
+		d := desired.(*appsv1.StatefulSet)
+		l.Labels = d.Labels
+		l.Spec.Replicas = d.Spec.Replicas
+		l.Spec.Template = d.Spec.Template
+	case *appsv1.DaemonSet:
+		d := desired.(*appsv1.DaemonSet)
+		l.Labels = d.Labels
+		l.Spec.Template = d.Spec.Template
+	}
+}
+
+// randomHex returns n random bytes hex-encoded.
+func randomHex(n int) (string, error) {
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
+}

@@ -17,6 +17,9 @@
   "podSecurityContext" "deckhouse"
   "webhookEnabled" true
   "webhookCertPath" "internal.customWebhookCert"
+  "additionalControllerEnvs" (list
+    (dict "name" "GARAGE_IMAGE" "value" (include "helm_lib_module_image" (list . "garage")))
+  )
 }}
 {{ include "helm_lib_module_controller_manifests" (list . $config) }}
 
