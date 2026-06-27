@@ -57,9 +57,11 @@ const (
 )
 
 // Driver reconciles Garage clusters. It is constructed once at startup with the
-// manager's client; the module namespace; and the Garage image reference.
+// manager's client; a non-cached reader (for listing pods without caching every
+// pod in the cluster); the module namespace; and the Garage image reference.
 type Driver struct {
 	client    client.Client
+	apiReader client.Reader
 	log       *logger.Logger
 	namespace string
 	image     string
@@ -68,8 +70,8 @@ type Driver struct {
 var _ backend.Driver = (*Driver)(nil)
 
 // New builds a Garage Driver.
-func New(c client.Client, log *logger.Logger, namespace, image string) *Driver {
-	return &Driver{client: c, log: log, namespace: namespace, image: image}
+func New(c client.Client, apiReader client.Reader, log *logger.Logger, namespace, image string) *Driver {
+	return &Driver{client: c, apiReader: apiReader, log: log, namespace: namespace, image: image}
 }
 
 func (d *Driver) Type() v1alpha1.BackendType { return v1alpha1.BackendGarage }
@@ -101,20 +103,27 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 		return state, fmt.Errorf("ensure rpc service: %w", err)
 	}
 
-	ready, workloadMsg, err := d.ensureWorkload(ctx, cluster)
+	state.Endpoint = v1alpha1.EndpointStatus{Internal: s3Endpoint(cluster, d.namespace), Region: "garage"}
+
+	workloadReady, workloadMsg, err := d.ensureWorkload(ctx, cluster)
 	if err != nil {
 		return state, err
 	}
-
-	// The S3 endpoint is published for visibility, but it does not serve until
-	// the upcoming meshing + layout milestone, so the cluster stays not-ready.
-	state.Endpoint = v1alpha1.EndpointStatus{Internal: s3Endpoint(cluster, d.namespace), Region: "garage"}
-	state.Ready = false
-	if ready {
-		state.Message = "Garage pods are running; cluster meshing and layout assignment are the next milestone (S3 not yet served)"
-	} else {
+	if !workloadReady {
 		state.Message = workloadMsg
+		return state, nil
 	}
+
+	// Workloads are up: connect the RPC peers and assign the cluster layout.
+	mesh, err := d.ensureMeshAndLayout(ctx, cluster)
+	if err != nil {
+		return state, err
+	}
+	if mesh.total != nil {
+		state.Capacity = &v1alpha1.ObjectCapacityStatus{Total: *mesh.total}
+	}
+	state.Ready = mesh.ready
+	state.Message = mesh.msg
 	return state, nil
 }
 

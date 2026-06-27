@@ -20,6 +20,7 @@
 {{- $rbacConfig := dict
   "roleRules" (list
     (dict "apiGroups" (list "") "resources" (list "events") "verbs" (list "create" "list" "patch"))
+    (dict "apiGroups" (list "") "resources" (list "pods") "verbs" (list "get" "list"))
     (dict "apiGroups" (list "") "resources" (list "secrets" "configmaps" "services" "serviceaccounts") "verbs" (list "create" "update" "patch" "delete"))
     (dict "apiGroups" (list "apps") "resources" (list "statefulsets" "daemonsets") "verbs" (list "create" "update" "patch" "delete"))
     (dict "apiGroups" (list "coordination.k8s.io") "resources" (list "leases") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete"))
