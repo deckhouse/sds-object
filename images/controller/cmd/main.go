@@ -100,7 +100,7 @@ func main() {
 	// Ceph RGW (Heavy) are still stubbed (NotImplementedDriver) until their
 	// drivers land.
 	registry := backend.NewRegistry(
-		garage.New(mgr.GetClient(), log, cfgParams.ControllerNamespace, cfgParams.GarageImage),
+		garage.New(mgr.GetClient(), mgr.GetAPIReader(), log, cfgParams.ControllerNamespace, cfgParams.GarageImage),
 		backend.NotImplementedDriver{BackendType: v1alpha1.BackendSeaweedFS},
 		backend.NotImplementedDriver{BackendType: v1alpha1.BackendCephRGW},
 	)
