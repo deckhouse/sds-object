@@ -1,2 +1,2 @@
 Changes:
-- Initial module skeleton (build, CI, helm chart, Go application scaffolding).
+- Initial module framework (assembly, CI, helm chart, Go application templates).
