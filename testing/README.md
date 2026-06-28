@@ -3,13 +3,12 @@
 Ready-to-apply manifests for smoke-testing the implemented `sds-object`
 profiles on a real cluster. Everything lands in the `obj-test` namespace.
 
-Implemented today:
+Implemented today — all three profiles run the full flow: cluster → bucket →
+credentials `Secret` → a `Job` that writes and reads an object via `mc`:
 
-- **System** / **Lightweight** (Garage) — full flow: cluster → bucket →
-  credentials `Secret` → a `Job` that writes and reads an object via `mc`.
-- **Full** (SeaweedFS) — single-node MVP: cluster → a `Job` that checks the S3
-  endpoint responds. Bucket/credential provisioning is **not implemented yet**
-  for Full, so there is no `ObjectBucket`/`Secret` for it.
+- **System** / **Lightweight** (Garage).
+- **Full** (SeaweedFS) — single-node MVP (a distributed topology is a
+  follow-up).
 
 ## Notes
 
@@ -37,9 +36,9 @@ kubectl -n obj-test logs job/s3-test-system
 kubectl apply -f testing/20-lightweight.yaml
 kubectl -n obj-test logs job/s3-test-lightweight
 
-# Full (SeaweedFS) — endpoint smoke test only
+# Full (SeaweedFS)
 kubectl apply -f testing/30-full.yaml
-kubectl -n obj-test logs job/s3-smoke-full
+kubectl -n obj-test logs job/s3-test-full
 ```
 
 A test `Job` succeeds when its log ends with `S3 OK`.

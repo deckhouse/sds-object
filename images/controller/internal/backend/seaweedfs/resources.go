@@ -62,6 +62,23 @@ func s3Endpoint(cluster *v1alpha1.ObjectStorageCluster, namespace, clusterDomain
 	return fmt.Sprintf("http://%s.%s.svc.%s:%d", svcName(cluster), namespace, clusterDomain, s3Port)
 }
 
+// s3HostPort is the host:port of the S3 endpoint (no scheme), for the S3 client.
+func s3HostPort(cluster *v1alpha1.ObjectStorageCluster, namespace, clusterDomain string) string {
+	return fmt.Sprintf("%s.%s.svc.%s:%d", svcName(cluster), namespace, clusterDomain, s3Port)
+}
+
+// filerEndpoint is the in-cluster filer HTTP URL (for managing the S3 IAM
+// config stored in the filer).
+func filerEndpoint(cluster *v1alpha1.ObjectStorageCluster, namespace, clusterDomain string) string {
+	return fmt.Sprintf("http://%s.%s.svc.%s:%d", svcName(cluster), namespace, clusterDomain, filerPort)
+}
+
+// adminSecretName is the Secret (in the module namespace) holding the cluster's
+// S3 admin credentials.
+func adminSecretName(cluster *v1alpha1.ObjectStorageCluster) string {
+	return resourceName(cluster) + "-admin"
+}
+
 // storageSize returns the PVC size, defaulting to 10Gi when unset/invalid.
 func storageSize(cluster *v1alpha1.ObjectStorageCluster) resource.Quantity {
 	if cluster.Spec.Storage != nil && cluster.Spec.Storage.Size != "" {

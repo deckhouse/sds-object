@@ -102,7 +102,7 @@ func main() {
 	// lands.
 	registry := backend.NewRegistry(
 		garage.New(mgr.GetClient(), mgr.GetAPIReader(), log, cfgParams.ControllerNamespace, cfgParams.GarageImage, cfgParams.ClusterDomain),
-		seaweedfs.New(mgr.GetClient(), log, cfgParams.ControllerNamespace, cfgParams.SeaweedFSImage, cfgParams.ClusterDomain),
+		seaweedfs.New(mgr.GetClient(), mgr.GetAPIReader(), log, cfgParams.ControllerNamespace, cfgParams.SeaweedFSImage, cfgParams.ClusterDomain),
 		backend.NotImplementedDriver{BackendType: v1alpha1.BackendCephRGW},
 	)
 
