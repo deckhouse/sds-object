@@ -31,7 +31,7 @@ weight: 1
 | `Heavy` | Ceph RGW | RADOS Gateway поверх существующего кластера sds-elastic | Переиспользует ёмкость и отказоустойчивость Ceph. |
 
 {{< alert level="info" >}}
-Статус реализации: доступны все четыре профиля. `Full` сейчас запускает одноузловой SeaweedFS (распределённая топология запланирована). `Heavy` разворачивает Ceph RGW поверх существующего кластера sds-elastic; provisioning бакетов/учёток для `Heavy` — follow-up (бакеты сейчас работают на `System`, `Lightweight` и `Full`).
+Статус реализации: доступны все четыре профиля. `Full` запускает распределённый SeaweedFS (master/volume/filer; число реплик и репликация масштабируются от `redundancy`), пока с одним filer/S3-gateway. `Heavy` разворачивает Ceph RGW поверх существующего кластера sds-elastic; provisioning бакетов/учёток для `Heavy` — follow-up (бакеты сейчас работают на `System`, `Lightweight` и `Full`).
 {{< /alert >}}
 
 ## Как это работает

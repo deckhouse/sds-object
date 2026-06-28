@@ -90,22 +90,42 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 		return state, nil
 	}
 
-	if err := d.apply(ctx, cluster, buildService(cluster, d.namespace)); err != nil {
-		return state, fmt.Errorf("ensure service: %w", err)
+	// Services and the filer config first, so the workloads can resolve peers.
+	for _, obj := range []client.Object{
+		buildMainService(cluster, d.namespace),
+		buildMasterService(cluster, d.namespace),
+		buildVolumeService(cluster, d.namespace),
+		buildFilerService(cluster, d.namespace),
+		buildFilerConfig(cluster, d.namespace),
+	} {
+		if err := d.apply(ctx, cluster, obj); err != nil {
+			return state, fmt.Errorf("ensure %T: %w", obj, err)
+		}
 	}
 
-	sts := buildStatefulSet(cluster, d.namespace, d.image)
-	if err := d.apply(ctx, cluster, sts); err != nil {
-		return state, fmt.Errorf("ensure statefulset: %w", err)
+	// master -> volume -> filer.
+	workloads := []struct {
+		comp string
+		sts  *appsv1.StatefulSet
+	}{
+		{compMaster, buildMasterStatefulSet(cluster, d.namespace, d.image)},
+		{compVolume, buildVolumeStatefulSet(cluster, d.namespace, d.image)},
+		{compFiler, buildFilerStatefulSet(cluster, d.namespace, d.image)},
 	}
-
-	desired := int32(0)
-	if sts.Spec.Replicas != nil {
-		desired = *sts.Spec.Replicas
+	for _, w := range workloads {
+		if err := d.apply(ctx, cluster, w.sts); err != nil {
+			return state, fmt.Errorf("ensure %s statefulset: %w", w.comp, err)
+		}
 	}
-	if sts.Status.ReadyReplicas < desired {
-		state.Message = fmt.Sprintf("SeaweedFS rolling out (%d/%d pods ready)", sts.Status.ReadyReplicas, desired)
-		return state, nil
+	for _, w := range workloads {
+		desired := int32(0)
+		if w.sts.Spec.Replicas != nil {
+			desired = *w.sts.Spec.Replicas
+		}
+		if w.sts.Status.ReadyReplicas < desired {
+			state.Message = fmt.Sprintf("SeaweedFS %s rolling out (%d/%d pods ready)", w.comp, w.sts.Status.ReadyReplicas, desired)
+			return state, nil
+		}
 	}
 
 	// Bootstrap the S3 admin identity in the filer-stored IAM config. This also
@@ -353,6 +373,9 @@ func mergeDesired(live, desired client.Object) {
 		l.Labels = d.Labels
 		l.Spec.Selector = d.Spec.Selector
 		l.Spec.Ports = d.Spec.Ports
+	case *corev1.ConfigMap:
+		l.Data = desired.(*corev1.ConfigMap).Data
+		l.Labels = desired.GetLabels()
 	case *appsv1.StatefulSet:
 		d := desired.(*appsv1.StatefulSet)
 		l.Labels = d.Labels
