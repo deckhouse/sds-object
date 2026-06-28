@@ -16,7 +16,7 @@ final: false
 
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}
-fromImage: base/distroless
+from: {{ index $.Images "builder/distroless" }}
 
 import:
   - image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
