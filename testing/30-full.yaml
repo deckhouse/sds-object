@@ -1,0 +1,39 @@
+# Full profile (SeaweedFS, single-node MVP).
+# Bucket/credential provisioning is not implemented yet for Full, so this only
+# checks that the cluster comes up and its S3 endpoint responds. The S3 gateway
+# allows anonymous access until per-bucket credentials land.
+---
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectStorageCluster
+metadata:
+  name: full
+spec:
+  type: Full
+  redundancy: Single
+  storage:
+    size: 10Gi
+    class: localpath   # <-- replace with your StorageClass (kubectl get sc)
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: s3-smoke-full
+  namespace: obj-test
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: curl
+          image: curlimages/curl:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              # Cluster-scoped clusters keep their Service in the module
+              # namespace; the short .svc name resolves via the search domain.
+              ENDPOINT="http://full-seaweedfs.d8-sds-object.svc:8333/"
+              echo "GET $ENDPOINT"
+              curl -fsS "$ENDPOINT" | head -c 500; echo
+              echo "S3 OK"
