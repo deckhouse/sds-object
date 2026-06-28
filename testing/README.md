@@ -3,12 +3,13 @@
 Ready-to-apply manifests for smoke-testing the implemented `sds-object`
 profiles on a real cluster. Everything lands in the `obj-test` namespace.
 
-Implemented today — all three profiles run the full flow: cluster → bucket →
-credentials `Secret` → a `Job` that writes and reads an object via `mc`:
+All four profiles run the full flow: cluster → bucket → credentials `Secret` →
+a `Job` that writes and reads an object via `mc`:
 
 - **System** / **Lightweight** (Garage).
-- **Full** (SeaweedFS) — single-node MVP (a distributed topology is a
-  follow-up).
+- **Full** (SeaweedFS) — distributed master/volume/filer.
+- **Heavy** (Ceph RGW) — requires the `sds-elastic` module with a ready
+  `ElasticCluster` (set `elasticClusterRef` in `40-heavy.yaml`).
 
 ## Notes
 
@@ -39,6 +40,10 @@ kubectl -n obj-test logs job/s3-test-lightweight
 # Full (SeaweedFS)
 kubectl apply -f testing/30-full.yaml
 kubectl -n obj-test logs job/s3-test-full
+
+# Heavy (Ceph RGW) — needs sds-elastic + a ready ElasticCluster
+kubectl apply -f testing/40-heavy.yaml
+kubectl -n obj-test logs job/s3-test-heavy
 ```
 
 A test `Job` succeeds when its log ends with `S3 OK`.

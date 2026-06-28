@@ -1,0 +1,48 @@
+# Heavy profile (Ceph RGW on top of sds-elastic).
+# REQUIRES the sds-elastic module installed with a ready ElasticCluster named
+# below in elasticClusterRef. The full cluster -> bucket -> mc flow works the
+# same as the other profiles.
+---
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectStorageCluster
+metadata:
+  name: heavy
+spec:
+  type: Heavy
+  elasticClusterRef: main   # <-- name of an existing, Ready ElasticCluster
+  redundancy: Replicated
+---
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectBucket
+metadata:
+  name: heavy-bucket
+  namespace: obj-test
+spec:
+  clusterRef: heavy
+  reclaimPolicy: Delete
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: s3-test-heavy
+  namespace: obj-test
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: mc
+          image: minio/mc:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              mc alias set t "$S3_ENDPOINT" "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY"
+              echo "hello from sds-object test at $(date)" | mc pipe "t/$S3_BUCKET/hello.txt"
+              echo "--- listing ---"; mc ls "t/$S3_BUCKET"
+              echo "--- content ---"; mc cat "t/$S3_BUCKET/hello.txt"
+              echo "S3 OK"
+          envFrom:
+            - secretRef:
+                name: heavy-bucket-s3-credentials

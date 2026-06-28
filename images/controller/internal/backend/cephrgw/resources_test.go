@@ -64,6 +64,33 @@ func TestRGWEndpointAndStore(t *testing.T) {
 	}
 }
 
+func TestUserAndSecretNames(t *testing.T) {
+	c := heavy("main", "")
+	b := &v1alpha1.ObjectBucket{ObjectMeta: metav1.ObjectMeta{Namespace: "app", Name: "data"}}
+
+	if got := userName(b); got != "app-data" {
+		t.Errorf("userName=%q, want app-data", got)
+	}
+	if got := rookUserSecretName(c, b); got != "rook-ceph-object-user-main-app-data" {
+		t.Errorf("rookUserSecretName=%q", got)
+	}
+	if got := rgwHostPort(c, "internal.cluster.local"); got != "rook-ceph-rgw-main.d8-sds-elastic.svc.internal.cluster.local:80" {
+		t.Errorf("rgwHostPort=%q", got)
+	}
+	if got := bucketDisplayName(b); got != "data" {
+		t.Errorf("bucketDisplayName=%q, want data", got)
+	}
+
+	user := buildCephObjectStoreUser(c, b)
+	if user.GetNamespace() != elasticNamespace {
+		t.Errorf("user namespace=%q", user.GetNamespace())
+	}
+	spec, _ := user.Object["spec"].(map[string]interface{})
+	if spec["store"] != "main" {
+		t.Errorf("user spec.store=%v, want main", spec["store"])
+	}
+}
+
 func TestBuildCephObjectStore(t *testing.T) {
 	c := heavy("main", v1alpha1.RedundancyHighRedundancy)
 	obj := buildCephObjectStore(c)

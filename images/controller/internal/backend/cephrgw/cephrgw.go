@@ -62,6 +62,10 @@ func New(c client.Client, apiReader client.Reader, log *logger.Logger, clusterDo
 
 func (d *Driver) Type() v1alpha1.BackendType { return v1alpha1.BackendCephRGW }
 
+// isNoMatch reports whether err is a "no matches for kind" RESTMapper error,
+// which means the Rook CRD is absent (sds-elastic not installed).
+func isNoMatch(err error) bool { return apimeta.IsNoMatchError(err) }
+
 // EnsureCluster gates on the referenced ElasticCluster, then ensures the
 // CephObjectStore and reports readiness from its status.
 func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) (backend.ClusterState, error) {
@@ -138,16 +142,7 @@ func (d *Driver) DeleteCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 	return nil
 }
 
-// EnsureBucket is not implemented in this milestone (CephObjectStoreUser-based
-// bucket/user provisioning is a follow-up).
-func (d *Driver) EnsureBucket(_ context.Context, _ *v1alpha1.ObjectStorageCluster, _ *v1alpha1.ObjectBucket) (backend.BucketState, error) {
-	return backend.BucketState{Message: "Ceph RGW bucket provisioning is not implemented yet"}, nil
-}
-
-// DeleteBucket is not implemented in this milestone.
-func (d *Driver) DeleteBucket(_ context.Context, _ *v1alpha1.ObjectStorageCluster, _ *v1alpha1.ObjectBucket) error {
-	return nil
-}
+// EnsureBucket and DeleteBucket are implemented in buckets.go.
 
 // ensureObjectStore creates or updates the CephObjectStore. Reads go through
 // the non-cached apiReader; writes go straight to the API server.

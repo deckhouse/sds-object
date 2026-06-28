@@ -132,5 +132,5 @@ spec:
 ```
 
 {{< alert level="info" >}}
-The `Heavy` profile provisions the Ceph RGW data plane (a Rook CephObjectStore on the referenced sds-elastic cluster) and reports the S3 endpoint once it is ready. Bucket/credential provisioning for `Heavy` (`ObjectBucket`) is a follow-up.
+The `Heavy` profile provisions the Ceph RGW data plane (a Rook CephObjectStore on the referenced sds-elastic cluster). Buckets work the same as for the other profiles: an `ObjectBucket` creates a Rook `CephObjectStoreUser` and the bucket, and the credentials `Secret` is written in the bucket's namespace.
 {{< /alert >}}

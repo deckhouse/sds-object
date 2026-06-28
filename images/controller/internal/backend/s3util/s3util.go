@@ -14,7 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package seaweedfs
+// Package s3util holds the minimal S3 bucket operations shared by the backend
+// drivers that manage buckets over the S3 API (SeaweedFS, Ceph RGW).
+package s3util
 
 import (
 	"context"
@@ -24,17 +26,17 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
-// newS3Client builds a minio S3 client for the given endpoint (host:port, no
-// scheme) using the admin credentials over plain HTTP.
-func newS3Client(endpoint, accessKey, secretKey string) (*minio.Client, error) {
+// NewClient builds a minio S3 client for the given endpoint (host:port, no
+// scheme) over plain HTTP.
+func NewClient(endpoint, accessKey, secretKey string) (*minio.Client, error) {
 	return minio.New(endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
 		Secure: false,
 	})
 }
 
-// ensureBucket creates the bucket if it does not already exist (idempotent).
-func ensureBucket(ctx context.Context, mc *minio.Client, name string) error {
+// EnsureBucket creates the bucket if it does not already exist (idempotent).
+func EnsureBucket(ctx context.Context, mc *minio.Client, name, region string) error {
 	exists, err := mc.BucketExists(ctx, name)
 	if err != nil {
 		return fmt.Errorf("check bucket %q: %w", name, err)
@@ -42,7 +44,7 @@ func ensureBucket(ctx context.Context, mc *minio.Client, name string) error {
 	if exists {
 		return nil
 	}
-	if err := mc.MakeBucket(ctx, name, minio.MakeBucketOptions{Region: s3Region}); err != nil {
+	if err := mc.MakeBucket(ctx, name, minio.MakeBucketOptions{Region: region}); err != nil {
 		// Tolerate a race where the bucket appeared between the check and now.
 		if exists2, errCheck := mc.BucketExists(ctx, name); errCheck == nil && exists2 {
 			return nil
@@ -52,9 +54,8 @@ func ensureBucket(ctx context.Context, mc *minio.Client, name string) error {
 	return nil
 }
 
-// deleteBucket empties and removes the bucket (best effort). Used only when the
-// ObjectBucket reclaim policy is Delete.
-func deleteBucket(ctx context.Context, mc *minio.Client, name string) error {
+// DeleteBucket empties and removes the bucket (best effort).
+func DeleteBucket(ctx context.Context, mc *minio.Client, name string) error {
 	exists, err := mc.BucketExists(ctx, name)
 	if err != nil {
 		return fmt.Errorf("check bucket %q: %w", name, err)
