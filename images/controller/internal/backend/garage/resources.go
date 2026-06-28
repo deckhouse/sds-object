@@ -72,13 +72,13 @@ func commonLabels(cluster *v1alpha1.ObjectStorageCluster) map[string]string {
 }
 
 // s3Endpoint is the in-cluster S3 URL of the cluster's Service.
-func s3Endpoint(cluster *v1alpha1.ObjectStorageCluster, namespace string) string {
-	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", s3SvcName(cluster), namespace, s3Port)
+func s3Endpoint(cluster *v1alpha1.ObjectStorageCluster, namespace, clusterDomain string) string {
+	return fmt.Sprintf("http://%s.%s.svc.%s:%d", s3SvcName(cluster), namespace, clusterDomain, s3Port)
 }
 
 // adminEndpoint is the in-cluster admin API URL of the cluster's Service.
-func adminEndpoint(cluster *v1alpha1.ObjectStorageCluster, namespace string) string {
-	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", s3SvcName(cluster), namespace, adminPort)
+func adminEndpoint(cluster *v1alpha1.ObjectStorageCluster, namespace, clusterDomain string) string {
+	return fmt.Sprintf("http://%s.%s.svc.%s:%d", s3SvcName(cluster), namespace, clusterDomain, adminPort)
 }
 
 // replicationFactor maps the high-level redundancy intent to a Garage

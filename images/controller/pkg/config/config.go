@@ -32,12 +32,14 @@ const (
 	MaxConcurrentReconcilesEnv = "MAX_CONCURRENT_RECONCILES"
 	RequeueIntervalEnv         = "REQUEUE_INTERVAL_SECONDS"
 	GarageImageEnv             = "GARAGE_IMAGE"
+	ClusterDomainEnv           = "CLUSTER_DOMAIN"
 
 	DefaultControllerNamespace     = "d8-sds-object"
 	DefaultControllerName          = "sds-object-controller"
 	DefaultHealthProbeBindAddress  = ":8081"
 	DefaultRequeueIntervalSeconds  = 30
 	DefaultMaxConcurrentReconciles = 1
+	DefaultClusterDomain           = "cluster.local"
 )
 
 type Options struct {
@@ -49,6 +51,10 @@ type Options struct {
 	// GarageImage is the module registry reference for the Garage server
 	// image, injected via the GARAGE_IMAGE env var from Helm.
 	GarageImage string
+	// ClusterDomain is the Kubernetes cluster DNS domain (e.g. cluster.local),
+	// injected via CLUSTER_DOMAIN from global.discovery.clusterDomain. Used to
+	// build in-cluster Service FQDNs.
+	ClusterDomain string
 }
 
 func NewConfig() *Options {
@@ -91,6 +97,11 @@ func NewConfig() *Options {
 	}
 
 	opts.GarageImage = os.Getenv(GarageImageEnv)
+
+	opts.ClusterDomain = os.Getenv(ClusterDomainEnv)
+	if opts.ClusterDomain == "" {
+		opts.ClusterDomain = DefaultClusterDomain
+	}
 
 	return &opts
 }

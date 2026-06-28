@@ -19,6 +19,7 @@
   "webhookCertPath" "internal.customWebhookCert"
   "additionalControllerEnvs" (list
     (dict "name" "GARAGE_IMAGE" "value" (include "helm_lib_module_image" (list . "garage")))
+    (dict "name" "CLUSTER_DOMAIN" "value" .Values.global.discovery.clusterDomain)
   )
 }}
 {{ include "helm_lib_module_controller_manifests" (list . $config) }}
