@@ -40,7 +40,7 @@ func (d *Driver) EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStora
 	if token == "" {
 		return backend.BucketState{Message: "Garage admin token is not provisioned yet"}, nil
 	}
-	svc := newAdminClient(adminEndpoint(cluster, d.namespace), token)
+	svc := newAdminClient(adminEndpoint(cluster, d.namespace, d.clusterDomain), token)
 
 	name := bucketDisplayName(bucket)
 
@@ -107,7 +107,7 @@ func (d *Driver) DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStora
 	if token == "" {
 		return nil
 	}
-	svc := newAdminClient(adminEndpoint(cluster, d.namespace), token)
+	svc := newAdminClient(adminEndpoint(cluster, d.namespace, d.clusterDomain), token)
 
 	accessKeyID, _, err := d.existingCreds(ctx, bucket)
 	if err != nil {

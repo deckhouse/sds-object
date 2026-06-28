@@ -72,13 +72,13 @@ func commonLabels(cluster *v1alpha1.ObjectStorageCluster) map[string]string {
 }
 
 // s3Endpoint is the in-cluster S3 URL of the cluster's Service.
-func s3Endpoint(cluster *v1alpha1.ObjectStorageCluster, namespace string) string {
-	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", s3SvcName(cluster), namespace, s3Port)
+func s3Endpoint(cluster *v1alpha1.ObjectStorageCluster, namespace, clusterDomain string) string {
+	return fmt.Sprintf("http://%s.%s.svc.%s:%d", s3SvcName(cluster), namespace, clusterDomain, s3Port)
 }
 
 // adminEndpoint is the in-cluster admin API URL of the cluster's Service.
-func adminEndpoint(cluster *v1alpha1.ObjectStorageCluster, namespace string) string {
-	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", s3SvcName(cluster), namespace, adminPort)
+func adminEndpoint(cluster *v1alpha1.ObjectStorageCluster, namespace, clusterDomain string) string {
+	return fmt.Sprintf("http://%s.%s.svc.%s:%d", s3SvcName(cluster), namespace, clusterDomain, adminPort)
 }
 
 // replicationFactor maps the high-level redundancy intent to a Garage
@@ -271,10 +271,23 @@ func podSpec(cluster *v1alpha1.ObjectStorageCluster, image string, dataVolume *c
 	return corev1.PodSpec{
 		ServiceAccountName: resourceName(cluster),
 		ImagePullSecrets:   []corev1.LocalObjectReference{{Name: registryPullSecret}},
-		Containers:         []corev1.Container{c},
-		Volumes:            volumes,
+		// Garage must own its metadata/data directory. The base image runs as
+		// a non-root user, but the backing volume is root-owned: a hostPath dir
+		// is created root:root by the kubelet (System), and a fresh PVC mounts
+		// root:root by default (Lightweight). fsGroup does not cover hostPath,
+		// so the data-plane pod runs as root (consistent with how Deckhouse
+		// storage data planes run); fsGroup keeps the PVC group-writable too.
+		SecurityContext: &corev1.PodSecurityContext{
+			RunAsUser:  ptrInt64(0),
+			RunAsGroup: ptrInt64(0),
+			FSGroup:    ptrInt64(0),
+		},
+		Containers: []corev1.Container{c},
+		Volumes:    volumes,
 	}
 }
+
+func ptrInt64(v int64) *int64 { return &v }
 
 // buildStatefulSet returns the StatefulSet for the Lightweight/Full profiles
 // (PVC-backed). Full currently reuses the Garage layout until the SeaweedFS

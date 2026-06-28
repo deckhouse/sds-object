@@ -61,7 +61,7 @@ func (d *Driver) ensureMeshAndLayout(ctx context.Context, cluster *v1alpha1.Obje
 		return meshResult{msg: "waiting for Garage pods to report a node identity"}, nil
 	}
 
-	svc := newAdminClient(adminEndpoint(cluster, d.namespace), token)
+	svc := newAdminClient(adminEndpoint(cluster, d.namespace, d.clusterDomain), token)
 
 	// 1. Connect peers (idempotent gossip seed).
 	peerSpecs := make([]string, 0, len(peers))
@@ -84,13 +84,13 @@ func (d *Driver) ensureMeshAndLayout(ctx context.Context, cluster *v1alpha1.Obje
 
 	size := storageSize(cluster)
 	capacity := size.Value()
-	changes := map[string]*roleChange{}
+	var changes []roleChange
 	for _, p := range peers {
 		if _, ok := assigned[p.id]; ok {
 			continue
 		}
 		c := capacity
-		changes[p.id] = &roleChange{Zone: "dc1", Capacity: &c, Tags: []string{}}
+		changes = append(changes, roleChange{ID: p.id, Zone: "dc1", Capacity: &c, Tags: []string{}})
 	}
 	if len(changes) > 0 {
 		if err := svc.stageLayout(ctx, changes); err != nil {

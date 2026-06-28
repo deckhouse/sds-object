@@ -60,18 +60,26 @@ const (
 // manager's client; a non-cached reader (for listing pods without caching every
 // pod in the cluster); the module namespace; and the Garage image reference.
 type Driver struct {
-	client    client.Client
-	apiReader client.Reader
-	log       *logger.Logger
-	namespace string
-	image     string
+	client        client.Client
+	apiReader     client.Reader
+	log           *logger.Logger
+	namespace     string
+	image         string
+	clusterDomain string
 }
 
 var _ backend.Driver = (*Driver)(nil)
 
 // New builds a Garage Driver.
-func New(c client.Client, apiReader client.Reader, log *logger.Logger, namespace, image string) *Driver {
-	return &Driver{client: c, apiReader: apiReader, log: log, namespace: namespace, image: image}
+func New(c client.Client, apiReader client.Reader, log *logger.Logger, namespace, image, clusterDomain string) *Driver {
+	return &Driver{
+		client:        c,
+		apiReader:     apiReader,
+		log:           log,
+		namespace:     namespace,
+		image:         image,
+		clusterDomain: clusterDomain,
+	}
 }
 
 func (d *Driver) Type() v1alpha1.BackendType { return v1alpha1.BackendGarage }
@@ -103,7 +111,7 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 		return state, fmt.Errorf("ensure rpc service: %w", err)
 	}
 
-	state.Endpoint = v1alpha1.EndpointStatus{Internal: s3Endpoint(cluster, d.namespace), Region: "garage"}
+	state.Endpoint = v1alpha1.EndpointStatus{Internal: s3Endpoint(cluster, d.namespace, d.clusterDomain), Region: "garage"}
 
 	workloadReady, workloadMsg, err := d.ensureWorkload(ctx, cluster)
 	if err != nil {
