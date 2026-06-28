@@ -17,8 +17,10 @@ limitations under the License.
 // Package seaweedfs implements the backend.Driver for the SeaweedFS object
 // storage backend (the Full cluster profile).
 //
-// Data plane: a single-replica all-in-one `weed server -s3` (master + volume +
-// filer + S3 gateway) backed by a PVC (a distributed topology is a follow-up).
+// Data plane: a distributed topology of master, volume and filer (+S3 gateway)
+// StatefulSets. The filer runs with multiple replicas (HA) backed by a shared
+// PostgreSQL metadata store provisioned via the managed-postgres module (see
+// postgres.go).
 //
 // Bucket/credential provisioning uses SeaweedFS's filer-stored S3 IAM config
 // (/etc/iam/identity.json, managed over the filer HTTP API; the S3 gateway
@@ -91,17 +93,38 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 		return state, nil
 	}
 
-	// Services and the filer config first, so the workloads can resolve peers.
+	// Services first, so the workloads can resolve peers.
 	for _, obj := range []client.Object{
 		buildMainService(cluster, d.namespace),
 		buildMasterService(cluster, d.namespace),
 		buildVolumeService(cluster, d.namespace),
 		buildFilerService(cluster, d.namespace),
-		buildFilerConfig(cluster, d.namespace),
 	} {
 		if err := d.apply(ctx, cluster, obj); err != nil {
 			return state, fmt.Errorf("ensure %T: %w", obj, err)
 		}
+	}
+
+	// Shared filer metadata store (managed-postgres). The filer config Secret
+	// can only be rendered once the DB credentials exist.
+	if err := d.ensurePostgres(ctx, cluster); err != nil {
+		if isNoMatch(err) {
+			state.Message = "Postgres CRD not found; is the managed-postgres module installed?"
+			return state, nil
+		}
+		return state, fmt.Errorf("ensure Postgres: %w", err)
+	}
+	host, user, pass, ok, err := d.pgCreds(ctx, cluster)
+	if err != nil {
+		return state, fmt.Errorf("read Postgres credentials: %w", err)
+	}
+	if !ok {
+		state.Message = "waiting for managed-postgres to provision filer database credentials"
+		return state, nil
+	}
+	cfgSecret := buildFilerConfigSecret(cluster, d.namespace, renderFilerToml(host, pgPort, user, pass, pgDatabase))
+	if err := d.apply(ctx, cluster, cfgSecret); err != nil {
+		return state, fmt.Errorf("ensure filer config: %w", err)
 	}
 
 	// master -> volume -> filer.
@@ -374,9 +397,11 @@ func mergeDesired(live, desired client.Object) {
 		l.Labels = d.Labels
 		l.Spec.Selector = d.Spec.Selector
 		l.Spec.Ports = d.Spec.Ports
-	case *corev1.ConfigMap:
-		l.Data = desired.(*corev1.ConfigMap).Data
-		l.Labels = desired.GetLabels()
+	case *corev1.Secret:
+		d := desired.(*corev1.Secret)
+		l.Labels = d.Labels
+		l.Type = d.Type
+		l.StringData = d.StringData
 	case *appsv1.StatefulSet:
 		d := desired.(*appsv1.StatefulSet)
 		l.Labels = d.Labels

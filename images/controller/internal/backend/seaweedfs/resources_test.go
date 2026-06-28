@@ -107,8 +107,9 @@ func TestBuildStatefulSets(t *testing.T) {
 	}
 
 	filer := buildFilerStatefulSet(c, "d8-sds-object", "img")
-	if filer.Spec.Replicas == nil || *filer.Spec.Replicas != 1 {
-		t.Errorf("filer replicas=%v, want 1 (single filer MVP)", filer.Spec.Replicas)
+	// HighRedundancy -> 3 filer replicas (HA, shared Postgres metadata store).
+	if filer.Spec.Replicas == nil || *filer.Spec.Replicas != 3 {
+		t.Errorf("filer replicas=%v, want 3", filer.Spec.Replicas)
 	}
 	if argsContain(filer, "-s3.config=/etc/sw/seaweedfs_s3_config") {
 		t.Errorf("filer must NOT use a static -s3.config (uses filer-stored IAM): %v", filer.Spec.Template.Spec.Containers[0].Args)
@@ -116,8 +117,102 @@ func TestBuildStatefulSets(t *testing.T) {
 	if !argsContain(filer, "-s3") {
 		t.Errorf("filer must enable -s3")
 	}
+	// Stateless filer: no local data PVC; metadata lives in Postgres.
+	if len(filer.Spec.VolumeClaimTemplates) != 0 {
+		t.Errorf("filer must have no VolumeClaimTemplates, got %d", len(filer.Spec.VolumeClaimTemplates))
+	}
+	// The filer config must be mounted from a Secret (carries the DB password).
+	var cfgFromSecret bool
+	for _, v := range filer.Spec.Template.Spec.Volumes {
+		if v.Name == "config" && v.Secret != nil && v.Secret.SecretName == filerConfigName(c) {
+			cfgFromSecret = true
+		}
+	}
+	if !cfgFromSecret {
+		t.Errorf("filer config must be mounted from Secret %q: %+v", filerConfigName(c), filer.Spec.Template.Spec.Volumes)
+	}
 	if sc := master.Spec.Template.Spec.SecurityContext; sc == nil || sc.RunAsUser == nil || *sc.RunAsUser != 0 {
 		t.Errorf("data plane must run as root")
+	}
+}
+
+func TestFilerReplicas(t *testing.T) {
+	cases := []struct {
+		r    v1alpha1.RedundancyMode
+		want int32
+	}{
+		{v1alpha1.RedundancySingle, 1},
+		{v1alpha1.RedundancyReplicated, 2},
+		{v1alpha1.RedundancyMode(""), 2},
+		{v1alpha1.RedundancyHighRedundancy, 3},
+	}
+	for _, c := range cases {
+		if got := filerReplicas(cluster("c", c.r)); got != c.want {
+			t.Errorf("filerReplicas(%q)=%d, want %d", c.r, got, c.want)
+		}
+	}
+}
+
+func TestBuildPostgres(t *testing.T) {
+	c := cluster("media", v1alpha1.RedundancyHighRedundancy)
+	c.Spec.Storage = &v1alpha1.ObjectStorageClusterStorageSpec{Class: "fast"}
+
+	pg := buildPostgres(c, "d8-sds-object")
+	if pg.GetName() != "media-seaweedfs-pg" {
+		t.Errorf("pg name=%q", pg.GetName())
+	}
+	if pg.GroupVersionKind() != postgresGVK {
+		t.Errorf("pg gvk=%v", pg.GroupVersionKind())
+	}
+	spec, _ := pg.Object["spec"].(map[string]interface{})
+	if spec["type"] != "Cluster" {
+		t.Errorf("HighRedundancy pg type=%v, want Cluster", spec["type"])
+	}
+	if cl, _ := spec["cluster"].(map[string]interface{}); cl["replication"] != "ConsistencyAndAvailability" {
+		t.Errorf("HighRedundancy replication=%v", cl["replication"])
+	}
+	users, _ := spec["users"].([]interface{})
+	u0, _ := users[0].(map[string]interface{})
+	if u0["storeCredsToSecret"] != pgCredsSecretName(c) {
+		t.Errorf("storeCredsToSecret=%v, want %q", u0["storeCredsToSecret"], pgCredsSecretName(c))
+	}
+
+	// Single -> a standalone instance.
+	single := buildPostgres(cluster("c", v1alpha1.RedundancySingle), "d8-sds-object")
+	if s, _ := single.Object["spec"].(map[string]interface{}); s["type"] != "Standalone" {
+		t.Errorf("Single pg type=%v, want Standalone", s["type"])
+	}
+}
+
+func TestRenderFilerToml(t *testing.T) {
+	toml := renderFilerToml("d8ms-pg-x-rw", pgPort, "seaweedfs", "s3cr3t", "seaweedfs")
+	for _, want := range []string{
+		"[postgres2]",
+		"enabled = true",
+		`hostname = "d8ms-pg-x-rw"`,
+		"port = 5432",
+		`username = "seaweedfs"`,
+		`password = "s3cr3t"`,
+		`database = "seaweedfs"`,
+		`sslmode = "require"`,
+	} {
+		if !strings.Contains(toml, want) {
+			t.Errorf("filer.toml missing %q:\n%s", want, toml)
+		}
+	}
+}
+
+func TestBuildFilerConfigSecret(t *testing.T) {
+	c := cluster("media", v1alpha1.RedundancyReplicated)
+	s := buildFilerConfigSecret(c, "d8-sds-object", "toml-body")
+	if s.Name != filerConfigName(c) {
+		t.Errorf("secret name=%q, want %q", s.Name, filerConfigName(c))
+	}
+	if s.Type != corev1.SecretTypeOpaque {
+		t.Errorf("secret type=%q", s.Type)
+	}
+	if s.StringData["filer.toml"] != "toml-body" {
+		t.Errorf("filer.toml=%q", s.StringData["filer.toml"])
 	}
 }
 

@@ -234,17 +234,6 @@ func buildFilerService(cluster *v1alpha1.ObjectStorageCluster, namespace string)
 	})
 }
 
-// buildFilerConfig is the ConfigMap with filer.toml selecting a persistent
-// leveldb store on the filer PVC.
-func buildFilerConfig(cluster *v1alpha1.ObjectStorageCluster, namespace string) *corev1.ConfigMap {
-	return &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: componentName(cluster, compFiler) + "-config", Namespace: namespace, Labels: componentLabels(cluster, compFiler)},
-		Data: map[string]string{
-			"filer.toml": fmt.Sprintf("[leveldb2]\nenabled = true\ndir = \"%s/filerldb2\"\n", dataMount),
-		},
-	}
-}
-
 // --- StatefulSets -----------------------------------------------------------
 
 func tcpProbe(port int) *corev1.Probe {
@@ -325,10 +314,12 @@ func buildVolumeStatefulSet(cluster *v1alpha1.ObjectStorageCluster, namespace, i
 	return statefulSet(cluster, namespace, compVolume, volumes, c, []corev1.PersistentVolumeClaim{dataPVC(cluster, storageSize(cluster))}, nil)
 }
 
-// buildFilerStatefulSet runs a single filer with the S3 gateway. It is started
-// WITHOUT -s3.config so the gateway uses the filer-stored IAM config
-// (/etc/iam/identity.json) that the bucket reconciler manages and that the
-// gateway reloads automatically.
+// buildFilerStatefulSet runs the filer + S3 gateway with `filerReplicas`
+// replicas. Filer metadata lives in the shared managed-postgres store
+// (postgres2) configured via the mounted filer.toml Secret, so replicas are
+// stateless (no local PVC) and form an HA set. Started WITHOUT -s3.config so
+// the gateway uses the filer-stored IAM config (/etc/iam/identity.json) the
+// bucket reconciler manages and the gateway reloads automatically.
 func buildFilerStatefulSet(cluster *v1alpha1.ObjectStorageCluster, namespace, image string) *appsv1.StatefulSet {
 	c := corev1.Container{
 		Name:    "filer",
@@ -349,7 +340,6 @@ func buildFilerStatefulSet(cluster *v1alpha1.ObjectStorageCluster, namespace, im
 			{Name: "s3", ContainerPort: s3Port},
 		},
 		VolumeMounts: []corev1.VolumeMount{
-			{Name: "data", MountPath: dataMount},
 			{Name: "config", MountPath: configMount},
 		},
 		ReadinessProbe: tcpProbe(s3Port),
@@ -357,11 +347,11 @@ func buildFilerStatefulSet(cluster *v1alpha1.ObjectStorageCluster, namespace, im
 	}
 	volumes := []corev1.Volume{{
 		Name: "config",
-		VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
-			LocalObjectReference: corev1.LocalObjectReference{Name: componentName(cluster, compFiler) + "-config"},
+		VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+			SecretName: filerConfigName(cluster),
 		}},
 	}}
-	return statefulSet(cluster, namespace, compFiler, 1, c, []corev1.PersistentVolumeClaim{dataPVC(cluster, resource.MustParse("2Gi"))}, volumes)
+	return statefulSet(cluster, namespace, compFiler, filerReplicas(cluster), c, nil, volumes)
 }
 
 func requests(cpu, mem string) corev1.ResourceRequirements {
