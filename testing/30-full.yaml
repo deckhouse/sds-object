@@ -1,0 +1,49 @@
+# Full profile (SeaweedFS, single-node MVP).
+# Cluster -> bucket -> credentials Secret -> mc read/write, same flow as the
+# Garage profiles. (A distributed master/volume/filer topology is a follow-up.)
+---
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectStorageCluster
+metadata:
+  name: full
+spec:
+  type: Full
+  redundancy: Single
+  storage:
+    size: 10Gi
+    class: localpath   # <-- replace with your StorageClass (kubectl get sc)
+---
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectBucket
+metadata:
+  name: full-bucket
+  namespace: obj-test
+spec:
+  clusterRef: full
+  reclaimPolicy: Delete
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: s3-test-full
+  namespace: obj-test
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: mc
+          image: minio/mc:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              mc alias set t "$S3_ENDPOINT" "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY"
+              echo "hello from sds-object test at $(date)" | mc pipe "t/$S3_BUCKET/hello.txt"
+              echo "--- listing ---"; mc ls "t/$S3_BUCKET"
+              echo "--- content ---"; mc cat "t/$S3_BUCKET/hello.txt"
+              echo "S3 OK"
+          envFrom:
+            - secretRef:
+                name: full-bucket-s3-credentials

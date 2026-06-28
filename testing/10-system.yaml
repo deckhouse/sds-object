@@ -1,0 +1,46 @@
+# System profile (Garage on control-plane nodes, hostPath).
+# Apply, wait for the cluster to be Ready, then re-apply so the bucket and the
+# test Job provision against the ready cluster.
+---
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectStorageCluster
+metadata:
+  name: system
+spec:
+  type: System
+  redundancy: Single
+---
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectBucket
+metadata:
+  name: sys-bucket
+  namespace: obj-test
+spec:
+  clusterRef: system
+  reclaimPolicy: Delete
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: s3-test-system
+  namespace: obj-test
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: mc
+          image: minio/mc:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              mc alias set t "$S3_ENDPOINT" "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY"
+              echo "hello from sds-object test at $(date)" | mc pipe "t/$S3_BUCKET/hello.txt"
+              echo "--- listing ---"; mc ls "t/$S3_BUCKET"
+              echo "--- content ---"; mc cat "t/$S3_BUCKET/hello.txt"
+              echo "S3 OK"
+          envFrom:
+            - secretRef:
+                name: sys-bucket-s3-credentials

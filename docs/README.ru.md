@@ -31,7 +31,7 @@ weight: 1
 | `Heavy` | Ceph RGW | RADOS Gateway поверх существующего кластера sds-elastic | Переиспользует ёмкость и отказоустойчивость Ceph. |
 
 {{< alert level="info" >}}
-Статус реализации: профили `System` и `Lightweight` (Garage) доступны. `Full` (SeaweedFS) и `Heavy` (Ceph RGW) запланированы и пока не работают.
+Статус реализации: профили `System`, `Lightweight` (Garage) и `Full` (SeaweedFS) доступны. `Full` сейчас запускает одноузловой SeaweedFS (распределённая топология запланирована). `Heavy` (Ceph RGW) запланирован и пока не работает.
 {{< /alert >}}
 
 ## Как это работает

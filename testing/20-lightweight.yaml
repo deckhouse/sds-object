@@ -1,0 +1,48 @@
+# Lightweight profile (Garage on PVC).
+# Set spec.storage.class to a StorageClass that exists in your cluster.
+---
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectStorageCluster
+metadata:
+  name: lightweight
+spec:
+  type: Lightweight
+  redundancy: Single
+  storage:
+    size: 5Gi
+    class: localpath   # <-- replace with your StorageClass (kubectl get sc)
+---
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectBucket
+metadata:
+  name: light-bucket
+  namespace: obj-test
+spec:
+  clusterRef: lightweight
+  reclaimPolicy: Delete
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: s3-test-lightweight
+  namespace: obj-test
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: mc
+          image: minio/mc:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              mc alias set t "$S3_ENDPOINT" "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY"
+              echo "hello from sds-object test at $(date)" | mc pipe "t/$S3_BUCKET/hello.txt"
+              echo "--- listing ---"; mc ls "t/$S3_BUCKET"
+              echo "--- content ---"; mc cat "t/$S3_BUCKET/hello.txt"
+              echo "S3 OK"
+          envFrom:
+            - secretRef:
+                name: light-bucket-s3-credentials

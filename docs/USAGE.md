@@ -132,5 +132,5 @@ spec:
 ```
 
 {{< alert level="info" >}}
-The `Heavy` and `Full` profiles are not yet functional; the manifests above describe the target API.
+The `Heavy` profile is not yet functional; the manifest above describes the target API.
 {{< /alert >}}
