@@ -135,12 +135,12 @@ func (r *ObjectStorageClusterReconciler) reconcileNormal(ctx context.Context, cl
 	if err != nil {
 		// No driver for this profile is a terminal configuration error.
 		status.setCondition(v1alpha1.OSCConditionBackendReady, metav1.ConditionFalse, reasonError, err.Error())
-		gateAfter(status, oscStageOrder, v1alpha1.OSCConditionReady, v1alpha1.OSCConditionBackendReady)
+		gateAfter(status, oscStageOrder, v1alpha1.OSCConditionBackendReady)
 		return r.finish(ctx, cluster, status, nil, err)
 	}
 
 	state, err := driver.EnsureCluster(ctx, cluster)
-	if !advance(status, oscStageOrder, v1alpha1.OSCConditionReady, v1alpha1.OSCConditionBackendReady, state.Ready, state.Message, err) {
+	if !advance(status, oscStageOrder, v1alpha1.OSCConditionBackendReady, state.Ready, state.Message, err) {
 		return r.finish(ctx, cluster, status, &state, err)
 	}
 
@@ -149,7 +149,7 @@ func (r *ObjectStorageClusterReconciler) reconcileNormal(ctx context.Context, cl
 	if !endpointReady {
 		endpointMsg = "waiting for the backend to publish an S3 endpoint"
 	}
-	if !advance(status, oscStageOrder, v1alpha1.OSCConditionReady, v1alpha1.OSCConditionEndpointReady, endpointReady, endpointMsg, nil) {
+	if !advance(status, oscStageOrder, v1alpha1.OSCConditionEndpointReady, endpointReady, endpointMsg, nil) {
 		return r.finish(ctx, cluster, status, &state, nil)
 	}
 
@@ -175,7 +175,7 @@ func (r *ObjectStorageClusterReconciler) finish(
 	if reconcileErr != nil {
 		return ctrl.Result{}, reconcileErr
 	}
-	if aggregateReady(status, v1alpha1.OSCConditionReady) {
+	if aggregateReady(status) {
 		return ctrl.Result{}, nil
 	}
 	return ctrl.Result{RequeueAfter: r.Cfg.RequeueInterval}, nil

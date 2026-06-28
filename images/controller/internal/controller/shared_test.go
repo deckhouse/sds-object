@@ -54,7 +54,7 @@ func TestDerivePhase(t *testing.T) {
 func TestAdvance(t *testing.T) {
 	// Success advances and records True.
 	sb := newStatusBuilder(1)
-	if !advance(sb, testStages, "Ready", "A", true, "done", nil) {
+	if !advance(sb, testStages, "A", true, "done", nil) {
 		t.Fatalf("advance(done): want true")
 	}
 	if c := apimeta.FindStatusCondition(sb.conditions, "A"); c == nil || c.Status != metav1.ConditionTrue {
@@ -63,7 +63,7 @@ func TestAdvance(t *testing.T) {
 
 	// Error stops and gates the aggregate.
 	sb = newStatusBuilder(1)
-	if advance(sb, testStages, "Ready", "A", false, "", errors.New("boom")) {
+	if advance(sb, testStages, "A", false, "", errors.New("boom")) {
 		t.Fatalf("advance(err): want false")
 	}
 	if c := apimeta.FindStatusCondition(sb.conditions, "A"); c == nil || c.Status != metav1.ConditionFalse || c.Reason != reasonError {
@@ -76,7 +76,7 @@ func TestAdvance(t *testing.T) {
 
 func TestGateAfter(t *testing.T) {
 	sb := newStatusBuilder(1)
-	gateAfter(sb, []string{"A", "B", "C"}, "Ready", "A")
+	gateAfter(sb, []string{"A", "B", "C"}, "A")
 
 	for _, downstream := range []string{"B", "C", "Ready"} {
 		c := apimeta.FindStatusCondition(sb.conditions, downstream)
@@ -92,11 +92,11 @@ func TestGateAfter(t *testing.T) {
 
 func TestAggregateReady(t *testing.T) {
 	sb := newStatusBuilder(1)
-	if aggregateReady(sb, "Ready") {
+	if aggregateReady(sb) {
 		t.Errorf("aggregateReady(empty)=true, want false")
 	}
 	sb.setCondition("Ready", metav1.ConditionTrue, reasonReady, "")
-	if !aggregateReady(sb, "Ready") {
+	if !aggregateReady(sb) {
 		t.Errorf("aggregateReady(True)=false, want true")
 	}
 }
