@@ -1,0 +1,200 @@
+/*
+Copyright 2026 Flant JSC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package seaweedfs
+
+import (
+	"context"
+	"fmt"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+
+	v1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
+)
+
+// SeaweedFS filer metadata is stored in a shared PostgreSQL provisioned via the
+// managed-postgres module (managed-services.deckhouse.io/v1alpha1 Postgres),
+// which lets the filer run with multiple replicas (HA). The filer uses the
+// `postgres2` store, which auto-creates its tables (CREATE TABLE IF NOT EXISTS),
+// so no manual schema bootstrap is needed.
+const (
+	pgDatabase = "seaweedfs"
+	pgUser     = "seaweedfs"
+	pgPort     = 5432
+)
+
+// postgresGVK is the managed-postgres Postgres CR.
+var postgresGVK = schema.GroupVersionKind{
+	Group: "managed-services.deckhouse.io", Version: "v1alpha1", Kind: "Postgres",
+}
+
+// pgName is the Postgres CR name for a cluster.
+func pgName(cluster *v1alpha1.ObjectStorageCluster) string {
+	return componentName(cluster, "pg")
+}
+
+// pgCredsSecretName is the Secret managed-postgres writes the filer user's
+// credentials into (keys: host, username, password). The driver sets it via the
+// user's storeCredsToSecret.
+func pgCredsSecretName(cluster *v1alpha1.ObjectStorageCluster) string {
+	return componentName(cluster, "pg") + "-creds"
+}
+
+// filerReplicas is the number of filer (S3 gateway) replicas, derived from the
+// redundancy intent. >1 needs the shared Postgres store (this file).
+func filerReplicas(cluster *v1alpha1.ObjectStorageCluster) int32 {
+	switch cluster.Spec.Redundancy {
+	case v1alpha1.RedundancySingle:
+		return 1
+	case v1alpha1.RedundancyHighRedundancy:
+		return 3
+	default: // Replicated or unset
+		return 2
+	}
+}
+
+// buildPostgres returns the managed-postgres Postgres CR backing the filer
+// metadata store. The DB topology scales with the redundancy intent.
+func buildPostgres(cluster *v1alpha1.ObjectStorageCluster, namespace string) *unstructured.Unstructured {
+	instance := map[string]interface{}{
+		"cpu":    map[string]interface{}{"cores": int64(1), "coreFraction": int64(100)},
+		"memory": map[string]interface{}{"size": "512Mi"},
+		"persistentVolumeClaim": map[string]interface{}{
+			"size":             "2Gi",
+			"storageClassName": storageClass(cluster),
+		},
+	}
+	spec := map[string]interface{}{
+		"postgresClassName": "default",
+		"instance":          instance,
+		"databases":         []interface{}{map[string]interface{}{"name": pgDatabase}},
+		"users": []interface{}{map[string]interface{}{
+			"name":               pgUser,
+			"role":               "rw",
+			"storeCredsToSecret": pgCredsSecretName(cluster),
+		}},
+	}
+
+	// Single -> a standalone instance; otherwise an HA cluster.
+	switch cluster.Spec.Redundancy {
+	case v1alpha1.RedundancySingle:
+		spec["type"] = "Standalone"
+	case v1alpha1.RedundancyHighRedundancy:
+		spec["type"] = "Cluster"
+		spec["cluster"] = map[string]interface{}{"replication": "ConsistencyAndAvailability"}
+	default: // Replicated
+		spec["type"] = "Cluster"
+		spec["cluster"] = map[string]interface{}{"replication": "Availability"}
+	}
+
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(postgresGVK)
+	obj.SetName(pgName(cluster))
+	obj.SetNamespace(namespace)
+	obj.SetLabels(componentLabels(cluster, compFiler))
+	obj.Object["spec"] = spec
+	return obj
+}
+
+// renderFilerToml renders filer.toml configuring the postgres2 store. The
+// managed-postgres rw endpoint enables TLS, so sslmode=require (encrypt without
+// CA verification, matching managed-postgres' own DSN default).
+func renderFilerToml(host string, port int, user, password, database string) string {
+	return fmt.Sprintf(`[postgres2]
+enabled = true
+hostname = "%s"
+port = %d
+username = "%s"
+password = "%s"
+database = "%s"
+sslmode = "require"
+`, host, port, user, password, database)
+}
+
+// buildFilerConfigSecret holds filer.toml (with the DB password), mounted by
+// every filer replica. A Secret (not a ConfigMap) since it carries the password.
+func buildFilerConfigSecret(cluster *v1alpha1.ObjectStorageCluster, namespace, filerToml string) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      filerConfigName(cluster),
+			Namespace: namespace,
+			Labels:    componentLabels(cluster, compFiler),
+		},
+		Type:       corev1.SecretTypeOpaque,
+		StringData: map[string]string{"filer.toml": filerToml},
+	}
+}
+
+func filerConfigName(cluster *v1alpha1.ObjectStorageCluster) string {
+	return componentName(cluster, compFiler) + "-config"
+}
+
+// ensurePostgres creates or updates the managed-postgres Postgres CR backing
+// the filer metadata store. Reads use the non-cached apiReader so a missing
+// Postgres CRD (managed-postgres not installed) surfaces as a NoMatch error;
+// writes go straight to the API server.
+func (d *Driver) ensurePostgres(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) error {
+	desired := buildPostgres(cluster, d.namespace)
+	if err := controllerutil.SetControllerReference(cluster, desired, d.client.Scheme()); err != nil {
+		return err
+	}
+
+	existing := &unstructured.Unstructured{}
+	existing.SetGroupVersionKind(postgresGVK)
+	err := d.apiReader.Get(ctx, client.ObjectKey{Namespace: d.namespace, Name: pgName(cluster)}, existing)
+	if apierrors.IsNotFound(err) {
+		return d.client.Create(ctx, desired)
+	}
+	if err != nil {
+		return err
+	}
+
+	existing.Object["spec"] = desired.Object["spec"]
+	existing.SetLabels(desired.GetLabels())
+	existing.SetOwnerReferences(desired.GetOwnerReferences())
+	return d.client.Update(ctx, existing)
+}
+
+// pgCreds reads the filer DB credentials managed-postgres writes into the
+// storeCredsToSecret Secret. Returns ok=false (not an error) while the Secret
+// or its keys are not yet populated, so the caller can requeue.
+func (d *Driver) pgCreds(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) (host, user, password string, ok bool, err error) {
+	secret := &corev1.Secret{}
+	key := client.ObjectKey{Namespace: d.namespace, Name: pgCredsSecretName(cluster)}
+	if err := d.apiReader.Get(ctx, key, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", "", "", false, nil
+		}
+		return "", "", "", false, err
+	}
+	host = string(secret.Data["host"])
+	user = string(secret.Data["username"])
+	password = string(secret.Data["password"])
+	if host == "" || user == "" || password == "" {
+		return "", "", "", false, nil
+	}
+	return host, user, password, true, nil
+}
+
+// isNoMatch reports a missing CRD (managed-postgres not installed).
+func isNoMatch(err error) bool { return apimeta.IsNoMatchError(err) }
