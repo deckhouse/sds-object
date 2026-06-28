@@ -24,6 +24,8 @@ import:
     add: /garage
     to: /garage
     before: setup
+git:
+{{- include "image mount points" . }}
 
 imageSpec:
   config:

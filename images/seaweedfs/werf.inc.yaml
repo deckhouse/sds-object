@@ -23,6 +23,8 @@ import:
     add: /usr/bin/weed
     to: /weed
     before: setup
+git:
+{{- include "image mount points" . }}
 
 imageSpec:
   config:
