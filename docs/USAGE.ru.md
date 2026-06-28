@@ -132,5 +132,5 @@ spec:
 ```
 
 {{< alert level="info" >}}
-Профиль `Heavy` разворачивает data plane Ceph RGW (Rook CephObjectStore на указанном кластере sds-elastic) и публикует S3-эндпойнт по готовности. Provisioning бакетов/учёток для `Heavy` (`ObjectBucket`) — follow-up.
+Профиль `Heavy` разворачивает data plane Ceph RGW (Rook CephObjectStore на указанном кластере sds-elastic). Бакеты работают так же, как у остальных профилей: `ObjectBucket` создаёт Rook `CephObjectStoreUser` и бакет, а Secret с учётками пишется в namespace бакета.
 {{< /alert >}}

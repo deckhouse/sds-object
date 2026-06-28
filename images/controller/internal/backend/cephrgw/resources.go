@@ -46,6 +46,9 @@ var (
 	cephObjectStoreGVK = schema.GroupVersionKind{
 		Group: "internal.sdselastic.deckhouse.io", Version: "v1", Kind: "CephObjectStore",
 	}
+	cephObjectStoreUserGVK = schema.GroupVersionKind{
+		Group: "internal.sdselastic.deckhouse.io", Version: "v1", Kind: "CephObjectStoreUser",
+	}
 	elasticClusterGVK = schema.GroupVersionKind{
 		Group: "storage.deckhouse.io", Version: "v1alpha1", Kind: "ElasticCluster",
 	}
@@ -67,6 +70,44 @@ func commonLabels(cluster *v1alpha1.ObjectStorageCluster) map[string]string {
 // rgwEndpoint is the in-cluster S3 URL of the Rook RGW Service.
 func rgwEndpoint(cluster *v1alpha1.ObjectStorageCluster, clusterDomain string) string {
 	return fmt.Sprintf("http://rook-ceph-rgw-%s.%s.svc.%s:%d", storeName(cluster), elasticNamespace, clusterDomain, rgwPort)
+}
+
+// rgwHostPort is the host:port of the RGW endpoint (no scheme), for the S3 client.
+func rgwHostPort(cluster *v1alpha1.ObjectStorageCluster, clusterDomain string) string {
+	return fmt.Sprintf("rook-ceph-rgw-%s.%s.svc.%s:%d", storeName(cluster), elasticNamespace, clusterDomain, rgwPort)
+}
+
+// userName is the CephObjectStoreUser CR name and RGW user id for a bucket.
+func userName(bucket *v1alpha1.ObjectBucket) string {
+	return fmt.Sprintf("%s-%s", bucket.Namespace, bucket.Name)
+}
+
+// rookUserSecretName is the Secret Rook generates for a CephObjectStoreUser,
+// in elasticNamespace, with data keys AccessKey/SecretKey/Endpoint.
+func rookUserSecretName(cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectBucket) string {
+	return fmt.Sprintf("rook-ceph-object-user-%s-%s", storeName(cluster), userName(bucket))
+}
+
+// bucketDisplayName is the S3 bucket name: spec.bucketName, or metadata.name.
+func bucketDisplayName(bucket *v1alpha1.ObjectBucket) string {
+	if bucket.Spec.BucketName != "" {
+		return bucket.Spec.BucketName
+	}
+	return bucket.Name
+}
+
+// buildCephObjectStoreUser returns the Rook CephObjectStoreUser for a bucket.
+func buildCephObjectStoreUser(cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectBucket) *unstructured.Unstructured {
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(cephObjectStoreUserGVK)
+	obj.SetName(userName(bucket))
+	obj.SetNamespace(elasticNamespace)
+	obj.SetLabels(commonLabels(cluster))
+	obj.Object["spec"] = map[string]interface{}{
+		"store":       storeName(cluster),
+		"displayName": userName(bucket),
+	}
+	return obj
 }
 
 // replicatedPool maps the redundancy intent to a Ceph replicated pool spec,

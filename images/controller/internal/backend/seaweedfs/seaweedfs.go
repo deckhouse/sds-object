@@ -42,6 +42,7 @@ import (
 
 	v1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 	"github.com/deckhouse/sds-object/images/controller/internal/backend"
+	"github.com/deckhouse/sds-object/images/controller/internal/backend/s3util"
 	"github.com/deckhouse/sds-object/images/controller/pkg/logger"
 )
 
@@ -192,11 +193,11 @@ func (d *Driver) EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStora
 		}
 	}
 
-	mc, err := newS3Client(s3HostPort(cluster, d.namespace, d.clusterDomain), adminAK, adminSK)
+	mc, err := s3util.NewClient(s3HostPort(cluster, d.namespace, d.clusterDomain), adminAK, adminSK)
 	if err != nil {
 		return backend.BucketState{}, fmt.Errorf("build S3 client: %w", err)
 	}
-	if err := ensureBucket(ctx, mc, name); err != nil {
+	if err := s3util.EnsureBucket(ctx, mc, name, s3Region); err != nil {
 		return backend.BucketState{}, err
 	}
 
@@ -235,11 +236,11 @@ func (d *Driver) DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStora
 	}
 
 	if bucket.Spec.ReclaimPolicy == v1alpha1.BucketReclaimDelete {
-		mc, err := newS3Client(s3HostPort(cluster, d.namespace, d.clusterDomain), adminAK, adminSK)
+		mc, err := s3util.NewClient(s3HostPort(cluster, d.namespace, d.clusterDomain), adminAK, adminSK)
 		if err != nil {
 			return fmt.Errorf("build S3 client: %w", err)
 		}
-		if err := deleteBucket(ctx, mc, bucketDisplayName(bucket)); err != nil {
+		if err := s3util.DeleteBucket(ctx, mc, bucketDisplayName(bucket)); err != nil {
 			return err
 		}
 	}
