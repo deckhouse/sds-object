@@ -96,11 +96,15 @@ type healthResponse struct {
 // a JSON array of these (each carrying the node id). For an assignment set
 // Zone/Capacity/Tags; to drop a node set Remove=true.
 type roleChange struct {
-	ID       string   `json:"id"`
-	Zone     string   `json:"zone,omitempty"`
-	Capacity *int64   `json:"capacity,omitempty"`
-	Tags     []string `json:"tags,omitempty"`
-	Remove   bool     `json:"remove,omitempty"`
+	ID   string `json:"id"`
+	Zone string `json:"zone,omitempty"`
+	// Capacity is the storage capacity in bytes (null/omitted = gateway node).
+	Capacity *int64 `json:"capacity,omitempty"`
+	// Tags is always sent (even empty): Garage matches the "assign" variant by
+	// the presence of zone+capacity+tags, so an omitted tags field would fail
+	// to deserialize.
+	Tags   []string `json:"tags"`
+	Remove bool     `json:"remove,omitempty"`
 }
 
 func (c *adminClient) status(ctx context.Context) (*statusResponse, error) {
