@@ -18,7 +18,6 @@ package main
 
 import (
 	"github.com/deckhouse/module-sdk/pkg/app"
-
 	_ "github.com/deckhouse/sds-object/hooks/go/020-webhook-certs"
 	_ "github.com/deckhouse/sds-object/hooks/go/030-remove-finalizers-on-module-delete"
 )

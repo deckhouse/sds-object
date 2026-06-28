@@ -207,7 +207,7 @@ func (r *ObjectBucketReconciler) reconcileNormal(ctx context.Context, bucket *v1
 	if err != nil {
 		status.setCondition(v1alpha1.OBConditionBucketReady, metav1.ConditionFalse, "WaitingForCluster",
 			fmt.Sprintf("ObjectStorageCluster %q is not available: %v", bucket.Spec.ClusterRef, err))
-		gateAfter(status, obStageOrder, v1alpha1.OBConditionReady, v1alpha1.OBConditionBucketReady)
+		gateAfter(status, obStageOrder, v1alpha1.OBConditionBucketReady)
 		return r.finish(ctx, bucket, status, observed, nil)
 	}
 	if cluster.Status != nil && cluster.Status.Endpoint != nil {
@@ -216,26 +216,26 @@ func (r *ObjectBucketReconciler) reconcileNormal(ctx context.Context, bucket *v1
 	if clusterReadyState(cluster) != string(metav1.ConditionTrue) {
 		status.setCondition(v1alpha1.OBConditionBucketReady, metav1.ConditionFalse, "WaitingForCluster",
 			fmt.Sprintf("ObjectStorageCluster %q is not Ready", bucket.Spec.ClusterRef))
-		gateAfter(status, obStageOrder, v1alpha1.OBConditionReady, v1alpha1.OBConditionBucketReady)
+		gateAfter(status, obStageOrder, v1alpha1.OBConditionBucketReady)
 		return r.finish(ctx, bucket, status, observed, nil)
 	}
 
 	driver, err := r.Registry.For(cluster)
 	if err != nil {
 		status.setCondition(v1alpha1.OBConditionBucketReady, metav1.ConditionFalse, reasonError, err.Error())
-		gateAfter(status, obStageOrder, v1alpha1.OBConditionReady, v1alpha1.OBConditionBucketReady)
+		gateAfter(status, obStageOrder, v1alpha1.OBConditionBucketReady)
 		return r.finish(ctx, bucket, status, observed, err)
 	}
 
 	state, err := driver.EnsureBucket(ctx, cluster, bucket)
 	observed.bucketName = state.BucketName
-	if !advance(status, obStageOrder, v1alpha1.OBConditionReady, v1alpha1.OBConditionBucketReady, state.Ready, state.Message, err) {
+	if !advance(status, obStageOrder, v1alpha1.OBConditionBucketReady, state.Ready, state.Message, err) {
 		return r.finish(ctx, bucket, status, observed, err)
 	}
 
 	// Stage 2: CredentialsReady — (re)write the credentials Secret.
 	secretName, err := r.ensureCredentialsSecret(ctx, cluster, bucket, &state)
-	if !advance(status, obStageOrder, v1alpha1.OBConditionReady, v1alpha1.OBConditionCredentialsReady, err == nil,
+	if !advance(status, obStageOrder, v1alpha1.OBConditionCredentialsReady, err == nil,
 		"credentials Secret written", err) {
 		return r.finish(ctx, bucket, status, observed, err)
 	}
@@ -321,7 +321,7 @@ func (r *ObjectBucketReconciler) finish(
 	if reconcileErr != nil {
 		return ctrl.Result{}, reconcileErr
 	}
-	if aggregateReady(status, v1alpha1.OBConditionReady) {
+	if aggregateReady(status) {
 		return ctrl.Result{}, nil
 	}
 	return ctrl.Result{RequeueAfter: r.Cfg.RequeueInterval}, nil

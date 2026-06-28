@@ -44,6 +44,11 @@ const (
 	reasonWaitingForPrev = "WaitingForPrev"
 )
 
+// conditionReady is the aggregate readiness condition type. Both CRs use it
+// (v1alpha1.OSCConditionReady and v1alpha1.OBConditionReady both equal "Ready"),
+// so the shared FSM helpers gate it by this single invariant.
+const conditionReady = "Ready"
+
 // statusBuilder accumulates condition updates during a single reconcile and is
 // flushed onto the CR status at the end. It is intentionally CR-agnostic: both
 // reconcilers share it.
@@ -72,14 +77,14 @@ func (s *statusBuilder) setCondition(condType string, condStatus metav1.Conditio
 // reports whether the FSM may proceed to the next stage. When the stage is not
 // done (error or in-progress), every downstream stage and the aggregate Ready
 // are gated as False.
-func advance(s *statusBuilder, stageOrder []string, readyType, condType string, done bool, message string, err error) bool {
+func advance(s *statusBuilder, stageOrder []string, condType string, done bool, message string, err error) bool {
 	switch {
 	case err != nil:
 		s.setCondition(condType, metav1.ConditionFalse, reasonError, err.Error())
-		gateAfter(s, stageOrder, readyType, condType)
+		gateAfter(s, stageOrder, condType)
 	case !done:
 		s.setCondition(condType, metav1.ConditionFalse, reasonInProgress, message)
-		gateAfter(s, stageOrder, readyType, condType)
+		gateAfter(s, stageOrder, condType)
 	default:
 		s.setCondition(condType, metav1.ConditionTrue, reasonReady, message)
 		return true
@@ -88,8 +93,8 @@ func advance(s *statusBuilder, stageOrder []string, readyType, condType string, 
 }
 
 // gateAfter marks every stage strictly after afterStage, plus the aggregate
-// readyType, as False/WaitingForPrev.
-func gateAfter(s *statusBuilder, stageOrder []string, readyType, afterStage string) {
+// Ready condition, as False/WaitingForPrev.
+func gateAfter(s *statusBuilder, stageOrder []string, afterStage string) {
 	startIdx := -1
 	for i, t := range stageOrder {
 		if t == afterStage {
@@ -103,7 +108,7 @@ func gateAfter(s *statusBuilder, stageOrder []string, readyType, afterStage stri
 				fmt.Sprintf("waiting for %s", afterStage))
 		}
 	}
-	s.setCondition(readyType, metav1.ConditionFalse, reasonWaitingForPrev,
+	s.setCondition(conditionReady, metav1.ConditionFalse, reasonWaitingForPrev,
 		fmt.Sprintf("waiting for %s", afterStage))
 }
 
@@ -135,11 +140,11 @@ func derivePhase(conditions []metav1.Condition, stageOrder []string) string {
 	return v1alpha1.PhaseReady
 }
 
-// aggregateReady reports whether the builder's most recent write of readyType
-// is True.
-func aggregateReady(s *statusBuilder, readyType string) bool {
+// aggregateReady reports whether the builder's most recent write of the
+// aggregate Ready condition is True.
+func aggregateReady(s *statusBuilder) bool {
 	for i := len(s.conditions) - 1; i >= 0; i-- {
-		if s.conditions[i].Type == readyType {
+		if s.conditions[i].Type == conditionReady {
 			return s.conditions[i].Status == metav1.ConditionTrue
 		}
 	}

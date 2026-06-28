@@ -34,8 +34,8 @@ func listKinds() map[schema.GroupVersionResource]string {
 	}
 }
 
-func obObj(ns, name, clusterRef, bucketName string) *unstructured.Unstructured {
-	spec := map[string]interface{}{"clusterRef": clusterRef}
+func obObj(ns, name, bucketName string) *unstructured.Unstructured {
+	spec := map[string]interface{}{"clusterRef": "c1"}
 	if bucketName != "" {
 		spec["bucketName"] = bucketName
 	}
@@ -62,20 +62,20 @@ func newFakeValidator(objs ...runtime.Object) *Validator {
 }
 
 func TestEffectiveBucketName(t *testing.T) {
-	if got := effectiveBucketName(obObj("a", "data", "c1", "")); got != "data" {
+	if got := effectiveBucketName(obObj("a", "data", "")); got != "data" {
 		t.Errorf("effectiveBucketName(default)=%q, want data", got)
 	}
-	if got := effectiveBucketName(obObj("a", "data", "c1", "custom")); got != "custom" {
+	if got := effectiveBucketName(obObj("a", "data", "custom")); got != "custom" {
 		t.Errorf("effectiveBucketName(explicit)=%q, want custom", got)
 	}
 }
 
 func TestObjectBucketValidate(t *testing.T) {
 	// Existing bucket "x" on cluster c1.
-	v := newFakeValidator(obObj("a", "x", "c1", ""))
+	v := newFakeValidator(obObj("a", "x", ""))
 
 	// Duplicate effective name on the same cluster -> deny.
-	dup := obObj("b", "y", "c1", "x")
+	dup := obObj("b", "y", "x")
 	res, err := v.ObjectBucketValidate(context.Background(), nil, dup)
 	if err != nil {
 		t.Fatalf("ObjectBucketValidate(dup): %v", err)
@@ -85,7 +85,7 @@ func TestObjectBucketValidate(t *testing.T) {
 	}
 
 	// Unique name -> allow (clusterRef missing only yields a warning).
-	uniq := obObj("b", "y", "c1", "")
+	uniq := obObj("b", "y", "")
 	res, err = v.ObjectBucketValidate(context.Background(), nil, uniq)
 	if err != nil {
 		t.Fatalf("ObjectBucketValidate(uniq): %v", err)

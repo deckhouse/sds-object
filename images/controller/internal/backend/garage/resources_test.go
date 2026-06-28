@@ -26,10 +26,10 @@ import (
 	v1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 )
 
-func cluster(name string, t v1alpha1.ClusterType, r v1alpha1.RedundancyMode) *v1alpha1.ObjectStorageCluster {
+func cluster(name string, r v1alpha1.RedundancyMode) *v1alpha1.ObjectStorageCluster {
 	return &v1alpha1.ObjectStorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec:       v1alpha1.ObjectStorageClusterSpec{Type: t, Redundancy: r},
+		Spec:       v1alpha1.ObjectStorageClusterSpec{Type: v1alpha1.ClusterTypeLightweight, Redundancy: r},
 	}
 }
 
@@ -41,25 +41,25 @@ func TestReplicationFactor(t *testing.T) {
 		v1alpha1.RedundancyMode(""):       3, // default
 	}
 	for r, want := range cases {
-		if got := replicationFactor(cluster("c", v1alpha1.ClusterTypeLightweight, r)); got != want {
+		if got := replicationFactor(cluster("c", r)); got != want {
 			t.Errorf("replicationFactor(%q)=%d, want %d", r, got, want)
 		}
 	}
 }
 
 func TestStorageSize(t *testing.T) {
-	none := cluster("c", v1alpha1.ClusterTypeLightweight, "")
+	none := cluster("c", "")
 	if got := storageSize(none); got.Cmp(resource.MustParse("10Gi")) != 0 {
 		t.Errorf("storageSize(unset)=%s, want 10Gi", got.String())
 	}
 
-	sized := cluster("c", v1alpha1.ClusterTypeLightweight, "")
+	sized := cluster("c", "")
 	sized.Spec.Storage = &v1alpha1.ObjectStorageClusterStorageSpec{Size: "20Gi"}
 	if got := storageSize(sized); got.Cmp(resource.MustParse("20Gi")) != 0 {
 		t.Errorf("storageSize(20Gi)=%s, want 20Gi", got.String())
 	}
 
-	bad := cluster("c", v1alpha1.ClusterTypeLightweight, "")
+	bad := cluster("c", "")
 	bad.Spec.Storage = &v1alpha1.ObjectStorageClusterStorageSpec{Size: "not-a-quantity"}
 	if got := storageSize(bad); got.Cmp(resource.MustParse("10Gi")) != 0 {
 		t.Errorf("storageSize(invalid)=%s, want 10Gi fallback", got.String())
@@ -67,7 +67,7 @@ func TestStorageSize(t *testing.T) {
 }
 
 func TestRenderConfig(t *testing.T) {
-	cfg := renderConfig(cluster("c", v1alpha1.ClusterTypeLightweight, v1alpha1.RedundancyHighRedundancy))
+	cfg := renderConfig(cluster("c", v1alpha1.RedundancyHighRedundancy))
 	for _, want := range []string{
 		"replication_factor = 5",
 		"[s3_api]",
@@ -81,7 +81,7 @@ func TestRenderConfig(t *testing.T) {
 }
 
 func TestNamesAndEndpoints(t *testing.T) {
-	c := cluster("shared", v1alpha1.ClusterTypeLightweight, "")
+	c := cluster("shared", "")
 	if got := resourceName(c); got != "shared-garage" {
 		t.Errorf("resourceName=%q", got)
 	}
