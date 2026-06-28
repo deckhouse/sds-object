@@ -29,6 +29,14 @@ func TestIsNotFound(t *testing.T) {
 	if isNotFound(&apiError{StatusCode: http.StatusInternalServerError}) {
 		t.Errorf("isNotFound(500)=true, want false")
 	}
+	// Garage reports a missing key/bucket as 400 with a "not found" message.
+	if !isNotFound(&apiError{StatusCode: http.StatusBadRequest, Body: `{"message":"Bad request: Access key not found: GK123"}`}) {
+		t.Errorf("isNotFound(400 not-found)=false, want true")
+	}
+	// A 400 for any other reason must NOT be treated as not-found.
+	if isNotFound(&apiError{StatusCode: http.StatusBadRequest, Body: `{"message":"invalid type: map, expected a sequence"}`}) {
+		t.Errorf("isNotFound(400 other)=true, want false")
+	}
 	if isNotFound(errors.New("plain error")) {
 		t.Errorf("isNotFound(plain)=true, want false")
 	}

@@ -25,6 +25,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -197,10 +198,20 @@ func (e *apiError) Error() string {
 	return fmt.Sprintf("garage admin %s %s: status %d: %s", e.Method, e.Path, e.StatusCode, e.Body)
 }
 
-// isNotFound reports whether err is an admin API 404.
+// isNotFound reports whether err means "the resource does not exist". Garage
+// is inconsistent here: a missing key/bucket on GET or DELETE comes back as
+// HTTP 400 (InvalidRequest) with a "... not found" message rather than 404, so
+// a plain status check would make idempotent deletes fail on an already-gone
+// resource. Treat both 404 and a 400 whose body says "not found" as not-found.
 func isNotFound(err error) bool {
 	var ae *apiError
-	return errors.As(err, &ae) && ae.StatusCode == http.StatusNotFound
+	if !errors.As(err, &ae) {
+		return false
+	}
+	if ae.StatusCode == http.StatusNotFound {
+		return true
+	}
+	return ae.StatusCode == http.StatusBadRequest && strings.Contains(strings.ToLower(ae.Body), "not found")
 }
 
 // --- Bucket / key management ------------------------------------------------
