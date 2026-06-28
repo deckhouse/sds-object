@@ -31,7 +31,7 @@ A single `spec.type` selects the profile; the backend is chosen and operated for
 | `Heavy` | Ceph RGW | RADOS Gateway on an existing sds-elastic cluster | Reuses Ceph capacity and fault tolerance. |
 
 {{< alert level="info" >}}
-Implementation status: the `System`, `Lightweight` (Garage) and `Full` (SeaweedFS) profiles are available. `Full` currently runs a single-node SeaweedFS (a distributed topology is planned). `Heavy` (Ceph RGW) is planned and not yet functional.
+Implementation status: all four profiles are available. `Full` currently runs a single-node SeaweedFS (a distributed topology is planned). `Heavy` provisions a Ceph RGW on an existing sds-elastic cluster; bucket/credential provisioning for `Heavy` is a follow-up (buckets work today on `System`, `Lightweight` and `Full`).
 {{< /alert >}}
 
 ## How it works

@@ -132,5 +132,5 @@ spec:
 ```
 
 {{< alert level="info" >}}
-The `Heavy` profile is not yet functional; the manifest above describes the target API.
+The `Heavy` profile provisions the Ceph RGW data plane (a Rook CephObjectStore on the referenced sds-elastic cluster) and reports the S3 endpoint once it is ready. Bucket/credential provisioning for `Heavy` (`ObjectBucket`) is a follow-up.
 {{< /alert >}}

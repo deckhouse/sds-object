@@ -28,6 +28,7 @@
   "clusterRoleRules" (list
     (dict "apiGroups" (list "storage.deckhouse.io") "resources" (list "objectstorageclusters" "objectstorageclusters/status" "objectstorageclusters/finalizers" "objectbuckets" "objectbuckets/status" "objectbuckets/finalizers") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete"))
     (dict "apiGroups" (list "storage.deckhouse.io") "resources" (list "elasticclusters") "verbs" (list "get" "list" "watch"))
+    (dict "apiGroups" (list "internal.sdselastic.deckhouse.io") "resources" (list "cephobjectstores" "cephobjectstoreusers") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete"))
     (dict "apiGroups" (list "") "resources" (list "secrets") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete"))
     (dict "apiGroups" (list "") "resources" (list "configmaps" "services" "serviceaccounts") "verbs" (list "get" "list" "watch"))
     (dict "apiGroups" (list "apps") "resources" (list "statefulsets" "daemonsets") "verbs" (list "get" "list" "watch"))
