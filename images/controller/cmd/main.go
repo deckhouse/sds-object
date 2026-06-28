@@ -31,6 +31,7 @@ import (
 	v1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 	"github.com/deckhouse/sds-object/images/controller/internal/backend"
 	"github.com/deckhouse/sds-object/images/controller/internal/backend/garage"
+	"github.com/deckhouse/sds-object/images/controller/internal/backend/seaweedfs"
 	"github.com/deckhouse/sds-object/images/controller/internal/controller"
 	"github.com/deckhouse/sds-object/images/controller/pkg/config"
 	"github.com/deckhouse/sds-object/images/controller/pkg/kubutils"
@@ -96,12 +97,12 @@ func main() {
 	}
 	log.Info("[main] kubernetes manager created")
 
-	// Garage backs the System and Lightweight profiles; SeaweedFS (Full) and
-	// Ceph RGW (Heavy) are still stubbed (NotImplementedDriver) until their
-	// drivers land.
+	// Garage backs the System and Lightweight profiles; SeaweedFS backs Full;
+	// Ceph RGW (Heavy) is still stubbed (NotImplementedDriver) until its driver
+	// lands.
 	registry := backend.NewRegistry(
 		garage.New(mgr.GetClient(), mgr.GetAPIReader(), log, cfgParams.ControllerNamespace, cfgParams.GarageImage, cfgParams.ClusterDomain),
-		backend.NotImplementedDriver{BackendType: v1alpha1.BackendSeaweedFS},
+		seaweedfs.New(mgr.GetClient(), log, cfgParams.ControllerNamespace, cfgParams.SeaweedFSImage, cfgParams.ClusterDomain),
 		backend.NotImplementedDriver{BackendType: v1alpha1.BackendCephRGW},
 	)
 

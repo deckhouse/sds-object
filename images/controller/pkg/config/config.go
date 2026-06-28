@@ -32,6 +32,7 @@ const (
 	MaxConcurrentReconcilesEnv = "MAX_CONCURRENT_RECONCILES"
 	RequeueIntervalEnv         = "REQUEUE_INTERVAL_SECONDS"
 	GarageImageEnv             = "GARAGE_IMAGE"
+	SeaweedFSImageEnv          = "SEAWEEDFS_IMAGE"
 	ClusterDomainEnv           = "CLUSTER_DOMAIN"
 
 	DefaultControllerNamespace     = "d8-sds-object"
@@ -51,6 +52,9 @@ type Options struct {
 	// GarageImage is the module registry reference for the Garage server
 	// image, injected via the GARAGE_IMAGE env var from Helm.
 	GarageImage string
+	// SeaweedFSImage is the module registry reference for the SeaweedFS server
+	// image, injected via the SEAWEEDFS_IMAGE env var from Helm.
+	SeaweedFSImage string
 	// ClusterDomain is the Kubernetes cluster DNS domain (e.g. cluster.local),
 	// injected via CLUSTER_DOMAIN from global.discovery.clusterDomain. Used to
 	// build in-cluster Service FQDNs.
@@ -97,6 +101,7 @@ func NewConfig() *Options {
 	}
 
 	opts.GarageImage = os.Getenv(GarageImageEnv)
+	opts.SeaweedFSImage = os.Getenv(SeaweedFSImageEnv)
 
 	opts.ClusterDomain = os.Getenv(ClusterDomainEnv)
 	if opts.ClusterDomain == "" {

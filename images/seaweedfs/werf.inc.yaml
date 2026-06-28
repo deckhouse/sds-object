@@ -1,0 +1,31 @@
+{{- /*
+  SeaweedFS server image.
+
+  Vendors the upstream `weed` binary from the official SeaweedFS image into the
+  module's distroless base — same pattern as images/garage.
+
+  NOTE: the upstream tag below is the only place the SeaweedFS version is
+  pinned; keep it in sync with seaweedfsVersion in
+  images/controller/internal/backend/seaweedfs.
+*/ -}}
+{{- $seaweedfsVersion := "3.71" }}
+---
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
+from: chrislusf/seaweedfs:{{ $seaweedfsVersion }}
+final: false
+
+---
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}
+fromImage: base/distroless
+
+import:
+  - image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
+    add: /usr/bin/weed
+    to: /weed
+    before: setup
+
+imageSpec:
+  config:
+    entrypoint: ["/weed"]
+    env:
+      SEAWEEDFS_VERSION: "{{ $seaweedfsVersion }}"
