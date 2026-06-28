@@ -84,13 +84,13 @@ func (d *Driver) ensureMeshAndLayout(ctx context.Context, cluster *v1alpha1.Obje
 
 	size := storageSize(cluster)
 	capacity := size.Value()
-	changes := map[string]*roleChange{}
+	var changes []roleChange
 	for _, p := range peers {
 		if _, ok := assigned[p.id]; ok {
 			continue
 		}
 		c := capacity
-		changes[p.id] = &roleChange{Zone: "dc1", Capacity: &c, Tags: []string{}}
+		changes = append(changes, roleChange{ID: p.id, Zone: "dc1", Capacity: &c, Tags: []string{}})
 	}
 	if len(changes) > 0 {
 		if err := svc.stageLayout(ctx, changes); err != nil {

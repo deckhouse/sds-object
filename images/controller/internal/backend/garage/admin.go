@@ -92,11 +92,15 @@ type healthResponse struct {
 	PartitionsAllOk  int    `json:"partitionsAllOk"`
 }
 
-// roleChange is the body value of POST /v1/layout (nil means "remove").
+// roleChange is one entry of the POST /v1/layout request body. Garage expects
+// a JSON array of these (each carrying the node id). For an assignment set
+// Zone/Capacity/Tags; to drop a node set Remove=true.
 type roleChange struct {
-	Zone     string   `json:"zone"`
-	Capacity *int64   `json:"capacity"`
-	Tags     []string `json:"tags"`
+	ID       string   `json:"id"`
+	Zone     string   `json:"zone,omitempty"`
+	Capacity *int64   `json:"capacity,omitempty"`
+	Tags     []string `json:"tags,omitempty"`
+	Remove   bool     `json:"remove,omitempty"`
 }
 
 func (c *adminClient) status(ctx context.Context) (*statusResponse, error) {
@@ -128,8 +132,9 @@ func (c *adminClient) layout(ctx context.Context) (*clusterLayout, error) {
 	return &out, nil
 }
 
-// stageLayout stages role changes (node id -> role, or nil to remove).
-func (c *adminClient) stageLayout(ctx context.Context, changes map[string]*roleChange) error {
+// stageLayout stages role changes. Garage expects a JSON array of role
+// changes, each identified by its node id.
+func (c *adminClient) stageLayout(ctx context.Context, changes []roleChange) error {
 	return c.do(ctx, http.MethodPost, "/v1/layout", changes, nil)
 }
 
