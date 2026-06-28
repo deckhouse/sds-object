@@ -132,5 +132,5 @@ spec:
 ```
 
 {{< alert level="info" >}}
-Профиль `Heavy` пока не работает; манифест выше описывает целевой API.
+Профиль `Heavy` разворачивает data plane Ceph RGW (Rook CephObjectStore на указанном кластере sds-elastic) и публикует S3-эндпойнт по готовности. Provisioning бакетов/учёток для `Heavy` (`ObjectBucket`) — follow-up.
 {{< /alert >}}

@@ -30,6 +30,7 @@ import (
 
 	v1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 	"github.com/deckhouse/sds-object/images/controller/internal/backend"
+	"github.com/deckhouse/sds-object/images/controller/internal/backend/cephrgw"
 	"github.com/deckhouse/sds-object/images/controller/internal/backend/garage"
 	"github.com/deckhouse/sds-object/images/controller/internal/backend/seaweedfs"
 	"github.com/deckhouse/sds-object/images/controller/internal/controller"
@@ -98,12 +99,11 @@ func main() {
 	log.Info("[main] kubernetes manager created")
 
 	// Garage backs the System and Lightweight profiles; SeaweedFS backs Full;
-	// Ceph RGW (Heavy) is still stubbed (NotImplementedDriver) until its driver
-	// lands.
+	// Ceph RGW backs Heavy (on top of an sds-elastic cluster).
 	registry := backend.NewRegistry(
 		garage.New(mgr.GetClient(), mgr.GetAPIReader(), log, cfgParams.ControllerNamespace, cfgParams.GarageImage, cfgParams.ClusterDomain),
 		seaweedfs.New(mgr.GetClient(), mgr.GetAPIReader(), log, cfgParams.ControllerNamespace, cfgParams.SeaweedFSImage, cfgParams.ClusterDomain),
-		backend.NotImplementedDriver{BackendType: v1alpha1.BackendCephRGW},
+		cephrgw.New(mgr.GetClient(), mgr.GetAPIReader(), log, cfgParams.ClusterDomain),
 	)
 
 	if err := controller.AddObjectStorageClusterReconcilerToManager(mgr, cfgParams, log, registry); err != nil {
