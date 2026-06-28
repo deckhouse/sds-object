@@ -88,10 +88,10 @@ func TestNamesAndEndpoints(t *testing.T) {
 	if got := secretName(c); got != "shared-garage-secrets" {
 		t.Errorf("secretName=%q", got)
 	}
-	if got := s3Endpoint(c, "d8-sds-object"); got != "http://shared-garage.d8-sds-object.svc.cluster.local:3900" {
+	if got := s3Endpoint(c, "d8-sds-object", "internal.cluster.local"); got != "http://shared-garage.d8-sds-object.svc.internal.cluster.local:3900" {
 		t.Errorf("s3Endpoint=%q", got)
 	}
-	if got := adminEndpoint(c, "d8-sds-object"); got != "http://shared-garage.d8-sds-object.svc.cluster.local:3903" {
+	if got := adminEndpoint(c, "d8-sds-object", "cluster.local"); got != "http://shared-garage.d8-sds-object.svc.cluster.local:3903" {
 		t.Errorf("adminEndpoint=%q", got)
 	}
 	if l := commonLabels(c); l["storage.deckhouse.io/object-storage-cluster"] != "shared" {
