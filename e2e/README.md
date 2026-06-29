@@ -15,6 +15,25 @@ finalizer-driven deletion.
    guards → delete.
 4. `AfterSuite` hands the cluster back to `storage-e2e` for teardown.
 
+## Running in CI (PR label)
+
+The suite is wired into the reusable `storage-e2e` pipeline via
+[`.github/workflows/e2e-tests.yml`](../.github/workflows/e2e-tests.yml). It is
+**gated by the `e2e/run` PR label**: add that label to a pull request to trigger
+a run (the job graph is `resolve → bootstrap → run-tests → teardown`). The
+pipeline is configured with `cluster_provider: commander`, so each run creates a
+fresh cluster through the Deckhouse Commander API and deletes it on teardown.
+
+Other labels:
+
+- `e2e/keep-cluster` — skip teardown so you can inspect / re-run on the cluster.
+- `e2e/label:<suite>` — Ginkgo label filter (multiple are OR-joined).
+
+The Commander endpoint, token and template come from inherited org/repo secrets
+and vars (`E2E_COMMANDER_*`); see `storage-e2e` `docs/CI.md` for the full list.
+
+## Running locally
+
 The suite drives the CRDs through the dynamic client and reads the
 `storage.deckhouse.io/v1alpha1` Go types from the in-repo `sds-object/api`
 module (`replace github.com/deckhouse/sds-object/api => ../api`). All generic
