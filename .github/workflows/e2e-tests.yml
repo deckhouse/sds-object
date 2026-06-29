@@ -33,7 +33,11 @@ jobs:
       # The e2e Go module lives under e2e/; tests are in e2e/tests/.
       module_path: e2e
       test_package: ./tests/
-      cluster_config: e2e/tests/cluster_config.yml
+      # CI config: modulePullOverride is ${E2E_MODULE_IMAGE_TAG}, resolved by the
+      # enable-modules step to the PR image tag below.
+      cluster_config: e2e/tests/cluster_config.ci.yml
       # Create a fresh cluster through Deckhouse Commander for each run.
       cluster_provider: commander
+      # Install the image built for this PR (build_dev publishes the pr<N> tag).
+      module_image_tag: pr${{ github.event.pull_request.number }}
     secrets: inherit

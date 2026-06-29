@@ -32,6 +32,15 @@ Other labels:
 The Commander endpoint, token and template come from inherited org/repo secrets
 and vars (`E2E_COMMANDER_*`); see `storage-e2e` `docs/CI.md` for the full list.
 
+Pipeline flow (`resolve → bootstrap → enable-modules → run-tests → teardown`):
+`bootstrap` creates the cluster via Commander and hands off its kubeconfig;
+`enable-modules` installs `sds-object` from `tests/cluster_config.ci.yml`
+(`modulePullOverride: "${E2E_MODULE_IMAGE_TAG}"`, resolved to `pr<N>`);
+`run-tests` connects to that cluster from the kubeconfig (no SSH) and runs the
+suite. This requires the PR's dev image (`pr<N>`) to be built and pushed to the
+dev-registry **before** the e2e run (the `build_dev` workflow), and the Commander
+cluster must be able to pull from that registry.
+
 ## Running locally
 
 The suite drives the CRDs through the dynamic client and reads the
