@@ -27,7 +27,10 @@ jobs:
   e2e:
     # Gate: run only when the PR is labeled e2e/run.
     if: ${{ contains(github.event.pull_request.labels.*.name, 'e2e/run') }}
-    uses: deckhouse/storage-e2e/.github/workflows/e2e.yml@main
+    # Pinned to the storage-e2e branch that carries the commander provider,
+    # enable-modules job and kubeconfig connect mode (PR deckhouse/storage-e2e#33).
+    # Switch both refs back to @main once that PR is merged.
+    uses: deckhouse/storage-e2e/.github/workflows/e2e.yml@feat/commander-e2e-enable-modules
     with:
       module_slug: sds-object
       # The e2e Go module lives under e2e/; tests are in e2e/tests/.
@@ -38,6 +41,8 @@ jobs:
       cluster_config: e2e/tests/cluster_config.ci.yml
       # Create a fresh cluster through Deckhouse Commander for each run.
       cluster_provider: commander
+      # Check out the same storage-e2e branch for scripts / cmd / Go code.
+      storage_e2e_ref: feat/commander-e2e-enable-modules
       # Install the image built for this PR (build_dev publishes the pr<N> tag).
       module_image_tag: pr${{ github.event.pull_request.number }}
     secrets: inherit
