@@ -1,0 +1,64 @@
+# sds-object e2e nested test cluster.
+#
+# 1 master + 2 workers. The default E2E_OSC_TYPE=System profile (Garage as a
+# DaemonSet on control-plane nodes, hostPath) needs neither a StorageClass nor
+# extra disks, so a small cluster is enough. The master alone can host the
+# System data plane; the workers give the bucket / probe Pods somewhere to run
+# and let the optional Lightweight/Full profiles schedule their StatefulSets.
+#
+# Profile-specific extras (NOT enabled here — turn them on yourself when you
+# point E2E_OSC_TYPE at a heavier profile):
+#   - Lightweight / Full : need a real StorageClass; enable sds-node-configurator
+#                          + a CSI/local-volume module and set E2E_STORAGE_CLASS.
+#   - Full               : additionally needs the managed-postgres module (shared
+#                          SeaweedFS filer metadata store).
+#   - Heavy              : needs sds-elastic with a Ready ElasticCluster; set
+#                          E2E_ELASTIC_CLUSTER_REF.
+#
+# Modules enabled here are the minimum the System-profile e2e flow needs on top
+# of a freshly bootstrapped Deckhouse:
+#   - sds-object : the module under test. modulePullOverride defaults to the
+#                  literal "main"; override it for CI by exporting
+#                  SDS_OBJECT_MODULE_PULL_OVERRIDE=pr<N> / mr<N> (storage-e2e's
+#                  generic <MODULE>_MODULE_PULL_OVERRIDE convention).
+clusterDefinition:
+  masters:
+    - hostname: "master-1"
+      hostType: "vm"
+      osType: "Ubuntu 22.04 6.2.0-39-generic"
+      cpu: 4
+      coreFraction: 50
+      ram: 8
+      diskSize: 50
+  workers:
+    - hostname: "worker-1"
+      hostType: "vm"
+      osType: "Ubuntu 22.04 6.2.0-39-generic"
+      cpu: 4
+      coreFraction: 50
+      ram: 8
+      diskSize: 50
+    - hostname: "worker-2"
+      hostType: "vm"
+      osType: "Ubuntu 22.04 6.2.0-39-generic"
+      cpu: 4
+      coreFraction: 50
+      ram: 8
+      diskSize: 50
+  dkpParameters:
+    kubernetesVersion: "Automatic"
+    podSubnetCIDR: "10.112.0.0/16"
+    serviceSubnetCIDR: "10.225.0.0/16"
+    clusterDomain: "cluster.local"
+    registryRepo: "dev-registry.deckhouse.io/sys/deckhouse-oss"
+    devBranch: "main"
+    modules:
+      - name: "sds-object"
+        version: 1
+        enabled: true
+        # Static default tag (must be literal — storage-e2e rejects ${VAR} here).
+        # CI overrides it WITHOUT editing this file by exporting
+        # SDS_OBJECT_MODULE_PULL_OVERRIDE, e.g. "pr<N>" on GitHub, "mr<N>" on
+        # GitLab (the override and the static tag are logged at config load).
+        modulePullOverride: "main"
+        dependencies: []
