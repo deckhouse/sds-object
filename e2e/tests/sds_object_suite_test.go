@@ -80,6 +80,7 @@ var _ = Describe("sds-object e2e", Ordered, ContinueOnFailure, func() {
 	createSpecs()      // create_test.go: OSC -> Ready, OB -> Ready, creds Secret, S3 round-trip
 	validationSpecs()  // validation_test.go: webhook + CEL admission guards
 	lightweightSpecs() // lightweight_test.go: Lightweight (Garage on PVC) create -> bucket -> round-trip -> delete
+	fullSpecs()        // full_test.go: Full (SeaweedFS + managed-postgres) create -> bucket -> round-trip -> delete
 	deleteSpecs()      // delete_test.go: OB delete (+ creds Secret + reclaim), OSC delete
 })
 

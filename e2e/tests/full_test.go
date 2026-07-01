@@ -28,16 +28,25 @@ import (
 	objectv1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 )
 
-// lightweightSpecs exercises the Lightweight profile (Garage backed by a PVC on
-// a StorageClass) on its own cluster, alongside the primary (default: System)
-// flow: create → bucket + creds Secret → S3 round-trip → delete. It needs a
-// StorageClass (E2E_LIGHTWEIGHT_STORAGE_CLASS / E2E_STORAGE_CLASS / the cluster
-// default); when none is available it skips. Skipped, too, when the primary
-// profile is already Lightweight (the create/delete specs cover it then).
-func lightweightSpecs() {
-	Describe("lightweight", Ordered, func() {
-		const oscName = "e2e-osc-light"
-		const bucketName = "e2e-light-bucket"
+// postgresGroupVersion is the managed-postgres API that the SeaweedFS (Full)
+// filer stores its metadata in; the Full specs require it to be served.
+const postgresGroupVersion = "managed-services.deckhouse.io/v1alpha1"
+
+// fullOSCReadyTimeout is generous: the Full profile brings up a distributed
+// SeaweedFS (master/volume/filer) AND waits for managed-postgres to provision
+// the shared filer database, which takes longer than a Garage cluster.
+const fullOSCReadyTimeout = 30 * time.Minute
+
+// fullSpecs exercises the Full profile (distributed SeaweedFS whose filer
+// metadata lives in a shared PostgreSQL from the managed-postgres module) on its
+// own cluster, alongside the primary flow: create → bucket + creds Secret → S3
+// round-trip → delete. It needs a StorageClass and the managed-postgres CRD
+// (enabled via cluster_config); it skips when either is missing, or when the
+// primary profile is already Full.
+func fullSpecs() {
+	Describe("full", Ordered, func() {
+		const oscName = "e2e-osc-full"
+		const bucketName = "e2e-full-bucket"
 
 		var (
 			storageClass string
@@ -45,28 +54,35 @@ func lightweightSpecs() {
 		)
 
 		BeforeAll(func() {
-			if suiteCfg.oscType == string(objectv1alpha1.ClusterTypeLightweight) {
-				Skip("primary profile is already Lightweight; dedicated Lightweight specs would duplicate it")
+			if suiteCfg.oscType == string(objectv1alpha1.ClusterTypeFull) {
+				Skip("primary profile is already Full; dedicated Full specs would duplicate it")
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 
-			var err error
-			storageClass, err = resolvePVCStorageClass(ctx)
-			Expect(err).NotTo(HaveOccurred(), "resolve StorageClass for Lightweight")
-			if storageClass == "" {
-				Skip("no StorageClass available for Lightweight; set E2E_PVC_STORAGE_CLASS (or E2E_STORAGE_CLASS), or mark a default StorageClass")
+			// Full requires the managed-postgres Postgres CRD (enabled via
+			// cluster_config's modules list). Skip if it is not served.
+			served, err := groupVersionServed(postgresGroupVersion)
+			Expect(err).NotTo(HaveOccurred(), "discover %s", postgresGroupVersion)
+			if !served {
+				Skip("managed-postgres is not installed (" + postgresGroupVersion + " not served); Full needs it for the SeaweedFS filer metadata store")
 			}
-			GinkgoWriter.Printf("Lightweight profile using StorageClass %q (size %s)\n", storageClass, suiteCfg.oscSize)
+
+			storageClass, err = resolvePVCStorageClass(ctx)
+			Expect(err).NotTo(HaveOccurred(), "resolve StorageClass for Full")
+			if storageClass == "" {
+				Skip("no StorageClass available for Full; set E2E_PVC_STORAGE_CLASS (or E2E_STORAGE_CLASS), or mark a default StorageClass")
+			}
+			GinkgoWriter.Printf("Full profile using StorageClass %q (size %s)\n", storageClass, suiteCfg.oscSize)
 		})
 
-		It("creates a Lightweight ObjectStorageCluster (Garage on PVC) and reaches Ready", func() {
-			ctx, cancel := context.WithTimeout(context.Background(), suiteCfg.oscReadyTimeout+2*time.Minute)
+		It("creates a Full ObjectStorageCluster (SeaweedFS) and reaches Ready", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), fullOSCReadyTimeout+2*time.Minute)
 			defer cancel()
 
-			By("creating Lightweight ObjectStorageCluster " + oscName)
+			By("creating Full ObjectStorageCluster " + oscName)
 			osc := newOSC(oscName, map[string]interface{}{
-				"type":       string(objectv1alpha1.ClusterTypeLightweight),
+				"type":       string(objectv1alpha1.ClusterTypeFull),
 				"redundancy": string(objectv1alpha1.RedundancySingle),
 				"storage": map[string]interface{}{
 					"size":  suiteCfg.oscSize,
@@ -75,12 +91,13 @@ func lightweightSpecs() {
 			})
 			Expect(createOSC(ctx, osc)).To(Succeed())
 
-			By("waiting for the cluster Ready condition")
-			Expect(waitOSCReady(ctx, oscName)).To(Succeed())
+			By("waiting for the cluster Ready condition (SeaweedFS + managed-postgres)")
+			Expect(waitCondition(ctx, objectStorageClusterGVR, "", oscName,
+				objectv1alpha1.OSCConditionReady, "True", fullOSCReadyTimeout)).To(Succeed())
 
 			backend, err := getStringField(ctx, objectStorageClusterGVR, "", oscName, "status", "backend", "type")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(backend).To(Equal(string(objectv1alpha1.BackendGarage)), "Lightweight is backed by Garage")
+			Expect(backend).To(Equal(string(objectv1alpha1.BackendSeaweedFS)), "Full is backed by SeaweedFS")
 
 			endpoint, err := getStringField(ctx, objectStorageClusterGVR, "", oscName, "status", "endpoint", "internal")
 			Expect(err).NotTo(HaveOccurred())
@@ -116,10 +133,10 @@ func lightweightSpecs() {
 			defer cancel()
 
 			Expect(secretName).NotTo(BeEmpty())
-			Expect(runS3ProbeJob(ctx, "s3-probe-light", suiteCfg.namespace, secretName)).To(Succeed())
+			Expect(runS3ProbeJob(ctx, "s3-probe-full", suiteCfg.namespace, secretName)).To(Succeed())
 		})
 
-		It("deletes the Lightweight bucket and cluster", func() {
+		It("deletes the Full bucket and cluster", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), resourceGoneTimeout+2*time.Minute)
 			defer cancel()
 

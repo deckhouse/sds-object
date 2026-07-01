@@ -34,6 +34,13 @@ clusterDefinition:
     registryRepo: "dev-registry.deckhouse.io/sys/deckhouse-oss"
     devBranch: "main"
     modules:
+      # SeaweedFS (Full profile) keeps its filer metadata in a shared PostgreSQL
+      # provisioned by managed-postgres. Enabled so the Full e2e specs can run;
+      # harmless for the System/Lightweight (Garage) profiles.
+      - name: "managed-postgres"
+        version: 1
+        enabled: true
+        dependencies: []
       - name: "sds-object"
         version: 1
         enabled: true
