@@ -133,6 +133,12 @@ func buildPostgres(cluster *v1alpha1.ObjectStorageCluster, namespace string) *un
 // managed-postgres rw endpoint enables TLS, so sslmode=require (encrypt without
 // CA verification, matching managed-postgres' own DSN default).
 func renderFilerToml(host string, port int, user, password, database string) string {
+	// createTable is REQUIRED for the postgres2 store: SeaweedFS runs
+	// fmt.Sprintf(createTable, <table>) for each metadata table (filemeta, one
+	// per bucket). Without it the store formats an empty template and sends
+	// `%!(EXTRA string=filemeta)` to Postgres — "syntax error at or near %!".
+	// The "%%s" escape keeps a literal "%s" in the rendered TOML for SeaweedFS to
+	// fill; the leading verbs below bind host/port/user/password/database in order.
 	return fmt.Sprintf(`[postgres2]
 enabled = true
 hostname = "%s"
@@ -141,6 +147,15 @@ username = "%s"
 password = "%s"
 database = "%s"
 sslmode = "require"
+createTable = """
+CREATE TABLE IF NOT EXISTS "%%s" (
+  dirhash   BIGINT,
+  name      VARCHAR(65535),
+  directory VARCHAR(65535),
+  meta      bytea,
+  PRIMARY KEY (dirhash, name)
+);
+"""
 `, host, port, user, password, database)
 }
 
