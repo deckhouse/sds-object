@@ -56,6 +56,16 @@ func pgName(cluster *v1alpha1.ObjectStorageCluster) string {
 	return componentName(cluster, "pg")
 }
 
+// pgHost is the managed-postgres read-write Service the filer connects to.
+// managed-postgres names the backing CNPG cluster "d8ms-pg-<pg>" and exposes a
+// "<cnpg>-rw" Service, so this name is deterministic. The driver relies on it
+// when the credentials Secret momentarily drops the "host" key — which
+// managed-postgres does whenever the Postgres instance is briefly not serving
+// (startup, failover), keeping only the stable username/password.
+func pgHost(cluster *v1alpha1.ObjectStorageCluster) string {
+	return "d8ms-pg-" + pgName(cluster) + "-rw"
+}
+
 // pgCredsSecretName is the Secret managed-postgres writes the filer user's
 // credentials into (keys: host, username, password). The driver sets it via the
 // user's storeCredsToSecret.
@@ -216,18 +226,27 @@ func (d *Driver) pgCreds(ctx context.Context, cluster *v1alpha1.ObjectStorageClu
 		}
 		return "", "", "", false, err
 	}
-	host = string(secret.Data["host"])
+	// Only username/password are required and stable. managed-postgres withdraws
+	// "host" (and the dsn) from the Secret whenever the Postgres instance is not
+	// serving, so depending on it would stall SeaweedFS for the whole startup;
+	// instead fall back to the deterministic read-write Service and let the filer
+	// retry the DB connection until Postgres is ready.
 	user = string(secret.Data["username"])
 	password = string(secret.Data["password"])
-	if host == "" || user == "" || password == "" {
+	if user == "" || password == "" {
 		keys := make([]string, 0, len(secret.Data))
 		for k := range secret.Data {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
-		d.log.Info(fmt.Sprintf("[seaweedfs] pg creds Secret %s present but incomplete: keys=[%s] hostEmpty=%t userEmpty=%t passEmpty=%t",
-			key, strings.Join(keys, ","), host == "", user == "", password == ""))
+		d.log.Info(fmt.Sprintf("[seaweedfs] pg creds Secret %s present but incomplete: keys=[%s] userEmpty=%t passEmpty=%t",
+			key, strings.Join(keys, ","), user == "", password == ""))
 		return "", "", "", false, nil
+	}
+	host = string(secret.Data["host"])
+	if host == "" {
+		host = pgHost(cluster)
+		d.log.Info(fmt.Sprintf("[seaweedfs] pg creds Secret %s has no host yet (Postgres not serving); using derived Service %q", key, host))
 	}
 	return host, user, password, true, nil
 }
