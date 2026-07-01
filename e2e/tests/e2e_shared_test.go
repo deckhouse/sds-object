@@ -43,18 +43,19 @@ import (
 
 // --- Suite env knobs (storage-e2e cluster knobs are read by storage-e2e itself) ---
 const (
-	envOSCName         = "E2E_OSC_NAME"
-	envOSCType         = "E2E_OSC_TYPE"
-	envRedundancy      = "E2E_REDUNDANCY"
-	envStorageClass    = "E2E_STORAGE_CLASS"
-	envOSCSize         = "E2E_OSC_SIZE"
-	envElasticRef      = "E2E_ELASTIC_CLUSTER_REF"
-	envBucketName      = "E2E_BUCKET_NAME"
-	envOSCReadyTimeout = "E2E_OSC_READY_TIMEOUT"
-	envOBReadyTimeout  = "E2E_OB_READY_TIMEOUT"
-	envModuleReadyTO   = "E2E_MODULE_READY_TIMEOUT"
-	envProbeImage      = "E2E_PROBE_IMAGE"
-	envProbeJobTimeout = "E2E_PROBE_JOB_TIMEOUT"
+	envOSCName          = "E2E_OSC_NAME"
+	envOSCType          = "E2E_OSC_TYPE"
+	envRedundancy       = "E2E_REDUNDANCY"
+	envStorageClass     = "E2E_STORAGE_CLASS"
+	envLightweightClass = "E2E_LIGHTWEIGHT_STORAGE_CLASS"
+	envOSCSize          = "E2E_OSC_SIZE"
+	envElasticRef       = "E2E_ELASTIC_CLUSTER_REF"
+	envBucketName       = "E2E_BUCKET_NAME"
+	envOSCReadyTimeout  = "E2E_OSC_READY_TIMEOUT"
+	envOBReadyTimeout   = "E2E_OB_READY_TIMEOUT"
+	envModuleReadyTO    = "E2E_MODULE_READY_TIMEOUT"
+	envProbeImage       = "E2E_PROBE_IMAGE"
+	envProbeJobTimeout  = "E2E_PROBE_JOB_TIMEOUT"
 
 	// envKeepClusterOnFailure, when truthy, skips nested-cluster teardown if any
 	// spec failed, leaving the cluster live for manual debugging.
@@ -113,13 +114,14 @@ type e2eConfig struct {
 	// Single source of truth: TEST_CLUSTER_NAMESPACE (also the base VM namespace).
 	namespace string
 
-	oscName    string
-	oscType    string
-	redundancy string
-	storageCl  string
-	oscSize    string
-	elasticRef string
-	bucketName string
+	oscName          string
+	oscType          string
+	redundancy       string
+	storageCl        string
+	lightweightClass string
+	oscSize          string
+	elasticRef       string
+	bucketName       string
 
 	oscReadyTimeout time.Duration
 	obReadyTimeout  time.Duration
@@ -143,15 +145,16 @@ var (
 
 func loadConfig() e2eConfig {
 	cfg := e2eConfig{
-		namespace:  strings.TrimSpace(os.Getenv("TEST_CLUSTER_NAMESPACE")),
-		oscName:    strings.TrimSpace(os.Getenv(envOSCName)),
-		oscType:    strings.TrimSpace(os.Getenv(envOSCType)),
-		redundancy: strings.TrimSpace(os.Getenv(envRedundancy)),
-		storageCl:  strings.TrimSpace(os.Getenv(envStorageClass)),
-		oscSize:    strings.TrimSpace(os.Getenv(envOSCSize)),
-		elasticRef: strings.TrimSpace(os.Getenv(envElasticRef)),
-		bucketName: strings.TrimSpace(os.Getenv(envBucketName)),
-		probeImage: strings.TrimSpace(os.Getenv(envProbeImage)),
+		namespace:        strings.TrimSpace(os.Getenv("TEST_CLUSTER_NAMESPACE")),
+		oscName:          strings.TrimSpace(os.Getenv(envOSCName)),
+		oscType:          strings.TrimSpace(os.Getenv(envOSCType)),
+		redundancy:       strings.TrimSpace(os.Getenv(envRedundancy)),
+		storageCl:        strings.TrimSpace(os.Getenv(envStorageClass)),
+		lightweightClass: strings.TrimSpace(os.Getenv(envLightweightClass)),
+		oscSize:          strings.TrimSpace(os.Getenv(envOSCSize)),
+		elasticRef:       strings.TrimSpace(os.Getenv(envElasticRef)),
+		bucketName:       strings.TrimSpace(os.Getenv(envBucketName)),
+		probeImage:       strings.TrimSpace(os.Getenv(envProbeImage)),
 	}
 
 	if cfg.namespace == "" {
@@ -199,6 +202,29 @@ func (c e2eConfig) isHeavy() bool {
 
 func (c e2eConfig) isSystem() bool {
 	return c.oscType == string(objectv1alpha1.ClusterTypeSystem)
+}
+
+// resolveLightweightStorageClass picks the StorageClass for the Lightweight
+// (Garage-on-PVC) specs: E2E_LIGHTWEIGHT_STORAGE_CLASS, else E2E_STORAGE_CLASS,
+// else the cluster's default StorageClass. Returns "" when none is available
+// (the Lightweight specs then skip).
+func resolveLightweightStorageClass(ctx context.Context) (string, error) {
+	if suiteCfg.lightweightClass != "" {
+		return suiteCfg.lightweightClass, nil
+	}
+	if suiteCfg.storageCl != "" {
+		return suiteCfg.storageCl, nil
+	}
+	scs, err := suiteClientset.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return "", err
+	}
+	for i := range scs.Items {
+		if scs.Items[i].Annotations["storageclass.kubernetes.io/is-default-class"] == "true" {
+			return scs.Items[i].Name, nil
+		}
+	}
+	return "", nil
 }
 
 // envBool parses a permissive boolean env value ("true"/"1"/"yes", any case).

@@ -77,9 +77,10 @@ var _ = Describe("sds-object e2e", Ordered, ContinueOnFailure, func() {
 		dumpFailedSpecDiagnostics(ctx)
 	})
 
-	createSpecs()     // create_test.go: OSC -> Ready, OB -> Ready, creds Secret, S3 round-trip
-	validationSpecs() // validation_test.go: webhook + CEL admission guards
-	deleteSpecs()     // delete_test.go: OB delete (+ creds Secret + reclaim), OSC delete
+	createSpecs()      // create_test.go: OSC -> Ready, OB -> Ready, creds Secret, S3 round-trip
+	validationSpecs()  // validation_test.go: webhook + CEL admission guards
+	lightweightSpecs() // lightweight_test.go: Lightweight (Garage on PVC) create -> bucket -> round-trip -> delete
+	deleteSpecs()      // delete_test.go: OB delete (+ creds Secret + reclaim), OSC delete
 })
 
 func prepareSuite() {
