@@ -10,6 +10,8 @@ github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5/go.mod h1:wHh0iHkY
 github.com/asaskevich/govalidator v0.0.0-20190424111038-f61b66f89f4a/go.mod h1:lB+ZfQJz7igIIfQNfa7Ml4HSf2uFQQRzpGGRXenZAgY=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
+github.com/caarlos0/env/v11 v11.4.1 h1:fYwH0sWEsBSMPG7t4e/PEfTFzrWrpjyygXyUnWiSwEw=
+github.com/caarlos0/env/v11 v11.4.1/go.mod h1:qupehSf/Y0TUTsxKywqRt/vJjN5nz6vauiYEUUr8P4U=
 github.com/census-instrumentation/opencensus-proto v0.2.1/go.mod h1:f6KPmirojxKA12rnyqOA5BBL4O983OfeGPqjHWSTneU=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
 github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
@@ -26,10 +28,8 @@ github.com/deckhouse/deckhouse v1.74.0 h1:a/gEuLKutoV6ReWaBWMDJ+VLlOkkCwS4VMvR/s
 github.com/deckhouse/deckhouse v1.74.0/go.mod h1:qMuvDbP8AYghXkWmDjoFPc6r1w9uw/cWxl/hmvA0BzA=
 github.com/deckhouse/sds-node-configurator/api v0.0.0-20260114125558-7fd7152586ff h1:G6H7rkm/AvL6xWwbNO14gyistC3p48weL0sLCvpJnyI=
 github.com/deckhouse/sds-node-configurator/api v0.0.0-20260114125558-7fd7152586ff/go.mod h1:X5ftUa4MrSXMKiwQYa4lwFuGtrs+HoCNa8Zl6TPrGo8=
-github.com/deckhouse/storage-e2e v0.0.0-20260701062152-b1d21263680f h1:29cff3btjKl2N4fyTLQOGC1wJVfJNT+p7AfpvLMZwj0=
-github.com/deckhouse/storage-e2e v0.0.0-20260701062152-b1d21263680f/go.mod h1:RAdH9NafGN5bBTt14lbkO/dR6sqQwfavOApOGnUt6D4=
-github.com/deckhouse/storage-e2e v0.0.0-20260701114724-0c7365d11785 h1:m/R2+S8hKVvnQIOoHSZbB9xJQShHxmNx8JaDpkFXH74=
-github.com/deckhouse/storage-e2e v0.0.0-20260701114724-0c7365d11785/go.mod h1:RAdH9NafGN5bBTt14lbkO/dR6sqQwfavOApOGnUt6D4=
+github.com/deckhouse/storage-e2e v0.0.0-20260701124315-33c3a52bf53b h1:BQzLLP3NV44YM+u7yfWpfffMnycMZ2WvpddcmQiPeXc=
+github.com/deckhouse/storage-e2e v0.0.0-20260701124315-33c3a52bf53b/go.mod h1:RAdH9NafGN5bBTt14lbkO/dR6sqQwfavOApOGnUt6D4=
 github.com/deckhouse/virtualization/api v1.8.0 h1:wR4Ivcg56OWJRGWrZjEL+0mQrHFEG0gKn0xrq1yzjy0=
 github.com/deckhouse/virtualization/api v1.8.0/go.mod h1:jqKdfrs7bhU5kbn6JTJUix8N180UkugJIa3TnOTqdmA=
 github.com/docopt/docopt-go v0.0.0-20180111231733-ee0de3bc6815/go.mod h1:WwZ+bS3ebgob9U8Nd0kOddGdZWjyMGR8Wziv+TBNwSE=

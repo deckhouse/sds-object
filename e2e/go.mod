@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/deckhouse/sds-object/api v0.0.0-00010101000000-000000000000
-	github.com/deckhouse/storage-e2e v0.0.0-20260701114724-0c7365d11785
+	github.com/deckhouse/storage-e2e v0.0.0-20260701124315-33c3a52bf53b
 	github.com/onsi/ginkgo/v2 v2.28.2
 	github.com/onsi/gomega v1.39.1
 	k8s.io/api v0.34.2
@@ -14,6 +14,7 @@ require (
 
 require (
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
+	github.com/caarlos0/env/v11 v11.4.1 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/deckhouse/deckhouse v1.74.0 // indirect
 	github.com/deckhouse/sds-node-configurator/api v0.0.0-20260114125558-7fd7152586ff // indirect

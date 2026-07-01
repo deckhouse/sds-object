@@ -28,8 +28,8 @@ jobs:
     # Gate: run only when the PR is labeled e2e/run.
     if: ${{ contains(github.event.pull_request.labels.*.name, 'e2e/run') }}
     # Pinned to the storage-e2e branch that carries the commander provider,
-    # enable-modules job and kubeconfig connect mode (PR deckhouse/storage-e2e#33).
-    # Switch both refs back to @main once that PR is merged.
+    # in-process connect (SSH tunnel + kubeconfig fetch) and enable-modules
+    # (PR deckhouse/storage-e2e#33). Switch both refs back to @main once merged.
     uses: deckhouse/storage-e2e/.github/workflows/e2e.yml@feat/commander-e2e-enable-modules
     with:
       module_slug: sds-object
