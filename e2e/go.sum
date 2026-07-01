@@ -32,6 +32,8 @@ github.com/deckhouse/storage-e2e v0.0.0-20260701124315-33c3a52bf53b h1:BQzLLP3NV
 github.com/deckhouse/storage-e2e v0.0.0-20260701124315-33c3a52bf53b/go.mod h1:RAdH9NafGN5bBTt14lbkO/dR6sqQwfavOApOGnUt6D4=
 github.com/deckhouse/storage-e2e v0.0.0-20260701132520-e68a0e2cd39c h1:QACvI2rCPzNIUCjMa2HlydmDuIcTIzo5ejC9Ly631tM=
 github.com/deckhouse/storage-e2e v0.0.0-20260701132520-e68a0e2cd39c/go.mod h1:RAdH9NafGN5bBTt14lbkO/dR6sqQwfavOApOGnUt6D4=
+github.com/deckhouse/storage-e2e v0.0.0-20260701171155-4e419c555ca2 h1:BIOHexF3fsv6ShBn70iIyPa31O1ptdP9L79ZvY1NkFY=
+github.com/deckhouse/storage-e2e v0.0.0-20260701171155-4e419c555ca2/go.mod h1:RAdH9NafGN5bBTt14lbkO/dR6sqQwfavOApOGnUt6D4=
 github.com/deckhouse/virtualization/api v1.8.0 h1:wR4Ivcg56OWJRGWrZjEL+0mQrHFEG0gKn0xrq1yzjy0=
 github.com/deckhouse/virtualization/api v1.8.0/go.mod h1:jqKdfrs7bhU5kbn6JTJUix8N180UkugJIa3TnOTqdmA=
 github.com/docopt/docopt-go v0.0.0-20180111231733-ee0de3bc6815/go.mod h1:WwZ+bS3ebgob9U8Nd0kOddGdZWjyMGR8Wziv+TBNwSE=
