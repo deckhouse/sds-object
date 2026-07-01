@@ -126,6 +126,9 @@ func prepareSuite() {
 	By("Waiting for the sds-object module to become Ready")
 	Expect(waitModuleReady(ctx)).To(Succeed(), "sds-object module readiness")
 
+	By("Waiting for the sds-object controller (validating webhook) to be Ready")
+	Expect(waitControllerReady(ctx, suiteCfg.moduleReadyTO)).To(Succeed(), "sds-object controller/webhook readiness")
+
 	By("Ensuring the in-cluster test namespace exists")
 	Expect(ensureNamespace(ctx, suiteCfg.namespace)).To(Succeed())
 }

@@ -259,6 +259,39 @@ func waitModuleReady(ctx context.Context) error {
 	return storagekube.WaitForModuleReady(ctx, suiteRestCfg, moduleName, suiteCfg.moduleReadyTO)
 }
 
+// controllerDeploymentName is the sds-object controller Deployment in the module
+// namespace. Its Pod runs both the reconciler and the "webhooks" container that
+// backs the validating webhooks (webhooks.d8-sds-object.svc).
+const controllerDeploymentName = "controller"
+
+// waitControllerReady blocks until the sds-object controller Deployment has a
+// Ready replica. The Deckhouse Module going Ready does not guarantee the
+// controller Pod passed its readiness probe, so without this the first
+// ObjectStorageCluster create can race the validating webhook and fail with
+// "failed calling webhook ... connect: operation not permitted" (no ready
+// endpoint behind the webhook Service yet).
+func waitControllerReady(ctx context.Context, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var last string
+	for {
+		dep, err := suiteClientset.AppsV1().Deployments(moduleNS).Get(ctx, controllerDeploymentName, metav1.GetOptions{})
+		if err == nil {
+			if dep.Status.ReadyReplicas >= 1 && dep.Status.ReadyReplicas == dep.Status.Replicas {
+				return nil
+			}
+			last = fmt.Sprintf("ready=%d/%d (updated=%d)", dep.Status.ReadyReplicas, dep.Status.Replicas, dep.Status.UpdatedReplicas)
+		} else {
+			last = err.Error()
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout waiting for Deployment %s/%s to be Ready; last: %s", moduleNS, controllerDeploymentName, last)
+		}
+		if !sleepCtx(ctx, pollInterval) {
+			return ctx.Err()
+		}
+	}
+}
+
 // --- ObjectStorageCluster / ObjectBucket builders --------------------------
 
 // buildOSC renders an ObjectStorageCluster from the suite config. storage and
