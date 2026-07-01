@@ -19,6 +19,9 @@ package seaweedfs
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"sort"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -169,9 +172,34 @@ func (d *Driver) ensurePostgres(ctx context.Context, cluster *v1alpha1.ObjectSto
 		return err
 	}
 
-	existing.Object["spec"] = desired.Object["spec"]
-	existing.SetLabels(desired.GetLabels())
+	// Overlay only the fields we manage and update only when something actually
+	// changed. Replacing the whole spec unconditionally (the previous behaviour)
+	// dropped any defaults managed-postgres writes back, so every reconcile bumped
+	// the Postgres generation and kept managed-postgres perpetually re-syncing.
+	before := existing.DeepCopy()
+
+	spec, _, _ := unstructured.NestedMap(existing.Object, "spec")
+	if spec == nil {
+		spec = map[string]interface{}{}
+	}
+	for k, v := range desired.Object["spec"].(map[string]interface{}) {
+		spec[k] = v
+	}
+	existing.Object["spec"] = spec
+
+	labels := existing.GetLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	for k, v := range desired.GetLabels() {
+		labels[k] = v
+	}
+	existing.SetLabels(labels)
 	existing.SetOwnerReferences(desired.GetOwnerReferences())
+
+	if reflect.DeepEqual(before.Object, existing.Object) {
+		return nil
+	}
 	return d.client.Update(ctx, existing)
 }
 
@@ -183,6 +211,7 @@ func (d *Driver) pgCreds(ctx context.Context, cluster *v1alpha1.ObjectStorageClu
 	key := client.ObjectKey{Namespace: d.namespace, Name: pgCredsSecretName(cluster)}
 	if err := d.apiReader.Get(ctx, key, secret); err != nil {
 		if apierrors.IsNotFound(err) {
+			d.log.Info(fmt.Sprintf("[seaweedfs] pg creds Secret %s not found yet, waiting", key))
 			return "", "", "", false, nil
 		}
 		return "", "", "", false, err
@@ -191,6 +220,13 @@ func (d *Driver) pgCreds(ctx context.Context, cluster *v1alpha1.ObjectStorageClu
 	user = string(secret.Data["username"])
 	password = string(secret.Data["password"])
 	if host == "" || user == "" || password == "" {
+		keys := make([]string, 0, len(secret.Data))
+		for k := range secret.Data {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		d.log.Info(fmt.Sprintf("[seaweedfs] pg creds Secret %s present but incomplete: keys=[%s] hostEmpty=%t userEmpty=%t passEmpty=%t",
+			key, strings.Join(keys, ","), host == "", user == "", password == ""))
 		return "", "", "", false, nil
 	}
 	return host, user, password, true, nil
