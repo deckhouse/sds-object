@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/deckhouse/sds-object/api v0.0.0-00010101000000-000000000000
-	github.com/deckhouse/storage-e2e v0.0.0-20260701044947-8c2e415f3837
+	github.com/deckhouse/storage-e2e v0.0.0-20260701062152-b1d21263680f
 	github.com/onsi/ginkgo/v2 v2.28.2
 	github.com/onsi/gomega v1.39.1
 	k8s.io/api v0.34.2
