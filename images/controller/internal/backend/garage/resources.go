@@ -76,6 +76,12 @@ func s3Endpoint(cluster *v1alpha1.ObjectStorageCluster, namespace, clusterDomain
 	return fmt.Sprintf("http://%s.%s.svc.%s:%d", s3SvcName(cluster), namespace, clusterDomain, s3Port)
 }
 
+// s3HostPort is the in-cluster S3 endpoint as host:port (no scheme), for the
+// minio/S3 client used to empty buckets before deletion.
+func s3HostPort(cluster *v1alpha1.ObjectStorageCluster, namespace, clusterDomain string) string {
+	return fmt.Sprintf("%s.%s.svc.%s:%d", s3SvcName(cluster), namespace, clusterDomain, s3Port)
+}
+
 // adminEndpoint is the in-cluster admin API URL of the cluster's Service.
 func adminEndpoint(cluster *v1alpha1.ObjectStorageCluster, namespace, clusterDomain string) string {
 	return fmt.Sprintf("http://%s.%s.svc.%s:%d", s3SvcName(cluster), namespace, clusterDomain, adminPort)
