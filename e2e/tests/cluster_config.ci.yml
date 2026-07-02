@@ -1,14 +1,14 @@
 # CI-only cluster config for the storage-e2e reusable pipeline (commander
 # provider). It differs from cluster_config.yml in ONE way: the sds-object
 # modulePullOverride is the env reference ${E2E_MODULE_IMAGE_TAG}, resolved by
-# the pipeline's enable-modules step (LoadClusterDefinition) to the PR's image
-# tag. The local-run loader rejects ${...}, which is why this lives in a
-# separate file and cluster_config.yml keeps a literal tag.
+# the bootstrap step (LoadClusterDefinition) to the PR's image tag. The local-run
+# loader rejects ${...}, which is why this lives in a separate file and
+# cluster_config.yml keeps a literal tag.
 #
 # In the commander CI flow only the `modules:` list + dkpParameters.registryRepo
-# are consumed (by enable-modules); the masters/workers/subnets below are present
-# to satisfy validation — the cluster itself is created from the Commander
-# template, not from this block.
+# are consumed (module enablement runs inside bootstrap); the masters/workers/
+# subnets below are present to satisfy validation — the cluster itself is created
+# from the Commander template, not from this block.
 clusterDefinition:
   masters:
     - hostname: "master-1"
@@ -74,7 +74,7 @@ clusterDefinition:
       - name: "sds-object"
         version: 1
         enabled: true
-        # Resolved by enable-modules to the PR image tag (e.g. pr123). The
+        # Resolved during bootstrap to the PR image tag (e.g. pr123). The
         # pipeline exports E2E_MODULE_IMAGE_TAG from the module_image_tag input.
         modulePullOverride: "${E2E_MODULE_IMAGE_TAG}"
         dependencies: []
