@@ -203,6 +203,15 @@ func (d *Driver) ensurePostgres(ctx context.Context, cluster *v1alpha1.ObjectSto
 	// the Postgres generation and kept managed-postgres perpetually re-syncing.
 	before := existing.DeepCopy()
 
+	// managed-postgres generates the user's password on first reconcile, writes
+	// the plaintext to storeCredsToSecret and stores the resulting hash back into
+	// spec.users[].hashedPassword (deleting the plaintext). Our desired users omit
+	// it, so overlaying would strip hashedPassword — which makes managed-postgres
+	// regenerate the password, desyncing the DB role from the credentials the
+	// filer already read ("password authentication failed"). Carry the
+	// managed-postgres-owned password fields over so the overlay preserves them.
+	preservePgUserSecrets(desired, existing)
+
 	spec, _, _ := unstructured.NestedMap(existing.Object, "spec")
 	if spec == nil {
 		spec = map[string]interface{}{}
@@ -226,6 +235,49 @@ func (d *Driver) ensurePostgres(ctx context.Context, cluster *v1alpha1.ObjectSto
 		return nil
 	}
 	return d.client.Update(ctx, existing)
+}
+
+// preservePgUserSecrets copies the managed-postgres-owned password fields
+// (hashedPassword / password) from the existing Postgres CR into the matching
+// desired users (by name), so the overlay in ensurePostgres does not strip them
+// and trigger a password regeneration.
+func preservePgUserSecrets(desired, existing *unstructured.Unstructured) {
+	desiredUsers, _, _ := unstructured.NestedSlice(desired.Object, "spec", "users")
+	existingUsers, _, _ := unstructured.NestedSlice(existing.Object, "spec", "users")
+	if len(desiredUsers) == 0 || len(existingUsers) == 0 {
+		return
+	}
+
+	existingByName := make(map[string]map[string]interface{}, len(existingUsers))
+	for _, u := range existingUsers {
+		if m, ok := u.(map[string]interface{}); ok {
+			if name, _ := m["name"].(string); name != "" {
+				existingByName[name] = m
+			}
+		}
+	}
+
+	changed := false
+	for _, u := range desiredUsers {
+		m, ok := u.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := m["name"].(string)
+		ex, ok := existingByName[name]
+		if !ok {
+			continue
+		}
+		for _, key := range []string{"hashedPassword", "password"} {
+			if v, ok := ex[key]; ok {
+				m[key] = v
+				changed = true
+			}
+		}
+	}
+	if changed {
+		_ = unstructured.SetNestedSlice(desired.Object, desiredUsers, "spec", "users")
+	}
 }
 
 // pgCreds reads the filer DB credentials managed-postgres writes into the
