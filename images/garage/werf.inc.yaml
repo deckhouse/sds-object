@@ -49,12 +49,11 @@ shell:
     # rust/cargo + a C toolchain (Garage bundles sqlite/lmdb and links ring,
     # all of which compile C sources via cc during the build).
     - pm install rust cargo gnu-gcc gnu-gcc-devel binutils make pkgconf protobuf
-    - export CARGO_HOME=/root/.cargo CARGO_NET_GIT_FETCH_WITH_CLI=true CC=gcc
-    - mkdir -p "${CARGO_HOME}"
     # The container-base `rust` package defaults to `clang` as the linker, which
-    # is not installed; link with the GNU toolchain (gnu-gcc) instead.
-    - echo '[target.x86_64-unknown-linux-gnu]' >> "${CARGO_HOME}/config.toml"
-    - echo 'linker = "gcc"'                     >> "${CARGO_HOME}/config.toml"
+    # is not installed; force the GNU toolchain (gnu-gcc, pulls gnu-glibc) via
+    # RUSTFLAGS (rustc command line — outranks any baked-in default/config).
+    - export CARGO_HOME=/root/.cargo CARGO_NET_GIT_FETCH_WITH_CLI=true CC=gcc RUSTFLAGS="-C linker=gcc"
+    - mkdir -p "${CARGO_HOME}"
     - |
       export CARGO_PROXY=$(cat /run/secrets/CARGO_PROXY)
       if ! [[ "${CARGO_PROXY}" = "false" ]]; then
