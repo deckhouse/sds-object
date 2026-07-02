@@ -1,5 +1,7 @@
 name: "sds-object"
 stage: "Experimental"
+subsystems:
+  - storage
 descriptions:
   en: "Manages object storage."
   ru: "Управляет объектным хранилищем."
