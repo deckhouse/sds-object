@@ -1,7 +1,10 @@
 linters-settings:
   module:
-    oss:
-      disable: true
+    exclude-rules:
+      oss:
+        # SeaweedFS upstream tags are two-component (e.g. "3.71"), not semver.
+        version-not-semver:
+          - id: seaweedfs
   no-cyrillic:
     exclude-rules:
       directories:

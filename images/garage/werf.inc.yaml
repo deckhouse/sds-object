@@ -5,11 +5,10 @@
   toolchain installed via pm into the module's distroless build base — the same
   approach used by the log-shipper/vector Rust build in Deckhouse.
 
-  NOTE: the version below is the only place the Garage version is pinned;
-  keep it in sync with garageVersion in
-  images/controller/internal/backend/garage.
+  The version is taken from oss.yaml (id: garage); keep it in sync with
+  garageVersion in images/controller/internal/backend/garage.
 */ -}}
-{{- $garageVersion := "v1.0.1" }}
+{{- $garageVersion := printf "v%s" (include "get_oss_version_by_id" (list "garage" $)) }}
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
 from: {{ index $.Images "builder/src" }}
@@ -50,17 +49,21 @@ shell:
     # rust/cargo + a C toolchain (Garage bundles sqlite/lmdb and links ring,
     # all of which compile C sources via cc during the build).
     - pm install rust cargo gnu-gcc gnu-gcc-devel binutils make pkgconf protobuf
-    - export CARGO_HOME=/root/.cargo CARGO_NET_GIT_FETCH_WITH_CLI=true
-    - cd /src
+    - export CARGO_HOME=/root/.cargo CARGO_NET_GIT_FETCH_WITH_CLI=true CC=gcc
+    - mkdir -p "${CARGO_HOME}"
+    # The container-base `rust` package defaults to `clang` as the linker, which
+    # is not installed; link with the GNU toolchain (gnu-gcc) instead.
+    - echo '[target.x86_64-unknown-linux-gnu]' >> "${CARGO_HOME}/config.toml"
+    - echo 'linker = "gcc"'                     >> "${CARGO_HOME}/config.toml"
     - |
       export CARGO_PROXY=$(cat /run/secrets/CARGO_PROXY)
       if ! [[ "${CARGO_PROXY}" = "false" ]]; then
-        mkdir -p "${CARGO_HOME}"
-        echo '[source.crates-io]'                              >> "${CARGO_HOME}/config.toml"
-        echo 'replace-with = "crates-io-mirror"'               >> "${CARGO_HOME}/config.toml"
-        echo '[registries.crates-io-mirror]'                   >> "${CARGO_HOME}/config.toml"
+        echo '[source.crates-io]'                                >> "${CARGO_HOME}/config.toml"
+        echo 'replace-with = "crates-io-mirror"'                 >> "${CARGO_HOME}/config.toml"
+        echo '[registries.crates-io-mirror]'                     >> "${CARGO_HOME}/config.toml"
         echo 'index = "sparse+http://'"${CARGO_PROXY}"'/index/"' >> "${CARGO_HOME}/config.toml"
       fi
+    - cd /src
     - cargo build --release --bin garage
     - cp /src/target/release/garage /garage
     - strip /garage

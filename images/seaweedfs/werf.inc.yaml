@@ -5,11 +5,10 @@
   Go toolchain, then copied into the module's distroless base — same layout as the
   module's own Go images (controller/webhooks/go-hooks).
 
-  NOTE: the version below is the only place the SeaweedFS version is pinned;
-  keep it in sync with seaweedfsVersion in
-  images/controller/internal/backend/seaweedfs.
+  The version is taken from oss.yaml (id: seaweedfs); keep it in sync with
+  seaweedfsVersion in images/controller/internal/backend/seaweedfs.
 */ -}}
-{{- $seaweedfsVersion := "3.71" }}
+{{- $seaweedfsVersion := include "get_oss_version_by_id" (list "seaweedfs" $) }}
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
 from: {{ index $.Images "builder/src" }}
