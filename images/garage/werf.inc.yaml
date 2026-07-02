@@ -80,6 +80,13 @@ import:
 git:
 {{- include "image mount points" . }}
 
+shell:
+  # Garage is a dynamically-linked glibc binary (x86_64-unknown-linux-gnu); the
+  # distroless base has no libc, so ship the glibc runtime (loader + core libs)
+  # and libgcc_s. Without this `/garage` fails with "no such file or directory".
+  setup:
+    - pm install libc gnu-gcc-lib
+
 imageSpec:
   config:
     entrypoint: ["/garage"]
