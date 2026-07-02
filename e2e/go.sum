@@ -30,6 +30,8 @@ github.com/deckhouse/sds-node-configurator/api v0.0.0-20260114125558-7fd7152586f
 github.com/deckhouse/sds-node-configurator/api v0.0.0-20260114125558-7fd7152586ff/go.mod h1:X5ftUa4MrSXMKiwQYa4lwFuGtrs+HoCNa8Zl6TPrGo8=
 github.com/deckhouse/storage-e2e v0.0.0-20260702082948-c8d1f22b8b0e h1:qFZx/pyxisEo2JDqITFOzBdOLj/pXlt6QPnOltEe3ro=
 github.com/deckhouse/storage-e2e v0.0.0-20260702082948-c8d1f22b8b0e/go.mod h1:RAdH9NafGN5bBTt14lbkO/dR6sqQwfavOApOGnUt6D4=
+github.com/deckhouse/storage-e2e v0.0.0-20260702100012-8b53aa3804c6 h1:QQmaS2w6MDeHxilo7tkr/372i/B321d6WNRpTPo2jLE=
+github.com/deckhouse/storage-e2e v0.0.0-20260702100012-8b53aa3804c6/go.mod h1:RAdH9NafGN5bBTt14lbkO/dR6sqQwfavOApOGnUt6D4=
 github.com/deckhouse/virtualization/api v1.8.0 h1:wR4Ivcg56OWJRGWrZjEL+0mQrHFEG0gKn0xrq1yzjy0=
 github.com/deckhouse/virtualization/api v1.8.0/go.mod h1:jqKdfrs7bhU5kbn6JTJUix8N180UkugJIa3TnOTqdmA=
 github.com/docopt/docopt-go v0.0.0-20180111231733-ee0de3bc6815/go.mod h1:WwZ+bS3ebgob9U8Nd0kOddGdZWjyMGR8Wziv+TBNwSE=
