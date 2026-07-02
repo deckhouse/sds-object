@@ -48,7 +48,7 @@ shell:
   install:
     # rust/cargo + a C toolchain (Garage bundles sqlite/lmdb and links ring,
     # all of which compile C sources via cc during the build).
-    - pm install rust cargo gnu-gcc gnu-gcc-devel binutils make pkgconf protobuf
+    - pm install rust cargo gnu-gcc gnu-gcc-devel binutils make pkgconf protobuf linux-headers
     # The container-base `rust` package defaults to `clang` as the linker, which
     # is not installed; force the GNU toolchain (gnu-gcc, pulls gnu-glibc) via
     # RUSTFLAGS (rustc command line — outranks any baked-in default/config).
