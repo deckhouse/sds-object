@@ -1,6 +1,7 @@
 module github.com/deckhouse/sds-object/api
 
-go 1.25.10
+go 1.26.4
+
 require (
 	k8s.io/api v0.34.1
 	k8s.io/apimachinery v0.34.1

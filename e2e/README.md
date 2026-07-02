@@ -19,7 +19,7 @@ finalizer-driven deletion.
 
 The suite is wired into the reusable `storage-e2e` pipeline via
 [`.github/workflows/e2e-tests.yml`](../.github/workflows/e2e-tests.yml). It is
-**gated by the `e2e/run` PR label**: add that label to a pull request to trigger
+**gated by the `e2e/commander/run` PR label**: add that label to a pull request to trigger
 a run (the job graph is `resolve → bootstrap → run-tests → teardown`). The
 pipeline is configured with `cluster_provider: commander`, so each run creates a
 fresh cluster through the Deckhouse Commander API and deletes it on teardown.

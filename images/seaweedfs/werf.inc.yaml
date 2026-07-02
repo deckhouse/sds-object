@@ -1,26 +1,75 @@
 {{- /*
   SeaweedFS server image.
 
-  Vendors the upstream `weed` binary from the official SeaweedFS image into the
-  module's distroless base — same pattern as images/garage.
+  The `weed` binary is built from upstream source with the standard container-base
+  Go toolchain, then copied into the module's distroless base — same layout as the
+  module's own Go images (controller/webhooks/go-hooks).
 
-  NOTE: the upstream tag below is the only place the SeaweedFS version is
-  pinned; keep it in sync with seaweedfsVersion in
-  images/controller/internal/backend/seaweedfs.
+  The version is taken from oss.yaml (id: seaweedfs); keep it in sync with
+  seaweedfsVersion in images/controller/internal/backend/seaweedfs.
 */ -}}
-{{- $seaweedfsVersion := "3.71" }}
+{{- $seaweedfsVersion := include "get_oss_version_by_id" (list "seaweedfs" $) }}
 ---
-image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
-from: chrislusf/seaweedfs:{{ $seaweedfsVersion }}
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
+from: {{ index $.Images "builder/src" }}
 final: false
+
+git:
+  - add: {{ .ModuleDir }}
+    to: /patches
+    includePaths:
+      - images/{{ $.ImageName }}/patches
+    stageDependencies:
+      install:
+        - '**/*'
+
+secrets:
+- id: SOURCE_REPO
+  value: {{ .SOURCE_REPO }}
+
+shell:
+  install:
+    - git clone --depth 1 --branch {{ $seaweedfsVersion }} $(cat /run/secrets/SOURCE_REPO)/seaweedfs/seaweedfs.git /src
+    - cd /src
+    # Bump vulnerable (transitive) deps of SeaweedFS to patched versions so the
+    # resulting `weed` binary passes the CVE scan (see patches/001-fix-cve.patch).
+    - for patchfile in /patches/images/{{ $.ImageName }}/patches/*.patch; do echo "Apply ${patchfile} ..."; git apply ${patchfile} --verbose; done
+    - rm -rf /src/.git
+
+---
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}-golang-artifact
+from: {{ index $.Images (eq .SVACE_ENABLED "false" | ternary "builder/golang" "builder/alpine-svace") }}
+final: false
+
+import:
+  - image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
+    add: /src
+    to: /src
+    before: install
+
+mount:
+{{ include "mount points for golang builds" . }}
+
+secrets:
+- id: GOPROXY
+  value: {{ .GOPROXY }}
+
+shell:
+  setup:
+    - cd /src/weed
+    - GOPROXY=$(cat /run/secrets/GOPROXY) go mod download
+    - export GOOS=linux GOARCH=amd64 CGO_ENABLED=0
+    - |
+      {{- include "image-build.build" (set $ "BuildCommand" `go build -ldflags="-s -w" -o /weed .`) | nindent 6 }}
+    - chmod +x /weed
 
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}
 from: {{ index $.Images "builder/distroless" }}
 
 import:
-  - image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
-    add: /usr/bin/weed
+  - image: {{ .ModuleNamePrefix }}{{ .ImageName }}-golang-artifact
+    add: /weed
     to: /weed
     before: setup
 git:
