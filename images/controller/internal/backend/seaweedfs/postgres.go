@@ -19,6 +19,9 @@ package seaweedfs
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"sort"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -51,6 +54,16 @@ var postgresGVK = schema.GroupVersionKind{
 // pgName is the Postgres CR name for a cluster.
 func pgName(cluster *v1alpha1.ObjectStorageCluster) string {
 	return componentName(cluster, "pg")
+}
+
+// pgHost is the managed-postgres read-write Service the filer connects to.
+// managed-postgres names the backing CNPG cluster "d8ms-pg-<pg>" and exposes a
+// "<cnpg>-rw" Service, so this name is deterministic. The driver relies on it
+// when the credentials Secret momentarily drops the "host" key — which
+// managed-postgres does whenever the Postgres instance is briefly not serving
+// (startup, failover), keeping only the stable username/password.
+func pgHost(cluster *v1alpha1.ObjectStorageCluster) string {
+	return "d8ms-pg-" + pgName(cluster) + "-rw"
 }
 
 // pgCredsSecretName is the Secret managed-postgres writes the filer user's
@@ -120,6 +133,12 @@ func buildPostgres(cluster *v1alpha1.ObjectStorageCluster, namespace string) *un
 // managed-postgres rw endpoint enables TLS, so sslmode=require (encrypt without
 // CA verification, matching managed-postgres' own DSN default).
 func renderFilerToml(host string, port int, user, password, database string) string {
+	// createTable is REQUIRED for the postgres2 store: SeaweedFS runs
+	// fmt.Sprintf(createTable, <table>) for each metadata table (filemeta, one
+	// per bucket). Without it the store formats an empty template and sends
+	// `%!(EXTRA string=filemeta)` to Postgres — "syntax error at or near %!".
+	// The "%%s" escape keeps a literal "%s" in the rendered TOML for SeaweedFS to
+	// fill; the leading verbs below bind host/port/user/password/database in order.
 	return fmt.Sprintf(`[postgres2]
 enabled = true
 hostname = "%s"
@@ -128,6 +147,15 @@ username = "%s"
 password = "%s"
 database = "%s"
 sslmode = "require"
+createTable = """
+CREATE TABLE IF NOT EXISTS "%%s" (
+  dirhash   BIGINT,
+  name      VARCHAR(65535),
+  directory VARCHAR(65535),
+  meta      bytea,
+  PRIMARY KEY (dirhash, name)
+);
+"""
 `, host, port, user, password, database)
 }
 
@@ -169,10 +197,87 @@ func (d *Driver) ensurePostgres(ctx context.Context, cluster *v1alpha1.ObjectSto
 		return err
 	}
 
-	existing.Object["spec"] = desired.Object["spec"]
-	existing.SetLabels(desired.GetLabels())
+	// Overlay only the fields we manage and update only when something actually
+	// changed. Replacing the whole spec unconditionally (the previous behaviour)
+	// dropped any defaults managed-postgres writes back, so every reconcile bumped
+	// the Postgres generation and kept managed-postgres perpetually re-syncing.
+	before := existing.DeepCopy()
+
+	// managed-postgres generates the user's password on first reconcile, writes
+	// the plaintext to storeCredsToSecret and stores the resulting hash back into
+	// spec.users[].hashedPassword (deleting the plaintext). Our desired users omit
+	// it, so overlaying would strip hashedPassword — which makes managed-postgres
+	// regenerate the password, desyncing the DB role from the credentials the
+	// filer already read ("password authentication failed"). Carry the
+	// managed-postgres-owned password fields over so the overlay preserves them.
+	preservePgUserSecrets(desired, existing)
+
+	spec, _, _ := unstructured.NestedMap(existing.Object, "spec")
+	if spec == nil {
+		spec = map[string]interface{}{}
+	}
+	for k, v := range desired.Object["spec"].(map[string]interface{}) {
+		spec[k] = v
+	}
+	existing.Object["spec"] = spec
+
+	labels := existing.GetLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	for k, v := range desired.GetLabels() {
+		labels[k] = v
+	}
+	existing.SetLabels(labels)
 	existing.SetOwnerReferences(desired.GetOwnerReferences())
+
+	if reflect.DeepEqual(before.Object, existing.Object) {
+		return nil
+	}
 	return d.client.Update(ctx, existing)
+}
+
+// preservePgUserSecrets copies the managed-postgres-owned password fields
+// (hashedPassword / password) from the existing Postgres CR into the matching
+// desired users (by name), so the overlay in ensurePostgres does not strip them
+// and trigger a password regeneration.
+func preservePgUserSecrets(desired, existing *unstructured.Unstructured) {
+	desiredUsers, _, _ := unstructured.NestedSlice(desired.Object, "spec", "users")
+	existingUsers, _, _ := unstructured.NestedSlice(existing.Object, "spec", "users")
+	if len(desiredUsers) == 0 || len(existingUsers) == 0 {
+		return
+	}
+
+	existingByName := make(map[string]map[string]interface{}, len(existingUsers))
+	for _, u := range existingUsers {
+		if m, ok := u.(map[string]interface{}); ok {
+			if name, _ := m["name"].(string); name != "" {
+				existingByName[name] = m
+			}
+		}
+	}
+
+	changed := false
+	for _, u := range desiredUsers {
+		m, ok := u.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := m["name"].(string)
+		ex, ok := existingByName[name]
+		if !ok {
+			continue
+		}
+		for _, key := range []string{"hashedPassword", "password"} {
+			if v, ok := ex[key]; ok {
+				m[key] = v
+				changed = true
+			}
+		}
+	}
+	if changed {
+		_ = unstructured.SetNestedSlice(desired.Object, desiredUsers, "spec", "users")
+	}
 }
 
 // pgCreds reads the filer DB credentials managed-postgres writes into the
@@ -183,15 +288,32 @@ func (d *Driver) pgCreds(ctx context.Context, cluster *v1alpha1.ObjectStorageClu
 	key := client.ObjectKey{Namespace: d.namespace, Name: pgCredsSecretName(cluster)}
 	if err := d.apiReader.Get(ctx, key, secret); err != nil {
 		if apierrors.IsNotFound(err) {
+			d.log.Info(fmt.Sprintf("[seaweedfs] pg creds Secret %s not found yet, waiting", key))
 			return "", "", "", false, nil
 		}
 		return "", "", "", false, err
 	}
-	host = string(secret.Data["host"])
+	// Only username/password are required and stable. managed-postgres withdraws
+	// "host" (and the dsn) from the Secret whenever the Postgres instance is not
+	// serving, so depending on it would stall SeaweedFS for the whole startup;
+	// instead fall back to the deterministic read-write Service and let the filer
+	// retry the DB connection until Postgres is ready.
 	user = string(secret.Data["username"])
 	password = string(secret.Data["password"])
-	if host == "" || user == "" || password == "" {
+	if user == "" || password == "" {
+		keys := make([]string, 0, len(secret.Data))
+		for k := range secret.Data {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		d.log.Info(fmt.Sprintf("[seaweedfs] pg creds Secret %s present but incomplete: keys=[%s] userEmpty=%t passEmpty=%t",
+			key, strings.Join(keys, ","), user == "", password == ""))
 		return "", "", "", false, nil
+	}
+	host = string(secret.Data["host"])
+	if host == "" {
+		host = pgHost(cluster)
+		d.log.Info(fmt.Sprintf("[seaweedfs] pg creds Secret %s has no host yet (Postgres not serving); using derived Service %q", key, host))
 	}
 	return host, user, password, true, nil
 }

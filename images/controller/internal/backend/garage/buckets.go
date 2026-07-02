@@ -26,6 +26,7 @@ import (
 
 	v1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 	"github.com/deckhouse/sds-object/images/controller/internal/backend"
+	"github.com/deckhouse/sds-object/images/controller/internal/backend/s3util"
 )
 
 // EnsureBucket creates the bucket and an access key scoped to it, and reports
@@ -109,18 +110,28 @@ func (d *Driver) DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStora
 	}
 	svc := newAdminClient(adminEndpoint(cluster, d.namespace, d.clusterDomain), token)
 
-	accessKeyID, _, err := d.existingCreds(ctx, bucket)
+	accessKeyID, secretKey, err := d.existingCreds(ctx, bucket)
 	if err != nil {
 		return err
-	}
-	if accessKeyID != "" {
-		if err := svc.deleteKey(ctx, accessKeyID); err != nil {
-			return fmt.Errorf("delete access key: %w", err)
-		}
 	}
 
 	if bucket.Spec.ReclaimPolicy == v1alpha1.BucketReclaimDelete {
 		name := bucketDisplayName(bucket)
+
+		// Garage's admin DELETE /v1/bucket refuses a non-empty bucket
+		// (409 BucketNotEmpty), so empty it over S3 first. This uses the
+		// bucket's own credentials and therefore must run before the access
+		// key is deleted below.
+		if accessKeyID != "" && secretKey != "" {
+			mc, cerr := s3util.NewClient(s3HostPort(cluster, d.namespace, d.clusterDomain), accessKeyID, secretKey)
+			if cerr != nil {
+				return fmt.Errorf("build S3 client to empty bucket %q: %w", name, cerr)
+			}
+			if eerr := s3util.EmptyBucket(ctx, mc, name); eerr != nil {
+				return fmt.Errorf("empty bucket %q before delete: %w", name, eerr)
+			}
+		}
+
 		b, found, err := svc.getBucketByAlias(ctx, name)
 		if err != nil {
 			return fmt.Errorf("look up bucket %q: %w", name, err)
@@ -129,6 +140,13 @@ func (d *Driver) DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStora
 			if err := svc.deleteBucket(ctx, b.ID); err != nil {
 				return fmt.Errorf("delete bucket %q: %w", name, err)
 			}
+		}
+	}
+
+	// Delete the access key last: emptying the bucket above needs it.
+	if accessKeyID != "" {
+		if err := svc.deleteKey(ctx, accessKeyID); err != nil {
+			return fmt.Errorf("delete access key: %w", err)
 		}
 	}
 	return nil

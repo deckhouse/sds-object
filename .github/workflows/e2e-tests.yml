@@ -27,17 +27,22 @@ jobs:
   e2e:
     # Gate: run only when the PR is labeled e2e/run.
     if: ${{ contains(github.event.pull_request.labels.*.name, 'e2e/run') }}
+    # storage-e2e main carries the commander provider, in-process connect (SSH
+    # tunnel + kubeconfig fetch) and bootstrap-side module enablement (merged in
+    # deckhouse/storage-e2e#25 + #33).
     uses: deckhouse/storage-e2e/.github/workflows/e2e.yml@main
     with:
       module_slug: sds-object
       # The e2e Go module lives under e2e/; tests are in e2e/tests/.
       module_path: e2e
       test_package: ./tests/
-      # CI config: modulePullOverride is ${E2E_MODULE_IMAGE_TAG}, resolved by the
-      # enable-modules step to the PR image tag below.
+      # CI config: modulePullOverride is ${E2E_MODULE_IMAGE_TAG}, resolved during
+      # bootstrap (module enablement) to the PR image tag below.
       cluster_config: e2e/tests/cluster_config.ci.yml
       # Create a fresh cluster through Deckhouse Commander for each run.
       cluster_provider: commander
+      # Check out the same storage-e2e ref for scripts / cmd / Go code.
+      storage_e2e_ref: main
       # Install the image built for this PR (build_dev publishes the pr<N> tag).
       module_image_tag: pr${{ github.event.pull_request.number }}
     secrets: inherit

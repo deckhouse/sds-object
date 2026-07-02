@@ -48,7 +48,10 @@ func TestSdsObject(t *testing.T) {
 	suiteConfig, reporterConfig := GinkgoConfiguration()
 	if os.Getenv("CI") != "" {
 		suiteConfig.FailFast = true
-		suiteConfig.Timeout = 120 * time.Minute
+		// Generous: the Heavy profile brings up a full Rook Ceph cluster (via an
+		// sds-elastic ElasticCluster) on top of the Full (SeaweedFS + Postgres) and
+		// Garage profiles, so the whole suite can run well past an hour.
+		suiteConfig.Timeout = 180 * time.Minute
 	}
 	// The suite shares one ObjectStorageCluster across dependency-ordered specs
 	// (create -> bucket + S3 round-trip -> validation guards -> delete), so spec
@@ -77,9 +80,12 @@ var _ = Describe("sds-object e2e", Ordered, ContinueOnFailure, func() {
 		dumpFailedSpecDiagnostics(ctx)
 	})
 
-	createSpecs()     // create_test.go: OSC -> Ready, OB -> Ready, creds Secret, S3 round-trip
-	validationSpecs() // validation_test.go: webhook + CEL admission guards
-	deleteSpecs()     // delete_test.go: OB delete (+ creds Secret + reclaim), OSC delete
+	createSpecs()      // create_test.go: OSC -> Ready, OB -> Ready, creds Secret, S3 round-trip
+	validationSpecs()  // validation_test.go: webhook + CEL admission guards
+	lightweightSpecs() // lightweight_test.go: Lightweight (Garage on PVC) create -> bucket -> round-trip -> delete
+	fullSpecs()        // full_test.go: Full (SeaweedFS + managed-postgres) create -> bucket -> round-trip -> delete
+	heavySpecs()       // heavy_test.go: Heavy (Ceph RGW on sds-elastic ElasticCluster) bring-up -> create -> bucket -> round-trip -> delete
+	deleteSpecs()      // delete_test.go: OB delete (+ creds Secret + reclaim), OSC delete
 })
 
 func prepareSuite() {
@@ -125,6 +131,9 @@ func prepareSuite() {
 
 	By("Waiting for the sds-object module to become Ready")
 	Expect(waitModuleReady(ctx)).To(Succeed(), "sds-object module readiness")
+
+	By("Waiting for the sds-object controller (validating webhook) to be Ready")
+	Expect(waitControllerReady(ctx, suiteCfg.moduleReadyTO)).To(Succeed(), "sds-object controller/webhook readiness")
 
 	By("Ensuring the in-cluster test namespace exists")
 	Expect(ensureNamespace(ctx, suiteCfg.namespace)).To(Succeed())

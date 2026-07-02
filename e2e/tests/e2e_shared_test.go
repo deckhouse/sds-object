@@ -47,6 +47,7 @@ const (
 	envOSCType         = "E2E_OSC_TYPE"
 	envRedundancy      = "E2E_REDUNDANCY"
 	envStorageClass    = "E2E_STORAGE_CLASS"
+	envPVCStorageClass = "E2E_PVC_STORAGE_CLASS"
 	envOSCSize         = "E2E_OSC_SIZE"
 	envElasticRef      = "E2E_ELASTIC_CLUSTER_REF"
 	envBucketName      = "E2E_BUCKET_NAME"
@@ -113,13 +114,14 @@ type e2eConfig struct {
 	// Single source of truth: TEST_CLUSTER_NAMESPACE (also the base VM namespace).
 	namespace string
 
-	oscName    string
-	oscType    string
-	redundancy string
-	storageCl  string
-	oscSize    string
-	elasticRef string
-	bucketName string
+	oscName         string
+	oscType         string
+	redundancy      string
+	storageCl       string
+	pvcStorageClass string
+	oscSize         string
+	elasticRef      string
+	bucketName      string
 
 	oscReadyTimeout time.Duration
 	obReadyTimeout  time.Duration
@@ -143,15 +145,16 @@ var (
 
 func loadConfig() e2eConfig {
 	cfg := e2eConfig{
-		namespace:  strings.TrimSpace(os.Getenv("TEST_CLUSTER_NAMESPACE")),
-		oscName:    strings.TrimSpace(os.Getenv(envOSCName)),
-		oscType:    strings.TrimSpace(os.Getenv(envOSCType)),
-		redundancy: strings.TrimSpace(os.Getenv(envRedundancy)),
-		storageCl:  strings.TrimSpace(os.Getenv(envStorageClass)),
-		oscSize:    strings.TrimSpace(os.Getenv(envOSCSize)),
-		elasticRef: strings.TrimSpace(os.Getenv(envElasticRef)),
-		bucketName: strings.TrimSpace(os.Getenv(envBucketName)),
-		probeImage: strings.TrimSpace(os.Getenv(envProbeImage)),
+		namespace:       strings.TrimSpace(os.Getenv("TEST_CLUSTER_NAMESPACE")),
+		oscName:         strings.TrimSpace(os.Getenv(envOSCName)),
+		oscType:         strings.TrimSpace(os.Getenv(envOSCType)),
+		redundancy:      strings.TrimSpace(os.Getenv(envRedundancy)),
+		storageCl:       strings.TrimSpace(os.Getenv(envStorageClass)),
+		pvcStorageClass: strings.TrimSpace(os.Getenv(envPVCStorageClass)),
+		oscSize:         strings.TrimSpace(os.Getenv(envOSCSize)),
+		elasticRef:      strings.TrimSpace(os.Getenv(envElasticRef)),
+		bucketName:      strings.TrimSpace(os.Getenv(envBucketName)),
+		probeImage:      strings.TrimSpace(os.Getenv(envProbeImage)),
 	}
 
 	if cfg.namespace == "" {
@@ -199,6 +202,43 @@ func (c e2eConfig) isHeavy() bool {
 
 func (c e2eConfig) isSystem() bool {
 	return c.oscType == string(objectv1alpha1.ClusterTypeSystem)
+}
+
+// resolvePVCStorageClass picks the StorageClass for the PVC-backed profiles
+// (Lightweight = Garage on PVC, Full = SeaweedFS on PVCs): E2E_PVC_STORAGE_CLASS,
+// else E2E_STORAGE_CLASS, else the cluster's default StorageClass. Returns ""
+// when none is available (the dependent specs then skip).
+func resolvePVCStorageClass(ctx context.Context) (string, error) {
+	if suiteCfg.pvcStorageClass != "" {
+		return suiteCfg.pvcStorageClass, nil
+	}
+	if suiteCfg.storageCl != "" {
+		return suiteCfg.storageCl, nil
+	}
+	scs, err := suiteClientset.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return "", err
+	}
+	for i := range scs.Items {
+		if scs.Items[i].Annotations["storageclass.kubernetes.io/is-default-class"] == "true" {
+			return scs.Items[i].Name, nil
+		}
+	}
+	return "", nil
+}
+
+// groupVersionServed reports whether the apiserver serves the given
+// "group/version" (used to gate the Full specs on the managed-postgres Postgres
+// CRD being present).
+func groupVersionServed(gv string) (bool, error) {
+	_, err := suiteClientset.Discovery().ServerResourcesForGroupVersion(gv)
+	if err == nil {
+		return true, nil
+	}
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	return false, err
 }
 
 // envBool parses a permissive boolean env value ("true"/"1"/"yes", any case).
@@ -257,6 +297,39 @@ func ensureNamespace(ctx context.Context, name string) error {
 // waitModuleReady blocks until the sds-object Deckhouse module reports Ready.
 func waitModuleReady(ctx context.Context) error {
 	return storagekube.WaitForModuleReady(ctx, suiteRestCfg, moduleName, suiteCfg.moduleReadyTO)
+}
+
+// controllerDeploymentName is the sds-object controller Deployment in the module
+// namespace. Its Pod runs both the reconciler and the "webhooks" container that
+// backs the validating webhooks (webhooks.d8-sds-object.svc).
+const controllerDeploymentName = "controller"
+
+// waitControllerReady blocks until the sds-object controller Deployment has a
+// Ready replica. The Deckhouse Module going Ready does not guarantee the
+// controller Pod passed its readiness probe, so without this the first
+// ObjectStorageCluster create can race the validating webhook and fail with
+// "failed calling webhook ... connect: operation not permitted" (no ready
+// endpoint behind the webhook Service yet).
+func waitControllerReady(ctx context.Context, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var last string
+	for {
+		dep, err := suiteClientset.AppsV1().Deployments(moduleNS).Get(ctx, controllerDeploymentName, metav1.GetOptions{})
+		if err == nil {
+			if dep.Status.ReadyReplicas >= 1 && dep.Status.ReadyReplicas == dep.Status.Replicas {
+				return nil
+			}
+			last = fmt.Sprintf("ready=%d/%d (updated=%d)", dep.Status.ReadyReplicas, dep.Status.Replicas, dep.Status.UpdatedReplicas)
+		} else {
+			last = err.Error()
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout waiting for Deployment %s/%s to be Ready; last: %s", moduleNS, controllerDeploymentName, last)
+		}
+		if !sleepCtx(ctx, pollInterval) {
+			return ctx.Err()
+		}
+	}
 }
 
 // --- ObjectStorageCluster / ObjectBucket builders --------------------------

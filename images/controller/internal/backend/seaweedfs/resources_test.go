@@ -195,10 +195,19 @@ func TestRenderFilerToml(t *testing.T) {
 		`password = "s3cr3t"`,
 		`database = "seaweedfs"`,
 		`sslmode = "require"`,
+		// createTable is required by the postgres2 store and must keep a LITERAL
+		// %s placeholder for SeaweedFS to fill with each table name at runtime.
+		"createTable =",
+		`CREATE TABLE IF NOT EXISTS "%s"`,
 	} {
 		if !strings.Contains(toml, want) {
 			t.Errorf("filer.toml missing %q:\n%s", want, toml)
 		}
+	}
+	// A stray %! means our Sprintf consumed SeaweedFS's %s placeholder (the exact
+	// bug that made the filer send `%!(EXTRA ...)` to Postgres).
+	if strings.Contains(toml, "%!") {
+		t.Errorf("filer.toml contains a botched format verb:\n%s", toml)
 	}
 }
 

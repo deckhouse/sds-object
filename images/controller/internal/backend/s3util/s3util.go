@@ -54,8 +54,10 @@ func EnsureBucket(ctx context.Context, mc *minio.Client, name, region string) er
 	return nil
 }
 
-// DeleteBucket empties and removes the bucket (best effort).
-func DeleteBucket(ctx context.Context, mc *minio.Client, name string) error {
+// EmptyBucket removes all objects from the bucket (best effort, idempotent). No
+// error if the bucket does not exist. Some backends (Garage) refuse to delete a
+// non-empty bucket, so callers empty it over S3 before removing it.
+func EmptyBucket(ctx context.Context, mc *minio.Client, name string) error {
 	exists, err := mc.BucketExists(ctx, name)
 	if err != nil {
 		return fmt.Errorf("check bucket %q: %w", name, err)
@@ -69,6 +71,22 @@ func DeleteBucket(ctx context.Context, mc *minio.Client, name string) error {
 		if rerr.Err != nil {
 			return fmt.Errorf("empty bucket %q: %w", name, rerr.Err)
 		}
+	}
+	return nil
+}
+
+// DeleteBucket empties and removes the bucket (best effort).
+func DeleteBucket(ctx context.Context, mc *minio.Client, name string) error {
+	exists, err := mc.BucketExists(ctx, name)
+	if err != nil {
+		return fmt.Errorf("check bucket %q: %w", name, err)
+	}
+	if !exists {
+		return nil
+	}
+
+	if err := EmptyBucket(ctx, mc, name); err != nil {
+		return err
 	}
 
 	if err := mc.RemoveBucket(ctx, name); err != nil {

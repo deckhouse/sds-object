@@ -1,14 +1,14 @@
 # CI-only cluster config for the storage-e2e reusable pipeline (commander
 # provider). It differs from cluster_config.yml in ONE way: the sds-object
 # modulePullOverride is the env reference ${E2E_MODULE_IMAGE_TAG}, resolved by
-# the pipeline's enable-modules step (LoadClusterDefinition) to the PR's image
-# tag. The local-run loader rejects ${...}, which is why this lives in a
-# separate file and cluster_config.yml keeps a literal tag.
+# the bootstrap step (LoadClusterDefinition) to the PR's image tag. The local-run
+# loader rejects ${...}, which is why this lives in a separate file and
+# cluster_config.yml keeps a literal tag.
 #
 # In the commander CI flow only the `modules:` list + dkpParameters.registryRepo
-# are consumed (by enable-modules); the masters/workers/subnets below are present
-# to satisfy validation — the cluster itself is created from the Commander
-# template, not from this block.
+# are consumed (module enablement runs inside bootstrap); the masters/workers/
+# subnets below are present to satisfy validation — the cluster itself is created
+# from the Commander template, not from this block.
 clusterDefinition:
   masters:
     - hostname: "master-1"
@@ -34,10 +34,47 @@ clusterDefinition:
     registryRepo: "dev-registry.deckhouse.io/sys/deckhouse-oss"
     devBranch: "main"
     modules:
+      # SeaweedFS (Full profile) keeps its filer metadata in a shared PostgreSQL
+      # provisioned by managed-postgres. Enabled so the Full e2e specs can run;
+      # harmless for the System/Lightweight (Garage) profiles.
+      - name: "managed-postgres"
+        version: 1
+        enabled: true
+        dependencies: []
+      # Heavy profile (Ceph RGW) is provisioned on top of an sds-elastic
+      # ElasticCluster. sds-elastic vendors Rook and needs sds-node-configurator
+      # (BlockDevices/LVM for OSDs) + csi-ceph (its ElasticCluster readiness
+      # includes a CsiCephReady stage) + snapshot-controller. modulePullOverride
+      # "main" pins the released layer; harmless for the other profiles.
+      - name: "snapshot-controller"
+        version: 1
+        enabled: true
+        modulePullOverride: "main"
+        dependencies: []
+      - name: "sds-node-configurator"
+        version: 1
+        enabled: true
+        settings:
+          enableThinProvisioning: true
+        dependencies: []
+      - name: "csi-ceph"
+        version: 1
+        enabled: true
+        modulePullOverride: "main"
+        dependencies:
+          - "snapshot-controller"
+      - name: "sds-elastic"
+        version: 1
+        enabled: true
+        modulePullOverride: "main"
+        dependencies:
+          - "snapshot-controller"
+          - "sds-node-configurator"
+          - "csi-ceph"
       - name: "sds-object"
         version: 1
         enabled: true
-        # Resolved by enable-modules to the PR image tag (e.g. pr123). The
+        # Resolved during bootstrap to the PR image tag (e.g. pr123). The
         # pipeline exports E2E_MODULE_IMAGE_TAG from the module_image_tag input.
         modulePullOverride: "${E2E_MODULE_IMAGE_TAG}"
         dependencies: []
