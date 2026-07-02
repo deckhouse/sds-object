@@ -41,6 +41,36 @@ clusterDefinition:
         version: 1
         enabled: true
         dependencies: []
+      # Heavy profile (Ceph RGW) is provisioned on top of an sds-elastic
+      # ElasticCluster. sds-elastic vendors Rook and needs sds-node-configurator
+      # (BlockDevices/LVM for OSDs) + csi-ceph (its ElasticCluster readiness
+      # includes a CsiCephReady stage) + snapshot-controller. modulePullOverride
+      # "main" pins the released layer; harmless for the other profiles.
+      - name: "snapshot-controller"
+        version: 1
+        enabled: true
+        modulePullOverride: "main"
+        dependencies: []
+      - name: "sds-node-configurator"
+        version: 1
+        enabled: true
+        settings:
+          enableThinProvisioning: true
+        dependencies: []
+      - name: "csi-ceph"
+        version: 1
+        enabled: true
+        modulePullOverride: "main"
+        dependencies:
+          - "snapshot-controller"
+      - name: "sds-elastic"
+        version: 1
+        enabled: true
+        modulePullOverride: "main"
+        dependencies:
+          - "snapshot-controller"
+          - "sds-node-configurator"
+          - "csi-ceph"
       - name: "sds-object"
         version: 1
         enabled: true
