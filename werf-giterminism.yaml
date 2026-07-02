@@ -6,6 +6,7 @@ config:
       - MODULES_MODULE_TAG
       - WERF_DISABLE_META_TAGS
       - GOPROXY
+      - CARGO_PROXY
       - SOURCE_REPO
       - DISTRO_PACKAGES_PROXY
       - MODULE_EDITION
@@ -17,6 +18,7 @@ config:
   secrets:
     allowValueIds:
       - GOPROXY
+      - CARGO_PROXY
       - SOURCE_REPO
       - DISTRO_PACKAGES_PROXY
   stapel:

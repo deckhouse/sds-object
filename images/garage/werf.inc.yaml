@@ -1,19 +1,70 @@
 {{- /*
   Garage object storage server image.
 
-  Garage ships a single static (musl) binary. We pull the official upstream
-  image as a build artifact and copy the binary into the module's distroless
-  base — mirroring how images/ceph in sds-elastic vendors an upstream artifact.
+  Garage is compiled from source (Rust) with the container-base `rust`/`cargo`
+  toolchain installed via pm into the module's distroless build base — the same
+  approach used by the log-shipper/vector Rust build in Deckhouse.
 
-  NOTE: the upstream tag below is the only place the Garage version is pinned;
+  NOTE: the version below is the only place the Garage version is pinned;
   keep it in sync with garageVersion in
   images/controller/internal/backend/garage.
 */ -}}
 {{- $garageVersion := "v1.0.1" }}
 ---
-image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
-from: dxflrs/garage:{{ $garageVersion }}
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
+from: {{ index $.Images "builder/src" }}
 final: false
+
+secrets:
+- id: SOURCE_REPO
+  value: {{ .SOURCE_REPO }}
+
+shell:
+  install:
+    - git clone --depth 1 --branch {{ $garageVersion }} $(cat /run/secrets/SOURCE_REPO)/deuxfleurs-org/garage.git /src
+    - rm -rf /src/.git
+
+---
+image: {{ .ModuleNamePrefix }}{{ .ImageName }}-artifact
+from: {{ index $.Images "builder/distroless" }}
+final: false
+
+import:
+  - image: {{ .ModuleNamePrefix }}{{ .ImageName }}-src-artifact
+    add: /src
+    to: /src
+    before: install
+
+mount:
+  - from: tmp_dir
+    to: /root/.cargo/registry
+  - from: tmp_dir
+    to: /src/target
+
+secrets:
+- id: CARGO_PROXY
+  value: {{ .CargoProxy }}
+
+shell:
+  install:
+    # rust/cargo + a C toolchain (Garage bundles sqlite/lmdb and links ring,
+    # all of which compile C sources via cc during the build).
+    - pm install rust cargo gnu-gcc gnu-gcc-devel binutils make pkgconf protobuf
+    - export CARGO_HOME=/root/.cargo CARGO_NET_GIT_FETCH_WITH_CLI=true
+    - cd /src
+    - |
+      export CARGO_PROXY=$(cat /run/secrets/CARGO_PROXY)
+      if ! [[ "${CARGO_PROXY}" = "false" ]]; then
+        mkdir -p "${CARGO_HOME}"
+        echo '[source.crates-io]'                              >> "${CARGO_HOME}/config.toml"
+        echo 'replace-with = "crates-io-mirror"'               >> "${CARGO_HOME}/config.toml"
+        echo '[registries.crates-io-mirror]'                   >> "${CARGO_HOME}/config.toml"
+        echo 'index = "sparse+http://'"${CARGO_PROXY}"'/index/"' >> "${CARGO_HOME}/config.toml"
+      fi
+    - cargo build --release --bin garage
+    - cp /src/target/release/garage /garage
+    - strip /garage
+    - chmod 0755 /garage
 
 ---
 image: {{ .ModuleNamePrefix }}{{ .ImageName }}
