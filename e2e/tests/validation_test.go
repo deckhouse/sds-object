@@ -39,17 +39,19 @@ import (
 func validationSpecs() {
 	Describe("validation", func() {
 		It("denies a second System ObjectStorageCluster", func() {
-			if !suiteCfg.isSystem() {
-				Skip("shared cluster is not type System; the single-System webhook guard is not armed")
-			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 
-			second := buildOSC(suiteCfg.oscName + "-2")
+			// The module always ships a `system` System cluster, so any extra
+			// System cluster must be denied regardless of the primary profile.
+			second := newOSC("e2e-extra-system", map[string]interface{}{
+				"type":       string(objectv1alpha1.ClusterTypeSystem),
+				"redundancy": string(objectv1alpha1.RedundancySingle),
+			})
 			err := createOSC(ctx, second)
 			// Best-effort cleanup in case the guard ever regresses and admits it.
 			defer func() {
-				_ = suiteDyn.Resource(objectStorageClusterGVR).Delete(context.Background(), suiteCfg.oscName+"-2", metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(objectStorageClusterGVR).Delete(context.Background(), "e2e-extra-system", metav1.DeleteOptions{})
 			}()
 			expectDenied(err, "only one System ObjectStorageCluster is allowed")
 		})

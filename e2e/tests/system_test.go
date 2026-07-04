@@ -41,10 +41,9 @@ import (
 //   - a `system-d8-namespaces` ObjectStorageBucketPolicy allowing the d8-*
 //     namespaces via a pattern.
 //
-// It does NOT require the system cluster to reach Ready (System runs Garage on
-// control-plane nodes with hostPath, which a nested test cluster may not
-// schedule), so this stays a template-shape smoke check. It skips when the
-// system cluster is absent (systemBucket disabled).
+// It asserts both the CR shape and that the system cluster + bucket are
+// functional (reach Ready and serve an S3 round-trip through a test-scoped
+// access). It skips when the system cluster is absent (systemBucket disabled).
 func systemBucketSpecs() {
 	Describe("system-bucket", func() {
 		const (
@@ -52,9 +51,14 @@ func systemBucketSpecs() {
 			systemBucket  = "system"
 			systemPolicy  = "system-d8-namespaces"
 		)
+		// Auxiliary policy + access the suite creates to consume the shipped
+		// system bucket from the (non-d8-*) test namespace.
+		testPolicy := "system-e2e-" + "policy"
+		testAccess := "system-e2e-access"
+		testSecret := credsSecretName(testAccess)
 
-		It("ships the system ObjectStorageCluster, bucket and policy", func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		It("ships and runs the system ObjectStorageCluster, bucket and policy", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), suiteCfg.oscReadyTimeout+suiteCfg.probeJobTimeout+5*time.Minute)
 			defer cancel()
 
 			osc, err := suiteDyn.Resource(objectStorageClusterGVR).Get(ctx, systemCluster, metav1.GetOptions{})
@@ -89,6 +93,22 @@ func systemBucketSpecs() {
 			Expect(policyBucketRef).To(Equal(systemBucket))
 			patterns, _, _ := unstructured.NestedStringSlice(policy.Object, "spec", "allowedNamespaces", "patterns")
 			Expect(patterns).To(ContainElement("d8-.*"))
+
+			By("waiting for the system cluster and bucket to reach Ready")
+			Expect(waitOSCReady(ctx, systemCluster)).To(Succeed())
+			Expect(waitOSBReady(ctx, systemBucket)).To(Succeed())
+
+			DeferCleanup(func() {
+				bg := context.Background()
+				_ = suiteDyn.Resource(objectStorageBucketAccessGVR).Namespace(suiteCfg.namespace).Delete(bg, testAccess, metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(objectStorageBucketPolicyGVR).Delete(bg, testPolicy, metav1.DeleteOptions{})
+			})
+
+			By("granting the test namespace access to the system bucket and running an S3 round-trip")
+			Expect(createOSBPolicy(ctx, buildOSBPolicy(testPolicy, systemBucket, []string{suiteCfg.namespace}))).To(Succeed())
+			Expect(createOSBAccess(ctx, buildOSBAccess(testAccess, suiteCfg.namespace, systemBucket, objectv1alpha1.AccessReadWrite))).To(Succeed())
+			Expect(waitAccessReady(ctx, suiteCfg.namespace, testAccess)).To(Succeed())
+			Expect(runS3ProbeJob(ctx, "s3-probe-system", suiteCfg.namespace, testSecret)).To(Succeed())
 		})
 	})
 }

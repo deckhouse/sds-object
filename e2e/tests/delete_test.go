@@ -72,6 +72,9 @@ func deleteSpecs() {
 		})
 
 		It("deletes the ObjectStorageCluster", func() {
+			if !oscCreatedBySuite {
+				Skip("primary ObjectStorageCluster " + suiteCfg.oscName + " is module-managed (adopted); not deleting it")
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), resourceGoneTimeout+2*time.Minute)
 			defer cancel()
 

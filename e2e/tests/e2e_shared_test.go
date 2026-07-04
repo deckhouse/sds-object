@@ -63,7 +63,12 @@ const (
 )
 
 const (
-	defaultOSCName     = "e2e-osc"
+	defaultOSCName = "e2e-osc"
+	// systemOSCName is the name of the System ObjectStorageCluster the module
+	// ships automatically (templates/system-object-storage.yaml). When the
+	// primary profile is System the suite adopts this cluster instead of
+	// creating a second one (a second System is denied by the webhook).
+	systemOSCName      = "system"
 	defaultOSCType     = string(objectv1alpha1.ClusterTypeSystem)
 	defaultRedundancy  = string(objectv1alpha1.RedundancySingle)
 	defaultOSCSize     = "5Gi"
@@ -152,6 +157,12 @@ var (
 	suiteClientset        *clientgokube.Clientset
 	suiteDyn              dynamic.Interface
 	suiteClusterResources *cluster.TestClusterResources
+
+	// oscCreatedBySuite records whether createSpecs actually created the primary
+	// ObjectStorageCluster (true) or adopted a module-managed one such as the
+	// shipped `system` cluster (false). deleteSpecs must not delete an adopted
+	// cluster.
+	oscCreatedBySuite bool
 )
 
 func loadConfig() e2eConfig {
@@ -171,11 +182,17 @@ func loadConfig() e2eConfig {
 	if cfg.namespace == "" {
 		cfg.namespace = defaultNamespace
 	}
-	if cfg.oscName == "" {
-		cfg.oscName = defaultOSCName
-	}
 	if cfg.oscType == "" {
 		cfg.oscType = defaultOSCType
+	}
+	if cfg.oscName == "" {
+		// System has no self-created cluster: the module ships one named
+		// "system", which the suite adopts. Other profiles create their own.
+		if cfg.oscType == string(objectv1alpha1.ClusterTypeSystem) {
+			cfg.oscName = systemOSCName
+		} else {
+			cfg.oscName = defaultOSCName
+		}
 	}
 	if cfg.redundancy == "" {
 		cfg.redundancy = defaultRedundancy
@@ -436,6 +453,20 @@ func buildOSBAccess(name, ns, bucketRef string, permission objectv1alpha1.Access
 func createOSC(ctx context.Context, u *unstructured.Unstructured) error {
 	_, err := suiteDyn.Resource(objectStorageClusterGVR).Create(ctx, u, metav1.CreateOptions{})
 	return err
+}
+
+// oscExists reports whether the named (cluster-scoped) ObjectStorageCluster
+// already exists — used to adopt the module-shipped `system` cluster instead of
+// creating a second one.
+func oscExists(ctx context.Context, name string) (bool, error) {
+	_, err := suiteDyn.Resource(objectStorageClusterGVR).Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func createOSB(ctx context.Context, u *unstructured.Unstructured) error {

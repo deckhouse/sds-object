@@ -34,12 +34,24 @@ import (
 // validation and delete specs run on top of the cluster and bucket created here.
 func createSpecs() {
 	Describe("create", func() {
-		It("creates the ObjectStorageCluster and reaches Ready", func() {
+		It("brings up the ObjectStorageCluster and reaches Ready", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), suiteCfg.oscReadyTimeout+2*time.Minute)
 			defer cancel()
 
-			By("creating ObjectStorageCluster " + suiteCfg.oscName)
-			Expect(createOSC(ctx, buildOSC(suiteCfg.oscName))).To(Succeed())
+			// The System profile has no self-created cluster: the module ships a
+			// `system` ObjectStorageCluster automatically (a second System is
+			// denied by the webhook). Adopt it when present; otherwise create the
+			// cluster for the configured profile.
+			exists, err := oscExists(ctx, suiteCfg.oscName)
+			Expect(err).NotTo(HaveOccurred(), "check ObjectStorageCluster %q", suiteCfg.oscName)
+			if exists {
+				By("adopting the module-managed ObjectStorageCluster " + suiteCfg.oscName)
+				oscCreatedBySuite = false
+			} else {
+				By("creating ObjectStorageCluster " + suiteCfg.oscName)
+				Expect(createOSC(ctx, buildOSC(suiteCfg.oscName))).To(Succeed())
+				oscCreatedBySuite = true
+			}
 
 			By("waiting for the cluster Ready condition")
 			Expect(waitOSCReady(ctx, suiteCfg.oscName)).To(Succeed())
