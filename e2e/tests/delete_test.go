@@ -26,29 +26,49 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// deleteSpecs tears down the shared bucket and cluster and asserts the
-// finalizer-driven cleanup: the bucket's credentials Secret is removed with it,
+// deleteSpecs tears down the shared access, bucket policy, bucket and cluster
+// and asserts the finalizer-driven cleanup: deleting the ObjectStorageBucket
+// Access revokes credentials and garbage-collects its owned Secret; deleting the
+// cluster-scoped ObjectStorageBucket (reclaimPolicy=Delete) removes the bucket;
 // and the cluster object disappears once its finalizer releases. These specs run
 // LAST in the Ordered container.
 func deleteSpecs() {
 	Describe("delete", func() {
-		It("deletes the ObjectBucket and its credentials Secret", func() {
+		It("deletes the ObjectStorageBucketAccess and its credentials Secret", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), resourceGoneTimeout+2*time.Minute)
 			defer cancel()
 
-			secretName, err := getStringField(ctx, objectBucketGVR, suiteCfg.namespace, suiteCfg.bucketName, "status", "secretRef", "name")
+			access := accessName(suiteCfg.bucketName)
+			secretName, err := getStringField(ctx, objectStorageBucketAccessGVR, suiteCfg.namespace, access, "status", "secretRef", "name")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(secretName).NotTo(BeEmpty())
 
-			By("deleting ObjectBucket " + suiteCfg.bucketName)
-			Expect(suiteDyn.Resource(objectBucketGVR).Namespace(suiteCfg.namespace).
-				Delete(ctx, suiteCfg.bucketName, metav1.DeleteOptions{})).To(Succeed())
+			By("deleting ObjectStorageBucketAccess " + access)
+			Expect(suiteDyn.Resource(objectStorageBucketAccessGVR).Namespace(suiteCfg.namespace).
+				Delete(ctx, access, metav1.DeleteOptions{})).To(Succeed())
 
-			By("waiting for the bucket object to be gone (finalizer released)")
-			Expect(waitResourceGone(ctx, objectBucketGVR, suiteCfg.namespace, suiteCfg.bucketName, resourceGoneTimeout)).To(Succeed())
+			By("waiting for the access object to be gone (finalizer released)")
+			Expect(waitResourceGone(ctx, objectStorageBucketAccessGVR, suiteCfg.namespace, access, resourceGoneTimeout)).To(Succeed())
 
 			By("waiting for the owned credentials Secret to be garbage-collected")
 			Expect(waitSecretGone(ctx, suiteCfg.namespace, secretName, 2*time.Minute)).To(Succeed())
+		})
+
+		It("deletes the ObjectStorageBucketPolicy and the ObjectStorageBucket", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), resourceGoneTimeout+2*time.Minute)
+			defer cancel()
+
+			By("deleting ObjectStorageBucketPolicy " + policyName(suiteCfg.bucketName))
+			Expect(suiteDyn.Resource(objectStorageBucketPolicyGVR).
+				Delete(ctx, policyName(suiteCfg.bucketName), metav1.DeleteOptions{})).To(Succeed())
+			Expect(waitResourceGone(ctx, objectStorageBucketPolicyGVR, "", policyName(suiteCfg.bucketName), resourceGoneTimeout)).To(Succeed())
+
+			By("deleting ObjectStorageBucket " + suiteCfg.bucketName + " (reclaimPolicy=Delete)")
+			Expect(suiteDyn.Resource(objectStorageBucketGVR).
+				Delete(ctx, suiteCfg.bucketName, metav1.DeleteOptions{})).To(Succeed())
+
+			By("waiting for the bucket object to be gone (finalizer released)")
+			Expect(waitResourceGone(ctx, objectStorageBucketGVR, "", suiteCfg.bucketName, resourceGoneTimeout)).To(Succeed())
 		})
 
 		It("deletes the ObjectStorageCluster", func() {

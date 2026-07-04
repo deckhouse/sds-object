@@ -57,8 +57,10 @@ func initFlags() (config, error) {
 const (
 	port = ":8443"
 
-	ObjectStorageClusterValidatorID = "ObjectStorageClusterValidator"
-	ObjectBucketValidatorID         = "ObjectBucketValidator"
+	ObjectStorageClusterValidatorID      = "ObjectStorageClusterValidator"
+	ObjectStorageBucketValidatorID       = "ObjectStorageBucketValidator"
+	ObjectStorageBucketAccessValidatorID = "ObjectStorageBucketAccessValidator"
+	ObjectStorageBucketPolicyValidatorID = "ObjectStorageBucketPolicyValidator"
 )
 
 func main() {
@@ -95,20 +97,44 @@ func main() {
 		os.Exit(1)
 	}
 
-	obValidatingWebhookHandler, err := handlers.GetValidatingWebhookHandler(
-		validator.ObjectBucketValidate,
-		ObjectBucketValidatorID,
+	osbValidatingWebhookHandler, err := handlers.GetValidatingWebhookHandler(
+		validator.ObjectStorageBucketValidate,
+		ObjectStorageBucketValidatorID,
 		&unstructured.Unstructured{},
 		logger,
 	)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error creating obValidatingWebhookHandler: %s", err)
+		fmt.Fprintf(os.Stderr, "error creating osbValidatingWebhookHandler: %s", err)
+		os.Exit(1)
+	}
+
+	osbaValidatingWebhookHandler, err := handlers.GetValidatingWebhookHandler(
+		validator.ObjectStorageBucketAccessValidate,
+		ObjectStorageBucketAccessValidatorID,
+		&unstructured.Unstructured{},
+		logger,
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error creating osbaValidatingWebhookHandler: %s", err)
+		os.Exit(1)
+	}
+
+	osbpValidatingWebhookHandler, err := handlers.GetValidatingWebhookHandler(
+		validator.ObjectStorageBucketPolicyValidate,
+		ObjectStorageBucketPolicyValidatorID,
+		&unstructured.Unstructured{},
+		logger,
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error creating osbpValidatingWebhookHandler: %s", err)
 		os.Exit(1)
 	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/osc-validate", oscValidatingWebhookHandler)
-	mux.Handle("/ob-validate", obValidatingWebhookHandler)
+	mux.Handle("/osb-validate", osbValidatingWebhookHandler)
+	mux.Handle("/osba-validate", osbaValidatingWebhookHandler)
+	mux.Handle("/osbp-validate", osbpValidatingWebhookHandler)
 	mux.HandleFunc("/healthz", httpHandlerHealthz)
 
 	logger.Infof("Listening on %s", port)

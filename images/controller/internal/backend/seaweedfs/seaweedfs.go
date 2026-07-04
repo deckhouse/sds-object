@@ -26,7 +26,8 @@ limitations under the License.
 // (/etc/iam/identity.json, managed over the filer HTTP API; the S3 gateway
 // subscribes to filer metadata and reloads it) plus the S3 API for the bucket
 // itself. EnsureCluster bootstraps an admin identity used for bucket
-// create/delete; each ObjectBucket gets its own identity scoped to its bucket.
+// create/delete; each ObjectStorageBucketAccess gets its own identity scoped to
+// its bucket.
 package seaweedfs
 
 import (
@@ -105,24 +106,31 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 		}
 	}
 
-	// Shared filer metadata store (managed-postgres). The filer config Secret
-	// can only be rendered once the DB credentials exist.
-	if err := d.ensurePostgres(ctx, cluster); err != nil {
-		if isNoMatch(err) {
-			state.Message = "Postgres CRD not found; is the managed-postgres module installed?"
+	// Filer metadata store. HighRedundancy uses a shared managed-postgres DB
+	// (enables a multi-replica filer HA set); Single/Replicated use the
+	// built-in leveldb2 store on a local PVC (no external dependency).
+	var filerToml string
+	if usesPostgres(cluster) {
+		if err := d.ensurePostgres(ctx, cluster); err != nil {
+			if isNoMatch(err) {
+				state.Message = "Postgres CRD not found; is the managed-postgres module installed?"
+				return state, nil
+			}
+			return state, fmt.Errorf("ensure Postgres: %w", err)
+		}
+		host, user, pass, ok, err := d.pgCreds(ctx, cluster)
+		if err != nil {
+			return state, fmt.Errorf("read Postgres credentials: %w", err)
+		}
+		if !ok {
+			state.Message = "waiting for managed-postgres to provision filer database credentials"
 			return state, nil
 		}
-		return state, fmt.Errorf("ensure Postgres: %w", err)
+		filerToml = renderFilerToml(host, pgPort, user, pass, pgDatabase)
+	} else {
+		filerToml = renderFilerTomlLeveldb(filerStoreDir)
 	}
-	host, user, pass, ok, err := d.pgCreds(ctx, cluster)
-	if err != nil {
-		return state, fmt.Errorf("read Postgres credentials: %w", err)
-	}
-	if !ok {
-		state.Message = "waiting for managed-postgres to provision filer database credentials"
-		return state, nil
-	}
-	cfgSecret := buildFilerConfigSecret(cluster, d.namespace, renderFilerToml(host, pgPort, user, pass, pgDatabase))
+	cfgSecret := buildFilerConfigSecret(cluster, d.namespace, filerToml)
 	if err := d.apply(ctx, cluster, cfgSecret); err != nil {
 		return state, fmt.Errorf("ensure filer config: %w", err)
 	}
@@ -165,17 +173,21 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 	return state, nil
 }
 
-// DeleteCluster is a no-op: the workload and service carry an owner reference to
-// the cluster and are garbage-collected when the CR is removed.
-func (d *Driver) DeleteCluster(_ context.Context, _ *v1alpha1.ObjectStorageCluster) error {
-	return nil
+// DeleteCluster relies on owner-reference GC for the workloads and Services.
+// The StatefulSet PVCs (volume servers, and the filer's leveldb store) are not
+// garbage-collected by Kubernetes, so they persist by default (Retain). Only
+// when the cluster reclaim policy is Delete are they removed.
+func (d *Driver) DeleteCluster(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) error {
+	if cluster.Spec.ReclaimPolicy != v1alpha1.ClusterReclaimDelete {
+		return nil
+	}
+	return backend.DeleteClusterPVCs(ctx, d.client, d.namespace, commonLabels(cluster))
 }
 
-// EnsureBucket creates the bucket and an access key scoped to it. The key is
-// stored as an IAM identity in the filer config; the bucket is created via the
-// S3 API with the admin credentials. Idempotent: an existing access key from
-// the bucket's credentials Secret is reused.
-func (d *Driver) EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectBucket) (backend.BucketState, error) {
+// EnsureBucket creates the bucket via the S3 API with the admin credentials
+// (no per-bucket key — access keys are issued per ObjectStorageBucketAccess).
+// Idempotent.
+func (d *Driver) EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectStorageBucket) (backend.BucketState, error) {
 	adminAK, adminSK, err := d.adminCreds(ctx, cluster)
 	if err != nil {
 		return backend.BucketState{}, err
@@ -184,38 +196,7 @@ func (d *Driver) EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStora
 		return backend.BucketState{Message: "S3 admin identity is not provisioned yet"}, nil
 	}
 
-	name := bucketDisplayName(bucket)
-	filer := newFilerClient(filerEndpoint(cluster, d.namespace, d.clusterDomain))
-
-	cfg, err := filer.readIdentities(ctx)
-	if err != nil {
-		return backend.BucketState{}, fmt.Errorf("read IAM config: %w", err)
-	}
-
-	accessKey, secretKey, err := d.existingCreds(ctx, bucket)
-	if err != nil {
-		return backend.BucketState{}, err
-	}
-	if accessKey == "" || secretKey == "" {
-		if accessKey, err = randomHex(16); err != nil {
-			return backend.BucketState{}, err
-		}
-		if secretKey, err = randomHex(32); err != nil {
-			return backend.BucketState{}, err
-		}
-	}
-
-	identity := s3Identity{
-		Name:        bucketUserName(bucket),
-		Credentials: []s3Credential{{AccessKey: accessKey, SecretKey: secretKey}},
-		Actions:     bucketActions(name),
-	}
-	if cfg.upsert(identity) {
-		if err := filer.writeIdentities(ctx, cfg); err != nil {
-			return backend.BucketState{}, fmt.Errorf("write IAM config: %w", err)
-		}
-	}
-
+	name := backend.BucketDisplayName(bucket)
 	mc, err := s3util.NewClient(s3HostPort(cluster, d.namespace, d.clusterDomain), adminAK, adminSK)
 	if err != nil {
 		return backend.BucketState{}, fmt.Errorf("build S3 client: %w", err)
@@ -224,18 +205,16 @@ func (d *Driver) EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStora
 		return backend.BucketState{}, err
 	}
 
-	return backend.BucketState{
-		Ready:           true,
-		Message:         "bucket and access key provisioned",
-		BucketName:      name,
-		AccessKeyID:     accessKey,
-		SecretAccessKey: secretKey,
-	}, nil
+	return backend.BucketState{Ready: true, Message: "bucket provisioned", BucketName: name}, nil
 }
 
-// DeleteBucket revokes the access key (removes the IAM identity) and, when the
-// reclaim policy is Delete, removes the bucket. Idempotent.
-func (d *Driver) DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectBucket) error {
+// DeleteBucket removes the bucket when the reclaim policy is Delete. Access
+// keys (IAM identities) are removed separately by DeleteAccess. Idempotent.
+func (d *Driver) DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectStorageBucket) error {
+	if bucket.Spec.ReclaimPolicy != v1alpha1.BucketReclaimDelete {
+		return nil
+	}
+
 	adminAK, adminSK, err := d.adminCreds(ctx, cluster)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -247,27 +226,11 @@ func (d *Driver) DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStora
 		return nil
 	}
 
-	filer := newFilerClient(filerEndpoint(cluster, d.namespace, d.clusterDomain))
-	cfg, err := filer.readIdentities(ctx)
+	mc, err := s3util.NewClient(s3HostPort(cluster, d.namespace, d.clusterDomain), adminAK, adminSK)
 	if err != nil {
-		return fmt.Errorf("read IAM config: %w", err)
+		return fmt.Errorf("build S3 client: %w", err)
 	}
-	if cfg.remove(bucketUserName(bucket)) {
-		if err := filer.writeIdentities(ctx, cfg); err != nil {
-			return fmt.Errorf("write IAM config: %w", err)
-		}
-	}
-
-	if bucket.Spec.ReclaimPolicy == v1alpha1.BucketReclaimDelete {
-		mc, err := s3util.NewClient(s3HostPort(cluster, d.namespace, d.clusterDomain), adminAK, adminSK)
-		if err != nil {
-			return fmt.Errorf("build S3 client: %w", err)
-		}
-		if err := s3util.DeleteBucket(ctx, mc, bucketDisplayName(bucket)); err != nil {
-			return err
-		}
-	}
-	return nil
+	return s3util.DeleteBucket(ctx, mc, backend.BucketDisplayName(bucket))
 }
 
 // ensureAdminIdentity makes sure the admin Secret exists and the matching
@@ -348,34 +311,6 @@ func (d *Driver) adminCreds(ctx context.Context, cluster *v1alpha1.ObjectStorage
 		return "", "", err
 	}
 	return string(secret.Data[secretKeyAccessKey]), string(secret.Data[secretKeySecretKey]), nil
-}
-
-// existingCreds reads the access/secret key from the bucket's credentials
-// Secret (empty when it does not exist yet). The name must match
-// credentialsSecretName in the controller package (<bucket>-s3-credentials).
-func (d *Driver) existingCreds(ctx context.Context, bucket *v1alpha1.ObjectBucket) (string, string, error) {
-	secret := &corev1.Secret{}
-	key := client.ObjectKey{Namespace: bucket.Namespace, Name: bucket.Name + "-s3-credentials"}
-	if err := d.apiReader.Get(ctx, key, secret); err != nil {
-		if apierrors.IsNotFound(err) {
-			return "", "", nil
-		}
-		return "", "", err
-	}
-	return string(secret.Data[v1alpha1.SecretKeyAccessKeyID]), string(secret.Data[v1alpha1.SecretKeySecretAccessID]), nil
-}
-
-// bucketDisplayName is the S3 bucket name: spec.bucketName, or metadata.name.
-func bucketDisplayName(bucket *v1alpha1.ObjectBucket) string {
-	if bucket.Spec.BucketName != "" {
-		return bucket.Spec.BucketName
-	}
-	return bucket.Name
-}
-
-// bucketUserName is the IAM identity name for a bucket's access key.
-func bucketUserName(bucket *v1alpha1.ObjectBucket) string {
-	return fmt.Sprintf("%s.%s", bucket.Namespace, bucket.Name)
 }
 
 // apply creates or updates obj, setting the cluster as its controller owner.

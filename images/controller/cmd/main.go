@@ -110,8 +110,16 @@ func main() {
 		log.Error(err, "[main] unable to register ObjectStorageCluster reconciler")
 		os.Exit(1)
 	}
-	if err := controller.AddObjectBucketReconcilerToManager(mgr, cfgParams, log, registry); err != nil {
-		log.Error(err, "[main] unable to register ObjectBucket reconciler")
+	if err := controller.AddObjectStorageBucketReconcilerToManager(mgr, cfgParams, log, registry); err != nil {
+		log.Error(err, "[main] unable to register ObjectStorageBucket reconciler")
+		os.Exit(1)
+	}
+	if err := controller.AddObjectStorageBucketAccessReconcilerToManager(mgr, cfgParams, log, registry); err != nil {
+		log.Error(err, "[main] unable to register ObjectStorageBucketAccess reconciler")
+		os.Exit(1)
+	}
+	if err := controller.AddObjectStorageBucketPolicyReconcilerToManager(mgr, cfgParams, log); err != nil {
+		log.Error(err, "[main] unable to register ObjectStorageBucketPolicy reconciler")
 		os.Exit(1)
 	}
 

@@ -28,21 +28,27 @@ import (
 	objectv1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 )
 
-// postgresGroupVersion is the managed-postgres API that the SeaweedFS (Full)
-// filer stores its metadata in; the Full specs require it to be served.
-const postgresGroupVersion = "managed-services.deckhouse.io/v1alpha1"
-
 // fullOSCReadyTimeout is generous: the Full profile brings up a distributed
-// SeaweedFS (master/volume/filer) AND waits for managed-postgres to provision
-// the shared filer database, which takes longer than a Garage cluster.
+// SeaweedFS (master/volume/filer), which takes longer than a Garage cluster.
 const fullOSCReadyTimeout = 30 * time.Minute
 
-// fullSpecs exercises the Full profile (distributed SeaweedFS whose filer
-// metadata lives in a shared PostgreSQL from the managed-postgres module) on its
-// own cluster, alongside the primary flow: create → bucket + creds Secret → S3
-// round-trip → delete. It needs a StorageClass and the managed-postgres CRD
-// (enabled via cluster_config); it skips when either is missing, or when the
-// primary profile is already Full.
+// fullHRReadyTimeout covers the HighRedundancy Full cluster, which additionally
+// waits for managed-postgres to provision the shared filer database and runs a
+// multi-replica master/volume/filer topology.
+const fullHRReadyTimeout = 40 * time.Minute
+
+// postgresGroupVersion is the managed-postgres API the SeaweedFS filer uses for
+// its shared metadata store in HighRedundancy (multi-filer HA). Single/
+// Replicated use the built-in leveldb store and do NOT require it.
+const postgresGroupVersion = "managed-services.deckhouse.io/v1alpha1"
+
+// fullSpecs exercises the Full profile (SeaweedFS) on its own cluster, alongside
+// the primary flow: create → bucket + creds Secret → S3 round-trip → delete.
+// This spec uses redundancy Single, which stores filer metadata in the built-in
+// leveldb store on a local PVC — so it needs a StorageClass but NOT
+// managed-postgres (that is only required for HighRedundancy multi-filer HA). It
+// skips when no StorageClass is available, or when the primary profile is
+// already Full.
 func fullSpecs() {
 	Describe("full", Ordered, func() {
 		const oscName = "e2e-osc-full"
@@ -60,20 +66,13 @@ func fullSpecs() {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 
-			// Full requires the managed-postgres Postgres CRD (enabled via
-			// cluster_config's modules list). Skip if it is not served.
-			served, err := groupVersionServed(postgresGroupVersion)
-			Expect(err).NotTo(HaveOccurred(), "discover %s", postgresGroupVersion)
-			if !served {
-				Skip("managed-postgres is not installed (" + postgresGroupVersion + " not served); Full needs it for the SeaweedFS filer metadata store")
-			}
-
+			var err error
 			storageClass, err = resolvePVCStorageClass(ctx)
 			Expect(err).NotTo(HaveOccurred(), "resolve StorageClass for Full")
 			if storageClass == "" {
 				Skip("no StorageClass available for Full; set E2E_PVC_STORAGE_CLASS (or E2E_STORAGE_CLASS), or mark a default StorageClass")
 			}
-			GinkgoWriter.Printf("Full profile using StorageClass %q (size %s)\n", storageClass, suiteCfg.oscSize)
+			GinkgoWriter.Printf("Full profile using StorageClass %q (size %s), leveldb metadata store (Single)\n", storageClass, suiteCfg.oscSize)
 		})
 
 		It("creates a Full ObjectStorageCluster (SeaweedFS) and reaches Ready", func() {
@@ -91,7 +90,7 @@ func fullSpecs() {
 			})
 			Expect(createOSC(ctx, osc)).To(Succeed())
 
-			By("waiting for the cluster Ready condition (SeaweedFS + managed-postgres)")
+			By("waiting for the cluster Ready condition (SeaweedFS, leveldb store)")
 			Expect(waitCondition(ctx, objectStorageClusterGVR, "", oscName,
 				objectv1alpha1.OSCConditionReady, "True", fullOSCReadyTimeout)).To(Succeed())
 
@@ -104,19 +103,21 @@ func fullSpecs() {
 			Expect(endpoint).NotTo(BeEmpty())
 		})
 
-		It("provisions a bucket and a complete credentials Secret", func() {
+		It("provisions a bucket, access + policy and a complete credentials Secret", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), suiteCfg.obReadyTimeout+2*time.Minute)
 			defer cancel()
 
-			By("creating ObjectBucket " + bucketName)
-			ob := buildOB(bucketName, suiteCfg.namespace, oscName, objectv1alpha1.BucketReclaimDelete)
-			Expect(createOB(ctx, ob)).To(Succeed())
+			By("creating ObjectStorageBucket " + bucketName)
+			Expect(createOSB(ctx, buildOSB(bucketName, oscName, objectv1alpha1.BucketReclaimDelete))).To(Succeed())
+			Expect(waitOSBReady(ctx, bucketName)).To(Succeed())
 
-			By("waiting for the bucket Ready condition")
-			Expect(waitOBReady(ctx, suiteCfg.namespace, bucketName)).To(Succeed())
+			By("creating policy + ObjectStorageBucketAccess " + accessName(bucketName))
+			Expect(createOSBPolicy(ctx, buildOSBPolicy(policyName(bucketName), bucketName, []string{suiteCfg.namespace}))).To(Succeed())
+			Expect(createOSBAccess(ctx, buildOSBAccess(accessName(bucketName), suiteCfg.namespace, bucketName, objectv1alpha1.AccessReadWrite))).To(Succeed())
+			Expect(waitAccessReady(ctx, suiteCfg.namespace, accessName(bucketName))).To(Succeed())
 
 			var err error
-			secretName, err = getStringField(ctx, objectBucketGVR, suiteCfg.namespace, bucketName, "status", "secretRef", "name")
+			secretName, err = getStringField(ctx, objectStorageBucketAccessGVR, suiteCfg.namespace, accessName(bucketName), "status", "secretRef", "name")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(secretName).NotTo(BeEmpty())
 
@@ -136,21 +137,125 @@ func fullSpecs() {
 			Expect(runS3ProbeJob(ctx, "s3-probe-full", suiteCfg.namespace, secretName)).To(Succeed())
 		})
 
-		It("deletes the Full bucket and cluster", func() {
+		It("deletes the Full access, bucket and cluster", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), resourceGoneTimeout+2*time.Minute)
 			defer cancel()
 
-			By("deleting ObjectBucket " + bucketName)
-			Expect(suiteDyn.Resource(objectBucketGVR).Namespace(suiteCfg.namespace).
-				Delete(ctx, bucketName, metav1.DeleteOptions{})).To(Succeed())
-			Expect(waitResourceGone(ctx, objectBucketGVR, suiteCfg.namespace, bucketName, resourceGoneTimeout)).To(Succeed())
+			By("deleting ObjectStorageBucketAccess " + accessName(bucketName))
+			Expect(suiteDyn.Resource(objectStorageBucketAccessGVR).Namespace(suiteCfg.namespace).
+				Delete(ctx, accessName(bucketName), metav1.DeleteOptions{})).To(Succeed())
+			Expect(waitResourceGone(ctx, objectStorageBucketAccessGVR, suiteCfg.namespace, accessName(bucketName), resourceGoneTimeout)).To(Succeed())
 			if secretName != "" {
 				Expect(waitSecretGone(ctx, suiteCfg.namespace, secretName, 2*time.Minute)).To(Succeed())
 			}
 
+			By("deleting ObjectStorageBucketPolicy + ObjectStorageBucket " + bucketName)
+			_ = suiteDyn.Resource(objectStorageBucketPolicyGVR).Delete(ctx, policyName(bucketName), metav1.DeleteOptions{})
+			Expect(suiteDyn.Resource(objectStorageBucketGVR).
+				Delete(ctx, bucketName, metav1.DeleteOptions{})).To(Succeed())
+			Expect(waitResourceGone(ctx, objectStorageBucketGVR, "", bucketName, resourceGoneTimeout)).To(Succeed())
+
 			By("deleting ObjectStorageCluster " + oscName)
 			Expect(suiteDyn.Resource(objectStorageClusterGVR).
 				Delete(ctx, oscName, metav1.DeleteOptions{})).To(Succeed())
+			Expect(waitResourceGone(ctx, objectStorageClusterGVR, "", oscName, resourceGoneTimeout)).To(Succeed())
+		})
+	})
+}
+
+// fullHighRedundancySpecs exercises the Full profile at redundancy
+// HighRedundancy, which runs a multi-replica master/volume/filer topology whose
+// filer metadata lives in a SHARED PostgreSQL provisioned via the
+// managed-postgres module (contrast fullSpecs, which uses Single/leveldb). It
+// needs a StorageClass AND the managed-postgres CRD, and skips when either is
+// missing.
+func fullHighRedundancySpecs() {
+	Describe("full-highredundancy", Ordered, func() {
+		const oscName = "e2e-osc-full-hr"
+		const bucketName = "e2e-full-hr-bucket"
+
+		var (
+			storageClass string
+			secretName   string
+		)
+
+		BeforeAll(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+
+			// HighRedundancy is the mode that requires managed-postgres.
+			served, err := groupVersionServed(postgresGroupVersion)
+			Expect(err).NotTo(HaveOccurred(), "discover %s", postgresGroupVersion)
+			if !served {
+				Skip("managed-postgres is not installed (" + postgresGroupVersion + " not served); HighRedundancy Full needs it for the shared filer metadata store")
+			}
+
+			storageClass, err = resolvePVCStorageClass(ctx)
+			Expect(err).NotTo(HaveOccurred(), "resolve StorageClass for HighRedundancy Full")
+			if storageClass == "" {
+				Skip("no StorageClass available for Full; set E2E_PVC_STORAGE_CLASS (or E2E_STORAGE_CLASS), or mark a default StorageClass")
+			}
+			GinkgoWriter.Printf("HighRedundancy Full using StorageClass %q, shared managed-postgres metadata store\n", storageClass)
+		})
+
+		It("creates a HighRedundancy Full cluster (SeaweedFS + managed-postgres) and reaches Ready", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), fullHRReadyTimeout+2*time.Minute)
+			defer cancel()
+
+			osc := newOSC(oscName, map[string]interface{}{
+				"type":       string(objectv1alpha1.ClusterTypeFull),
+				"redundancy": string(objectv1alpha1.RedundancyHighRedundancy),
+				"storage": map[string]interface{}{
+					"size":  suiteCfg.oscSize,
+					"class": storageClass,
+				},
+			})
+			Expect(createOSC(ctx, osc)).To(Succeed())
+
+			By("waiting for the cluster Ready condition (multi-filer HA on PostgreSQL)")
+			Expect(waitCondition(ctx, objectStorageClusterGVR, "", oscName,
+				objectv1alpha1.OSCConditionReady, "True", fullHRReadyTimeout)).To(Succeed())
+
+			backend, err := getStringField(ctx, objectStorageClusterGVR, "", oscName, "status", "backend", "type")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(backend).To(Equal(string(objectv1alpha1.BackendSeaweedFS)))
+		})
+
+		It("provisions a bucket, access + policy and performs an S3 round-trip", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), suiteCfg.obReadyTimeout+suiteCfg.probeJobTimeout+3*time.Minute)
+			defer cancel()
+
+			Expect(createOSB(ctx, buildOSB(bucketName, oscName, objectv1alpha1.BucketReclaimDelete))).To(Succeed())
+			Expect(waitOSBReady(ctx, bucketName)).To(Succeed())
+
+			Expect(createOSBPolicy(ctx, buildOSBPolicy(policyName(bucketName), bucketName, []string{suiteCfg.namespace}))).To(Succeed())
+			Expect(createOSBAccess(ctx, buildOSBAccess(accessName(bucketName), suiteCfg.namespace, bucketName, objectv1alpha1.AccessReadWrite))).To(Succeed())
+			Expect(waitAccessReady(ctx, suiteCfg.namespace, accessName(bucketName))).To(Succeed())
+
+			var err error
+			secretName, err = getStringField(ctx, objectStorageBucketAccessGVR, suiteCfg.namespace, accessName(bucketName), "status", "secretRef", "name")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(secretName).NotTo(BeEmpty())
+
+			Expect(runS3ProbeJob(ctx, "s3-probe-full-hr", suiteCfg.namespace, secretName)).To(Succeed())
+		})
+
+		It("deletes the HighRedundancy Full access, bucket and cluster", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), resourceGoneTimeout+2*time.Minute)
+			defer cancel()
+
+			Expect(suiteDyn.Resource(objectStorageBucketAccessGVR).Namespace(suiteCfg.namespace).
+				Delete(ctx, accessName(bucketName), metav1.DeleteOptions{})).To(Succeed())
+			Expect(waitResourceGone(ctx, objectStorageBucketAccessGVR, suiteCfg.namespace, accessName(bucketName), resourceGoneTimeout)).To(Succeed())
+			if secretName != "" {
+				Expect(waitSecretGone(ctx, suiteCfg.namespace, secretName, 2*time.Minute)).To(Succeed())
+			}
+
+			_ = suiteDyn.Resource(objectStorageBucketPolicyGVR).Delete(ctx, policyName(bucketName), metav1.DeleteOptions{})
+			Expect(suiteDyn.Resource(objectStorageBucketGVR).Delete(ctx, bucketName, metav1.DeleteOptions{})).To(Succeed())
+			Expect(waitResourceGone(ctx, objectStorageBucketGVR, "", bucketName, resourceGoneTimeout)).To(Succeed())
+
+			Expect(suiteDyn.Resource(objectStorageClusterGVR).Delete(ctx, oscName, metav1.DeleteOptions{})).To(Succeed())
 			Expect(waitResourceGone(ctx, objectStorageClusterGVR, "", oscName, resourceGoneTimeout)).To(Succeed())
 		})
 	})

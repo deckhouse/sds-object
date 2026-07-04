@@ -40,6 +40,9 @@ const (
 	volumeGRPC  = 18080
 	dataMount   = "/data"
 	configMount = "/etc/seaweedfs"
+	// filerStoreDir is the leveldb2 metadata directory on the filer data PVC
+	// (Single/Replicated profiles).
+	filerStoreDir = dataMount + "/filerldb2"
 
 	registryPullSecret = "deckhouse-registry"
 	// s3Region is advertised by the SeaweedFS S3 gateway.
@@ -168,11 +171,14 @@ func rootSecurityContext() *corev1.PodSecurityContext {
 	return &corev1.PodSecurityContext{RunAsUser: ptrInt64(0), RunAsGroup: ptrInt64(0), FSGroup: ptrInt64(0)}
 }
 
+// filerStoreSize is the PVC size for the filer's local leveldb metadata store.
+var filerStoreSize = resource.MustParse("2Gi")
+
 // dataPVC is a per-pod PersistentVolumeClaim template named "data".
 func dataPVC(cluster *v1alpha1.ObjectStorageCluster, size resource.Quantity) corev1.PersistentVolumeClaim {
 	sc := storageClass(cluster)
 	return corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{Name: "data"},
+		ObjectMeta: metav1.ObjectMeta{Name: "data", Labels: commonLabels(cluster)},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 			StorageClassName: &sc,
@@ -314,13 +320,22 @@ func buildVolumeStatefulSet(cluster *v1alpha1.ObjectStorageCluster, namespace, i
 	return statefulSet(cluster, namespace, compVolume, volumes, c, []corev1.PersistentVolumeClaim{dataPVC(cluster, storageSize(cluster))}, nil)
 }
 
-// buildFilerStatefulSet runs the filer + S3 gateway with `filerReplicas`
-// replicas. Filer metadata lives in the shared managed-postgres store
-// (postgres2) configured via the mounted filer.toml Secret, so replicas are
-// stateless (no local PVC) and form an HA set. Started WITHOUT -s3.config so
-// the gateway uses the filer-stored IAM config (/etc/iam/identity.json) the
-// bucket reconciler manages and the gateway reloads automatically.
+// buildFilerStatefulSet runs the filer + S3 gateway. For HighRedundancy the
+// filer metadata lives in the shared managed-postgres store (postgres2) so the
+// replicas are stateless (no local PVC) and form an HA set. For Single/
+// Replicated the filer uses the built-in leveldb2 store on a local `data` PVC,
+// so it runs as a single replica. The store is selected entirely by the mounted
+// filer.toml Secret. Started WITHOUT -s3.config so the gateway uses the
+// filer-stored IAM config (/etc/iam/identity.json) the access reconciler
+// manages and the gateway reloads automatically.
 func buildFilerStatefulSet(cluster *v1alpha1.ObjectStorageCluster, namespace, image string) *appsv1.StatefulSet {
+	mounts := []corev1.VolumeMount{{Name: "config", MountPath: configMount}}
+	var pvcs []corev1.PersistentVolumeClaim
+	if !usesPostgres(cluster) {
+		mounts = append(mounts, corev1.VolumeMount{Name: "data", MountPath: dataMount})
+		pvcs = []corev1.PersistentVolumeClaim{dataPVC(cluster, filerStoreSize)}
+	}
+
 	c := corev1.Container{
 		Name:    "filer",
 		Image:   image,
@@ -339,9 +354,7 @@ func buildFilerStatefulSet(cluster *v1alpha1.ObjectStorageCluster, namespace, im
 			{Name: "grpc", ContainerPort: filerGRPC},
 			{Name: "s3", ContainerPort: s3Port},
 		},
-		VolumeMounts: []corev1.VolumeMount{
-			{Name: "config", MountPath: configMount},
-		},
+		VolumeMounts:   mounts,
 		ReadinessProbe: tcpProbe(s3Port),
 		Resources:      requests("100m", "256Mi"),
 	}
@@ -351,7 +364,7 @@ func buildFilerStatefulSet(cluster *v1alpha1.ObjectStorageCluster, namespace, im
 			SecretName: filerConfigName(cluster),
 		}},
 	}}
-	return statefulSet(cluster, namespace, compFiler, filerReplicas(cluster), c, nil, volumes)
+	return statefulSet(cluster, namespace, compFiler, filerReplicas(cluster), c, pvcs, volumes)
 }
 
 func requests(cpu, mem string) corev1.ResourceRequirements {

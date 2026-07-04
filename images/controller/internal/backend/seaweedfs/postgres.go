@@ -73,17 +73,23 @@ func pgCredsSecretName(cluster *v1alpha1.ObjectStorageCluster) string {
 	return componentName(cluster, "pg") + "-creds"
 }
 
+// usesPostgres reports whether the filer metadata store is the shared
+// managed-postgres database. Only HighRedundancy uses it (to run a multi-replica
+// filer HA set); Single and Replicated use SeaweedFS's built-in leveldb store on
+// a local PVC, which avoids the managed-postgres dependency but is single-filer.
+func usesPostgres(cluster *v1alpha1.ObjectStorageCluster) bool {
+	return cluster.Spec.Redundancy == v1alpha1.RedundancyHighRedundancy
+}
+
 // filerReplicas is the number of filer (S3 gateway) replicas, derived from the
-// redundancy intent. >1 needs the shared Postgres store (this file).
+// redundancy intent. Only HighRedundancy runs more than one, backed by the
+// shared Postgres store; Single/Replicated run a single filer on a local
+// leveldb store (a node-local store cannot be shared across replicas).
 func filerReplicas(cluster *v1alpha1.ObjectStorageCluster) int32 {
-	switch cluster.Spec.Redundancy {
-	case v1alpha1.RedundancySingle:
-		return 1
-	case v1alpha1.RedundancyHighRedundancy:
+	if usesPostgres(cluster) {
 		return 3
-	default: // Replicated or unset
-		return 2
 	}
+	return 1
 }
 
 // buildPostgres returns the managed-postgres Postgres CR backing the filer
@@ -157,6 +163,15 @@ CREATE TABLE IF NOT EXISTS "%%s" (
 );
 """
 `, host, port, user, password, database)
+}
+
+// renderFilerTomlLeveldb renders filer.toml configuring the built-in leveldb2
+// store on the local data volume (used for Single/Replicated, no external DB).
+func renderFilerTomlLeveldb(dir string) string {
+	return fmt.Sprintf(`[leveldb2]
+enabled = true
+dir = "%s"
+`, dir)
 }
 
 // buildFilerConfigSecret holds filer.toml (with the DB password), mounted by

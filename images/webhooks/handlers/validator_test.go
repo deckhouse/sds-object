@@ -28,21 +28,22 @@ import (
 
 func listKinds() map[schema.GroupVersionResource]string {
 	return map[schema.GroupVersionResource]string{
-		objectStorageClusterGVR: "ObjectStorageClusterList",
-		objectBucketGVR:         "ObjectBucketList",
-		elasticClusterGVR:       "ElasticClusterList",
+		objectStorageClusterGVR:      "ObjectStorageClusterList",
+		objectStorageBucketGVR:       "ObjectStorageBucketList",
+		objectStorageBucketPolicyGVR: "ObjectStorageBucketPolicyList",
+		elasticClusterGVR:            "ElasticClusterList",
 	}
 }
 
-func obObj(ns, name, bucketName string) *unstructured.Unstructured {
+func obObj(name, bucketName string) *unstructured.Unstructured {
 	spec := map[string]interface{}{"clusterRef": "c1"}
 	if bucketName != "" {
 		spec["bucketName"] = bucketName
 	}
 	return &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "storage.deckhouse.io/v1alpha1",
-		"kind":       "ObjectBucket",
-		"metadata":   map[string]interface{}{"namespace": ns, "name": name},
+		"kind":       "ObjectStorageBucket",
+		"metadata":   map[string]interface{}{"name": name},
 		"spec":       spec,
 	}}
 }
@@ -62,36 +63,36 @@ func newFakeValidator(objs ...runtime.Object) *Validator {
 }
 
 func TestEffectiveBucketName(t *testing.T) {
-	if got := effectiveBucketName(obObj("a", "data", "")); got != "data" {
+	if got := effectiveBucketName(obObj("data", "")); got != "data" {
 		t.Errorf("effectiveBucketName(default)=%q, want data", got)
 	}
-	if got := effectiveBucketName(obObj("a", "data", "custom")); got != "custom" {
+	if got := effectiveBucketName(obObj("data", "custom")); got != "custom" {
 		t.Errorf("effectiveBucketName(explicit)=%q, want custom", got)
 	}
 }
 
-func TestObjectBucketValidate(t *testing.T) {
+func TestObjectStorageBucketValidate(t *testing.T) {
 	// Existing bucket "x" on cluster c1.
-	v := newFakeValidator(obObj("a", "x", ""))
+	v := newFakeValidator(obObj("x", ""))
 
 	// Duplicate effective name on the same cluster -> deny.
-	dup := obObj("b", "y", "x")
-	res, err := v.ObjectBucketValidate(context.Background(), nil, dup)
+	dup := obObj("y", "x")
+	res, err := v.ObjectStorageBucketValidate(context.Background(), nil, dup)
 	if err != nil {
-		t.Fatalf("ObjectBucketValidate(dup): %v", err)
+		t.Fatalf("ObjectStorageBucketValidate(dup): %v", err)
 	}
 	if res.Valid {
-		t.Errorf("ObjectBucketValidate(dup): want deny, got allow")
+		t.Errorf("ObjectStorageBucketValidate(dup): want deny, got allow")
 	}
 
 	// Unique name -> allow (clusterRef missing only yields a warning).
-	uniq := obObj("b", "y", "")
-	res, err = v.ObjectBucketValidate(context.Background(), nil, uniq)
+	uniq := obObj("y", "")
+	res, err = v.ObjectStorageBucketValidate(context.Background(), nil, uniq)
 	if err != nil {
-		t.Fatalf("ObjectBucketValidate(uniq): %v", err)
+		t.Fatalf("ObjectStorageBucketValidate(uniq): %v", err)
 	}
 	if !res.Valid {
-		t.Errorf("ObjectBucketValidate(uniq): want allow, got deny (%s)", res.Message)
+		t.Errorf("ObjectStorageBucketValidate(uniq): want allow, got deny (%s)", res.Message)
 	}
 }
 

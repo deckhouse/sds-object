@@ -29,14 +29,17 @@ import (
 )
 
 // dumpFailedSpecDiagnostics prints, on any spec failure, the state most useful
-// for triage: the shared OSC and OB (status + conditions), the module's pods,
-// and recent events in the module + test namespaces. All lookups are
-// best-effort — diagnostics must never panic or mask the original failure.
+// for triage: the shared OSC, OSB, OSBPolicy and OSBAccess (status +
+// conditions), the module's pods, and recent events in the module + test
+// namespaces. All lookups are best-effort — diagnostics must never panic or mask
+// the original failure.
 func dumpFailedSpecDiagnostics(ctx context.Context) {
 	GinkgoWriter.Printf("\n========== sds-object e2e diagnostics ==========\n")
 
 	dumpDynamic(ctx, objectStorageClusterGVR, "", suiteCfg.oscName, "ObjectStorageCluster")
-	dumpDynamic(ctx, objectBucketGVR, suiteCfg.namespace, suiteCfg.bucketName, "ObjectBucket")
+	dumpDynamic(ctx, objectStorageBucketGVR, "", suiteCfg.bucketName, "ObjectStorageBucket")
+	dumpDynamic(ctx, objectStorageBucketPolicyGVR, "", policyName(suiteCfg.bucketName), "ObjectStorageBucketPolicy")
+	dumpDynamic(ctx, objectStorageBucketAccessGVR, suiteCfg.namespace, accessName(suiteCfg.bucketName), "ObjectStorageBucketAccess")
 
 	dumpPods(ctx, moduleNS)
 	dumpEvents(ctx, moduleNS)

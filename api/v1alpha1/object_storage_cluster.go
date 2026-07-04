@@ -26,8 +26,8 @@ import (
 // of an S3-compatible object storage cluster managed by the sds-object module.
 // A single spec.type selects one of four turnkey profiles; the backend
 // (Garage / SeaweedFS / Ceph RGW) and its low-level settings are hidden from the
-// user. Buckets are declared separately in namespaced ObjectBucket resources
-// that reference this cluster by name.
+// user. Buckets are declared separately in cluster-scoped ObjectStorageBucket
+// resources that reference this cluster by name.
 //
 // +kubebuilder:resource:scope=Cluster,shortName=osc
 // +kubebuilder:subresource:status
@@ -90,6 +90,22 @@ const (
 	RedundancyHighRedundancy RedundancyMode = "HighRedundancy"
 )
 
+// ClusterReclaimPolicy controls what happens to the backend data plane and its
+// persisted data when the ObjectStorageCluster is deleted.
+// +kubebuilder:validation:Enum=Retain;Delete
+type ClusterReclaimPolicy string
+
+const (
+	// ClusterReclaimRetain preserves the backend's persisted data on cluster
+	// deletion (for Heavy this keeps the Ceph RGW pools intact). The data
+	// plane workloads are still removed, but no stored objects are destroyed.
+	ClusterReclaimRetain ClusterReclaimPolicy = "Retain"
+
+	// ClusterReclaimDelete destroys the backend's persisted data on cluster
+	// deletion (PVCs, hostPath data, or Ceph RGW pools).
+	ClusterReclaimDelete ClusterReclaimPolicy = "Delete"
+)
+
 // +k8s:deepcopy-gen=true
 type ObjectStorageClusterSpec struct {
 	// Type selects the cluster profile. Immutable after creation.
@@ -110,6 +126,13 @@ type ObjectStorageClusterSpec struct {
 	// type=System (forced onto control-plane nodes).
 	// +optional
 	Placement *PlacementSpec `json:"placement,omitempty"`
+
+	// ReclaimPolicy controls what happens to the backend data plane and its
+	// stored data when the ObjectStorageCluster is deleted. Defaults to
+	// Retain, which preserves persisted data (for Heavy this keeps the Ceph
+	// RGW pools intact). Immutable after creation.
+	// +kubebuilder:default=Retain
+	ReclaimPolicy ClusterReclaimPolicy `json:"reclaimPolicy,omitempty"`
 
 	// ElasticClusterRef is the name of the ElasticCluster (sds-elastic) the
 	// CephObjectStore is provisioned on. Required and only allowed when
@@ -256,7 +279,7 @@ const (
 // dynamic GVK lookups.
 const ObjectStorageClusterKind = "ObjectStorageCluster"
 
-// Status.phase values shared across ObjectStorageCluster and ObjectBucket.
+// Status.phase values shared across the module's CRs.
 const (
 	PhasePending    = "Pending"
 	PhaseInProgress = "InProgress"

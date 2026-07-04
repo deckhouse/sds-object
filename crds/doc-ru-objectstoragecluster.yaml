@@ -9,8 +9,8 @@ spec:
             один из четырёх готовых профилей; бэкенд (Garage / SeaweedFS / Ceph RGW)
             и его низкоуровневые настройки скрыты от пользователя (noops).
 
-            Бакеты и их S3-учётные данные описываются отдельно — в namespaced-ресурсах
-            ObjectBucket, ссылающихся на этот кластер по имени.
+            Бакеты описываются отдельно — в cluster-scoped ресурсах
+            ObjectStorageBucket, ссылающихся на этот кластер по имени.
           properties:
             spec:
               description: |
@@ -74,6 +74,19 @@ spec:
                       description: |
                         Tolerations для подов дата-плейна (как `spec.tolerations`
                         у пода).
+                reclaimPolicy:
+                  description: |
+                    Что происходит с дата-плейном бэкенда и его данными при
+                    удалении ObjectStorageCluster.
+
+                    - `Retain` (по умолчанию) — данные сохраняются. Для `Heavy`
+                      пулы Ceph RGW сохраняются (`preservePoolsOnDelete: true`)
+                      и CephObjectStore не удаляется; для остальных профилей
+                      PVC/hostPath-данные остаются на месте.
+                    - `Delete` — данные бэкенда (PVC, hostPath, пулы Ceph RGW)
+                      уничтожаются.
+
+                    Неизменяемо после создания.
                 elasticClusterRef:
                   description: |
                     Имя ElasticCluster (sds-elastic), на котором создаётся

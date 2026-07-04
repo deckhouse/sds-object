@@ -24,6 +24,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
+	"github.com/deckhouse/sds-object/images/controller/internal/backend"
 )
 
 func cluster(name string, r v1alpha1.RedundancyMode) *v1alpha1.ObjectStorageCluster {
@@ -100,19 +101,20 @@ func TestNamesAndEndpoints(t *testing.T) {
 }
 
 func TestBucketAndKeyNames(t *testing.T) {
-	def := &v1alpha1.ObjectBucket{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "app"}}
-	if got := bucketDisplayName(def); got != "data" {
-		t.Errorf("bucketDisplayName(default)=%q, want data", got)
+	def := &v1alpha1.ObjectStorageBucket{ObjectMeta: metav1.ObjectMeta{Name: "data"}}
+	if got := backend.BucketDisplayName(def); got != "data" {
+		t.Errorf("BucketDisplayName(default)=%q, want data", got)
 	}
-	explicit := &v1alpha1.ObjectBucket{
-		ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "app"},
-		Spec:       v1alpha1.ObjectBucketSpec{BucketName: "custom"},
+	explicit := &v1alpha1.ObjectStorageBucket{
+		ObjectMeta: metav1.ObjectMeta{Name: "data"},
+		Spec:       v1alpha1.ObjectStorageBucketSpec{BucketName: "custom"},
 	}
-	if got := bucketDisplayName(explicit); got != "custom" {
-		t.Errorf("bucketDisplayName(explicit)=%q, want custom", got)
+	if got := backend.BucketDisplayName(explicit); got != "custom" {
+		t.Errorf("BucketDisplayName(explicit)=%q, want custom", got)
 	}
-	if got := keyDisplayName(explicit, "custom"); got != "app.custom" {
-		t.Errorf("keyDisplayName=%q, want app.custom", got)
+	access := &v1alpha1.ObjectStorageBucketAccess{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "app"}}
+	if got := backend.AccessResourceName(access); got != "app.data" {
+		t.Errorf("AccessResourceName=%q, want app.data", got)
 	}
 }
 

@@ -1,0 +1,94 @@
+/*
+Copyright 2026 Flant JSC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package tests
+
+import (
+	"context"
+	"time"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	objectv1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
+)
+
+// systemBucketSpecs verifies the built-in system object storage shipped by the
+// module templates (templates/system-object-storage.yaml), gated by the
+// sdsObject.systemBucket.enabled config value (default true). It asserts the
+// three CRs exist and carry the expected shape:
+//   - a cluster-scoped `system` ObjectStorageCluster of type System, whose
+//     redundancy follows the cluster HA mode (Replicated in HA, else Single),
+//     with reclaimPolicy Retain;
+//   - a cluster-scoped `system` ObjectStorageBucket referencing it;
+//   - a `system-d8-namespaces` ObjectStorageBucketPolicy allowing the d8-*
+//     namespaces via a pattern.
+//
+// It does NOT require the system cluster to reach Ready (System runs Garage on
+// control-plane nodes with hostPath, which a nested test cluster may not
+// schedule), so this stays a template-shape smoke check. It skips when the
+// system cluster is absent (systemBucket disabled).
+func systemBucketSpecs() {
+	Describe("system-bucket", func() {
+		const (
+			systemCluster = "system"
+			systemBucket  = "system"
+			systemPolicy  = "system-d8-namespaces"
+		)
+
+		It("ships the system ObjectStorageCluster, bucket and policy", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+
+			osc, err := suiteDyn.Resource(objectStorageClusterGVR).Get(ctx, systemCluster, metav1.GetOptions{})
+			if apierrors.IsNotFound(err) {
+				Skip("system ObjectStorageCluster not present (sdsObject.systemBucket.enabled is false)")
+			}
+			Expect(err).NotTo(HaveOccurred(), "get system ObjectStorageCluster")
+
+			By("asserting the system cluster is type System with reclaimPolicy Retain")
+			clusterType, _, _ := unstructured.NestedString(osc.Object, "spec", "type")
+			Expect(clusterType).To(Equal(string(objectv1alpha1.ClusterTypeSystem)))
+			reclaim, _, _ := unstructured.NestedString(osc.Object, "spec", "reclaimPolicy")
+			Expect(reclaim).To(Equal(string(objectv1alpha1.ClusterReclaimRetain)))
+
+			By("asserting redundancy follows the HA mode (Replicated or Single)")
+			redundancy, _, _ := unstructured.NestedString(osc.Object, "spec", "redundancy")
+			Expect(redundancy).To(Or(
+				Equal(string(objectv1alpha1.RedundancyReplicated)),
+				Equal(string(objectv1alpha1.RedundancySingle)),
+			), "system cluster redundancy is HA-dependent")
+
+			By("asserting the system ObjectStorageBucket references the system cluster")
+			osb, err := suiteDyn.Resource(objectStorageBucketGVR).Get(ctx, systemBucket, metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred(), "get system ObjectStorageBucket")
+			bucketClusterRef, _, _ := unstructured.NestedString(osb.Object, "spec", "clusterRef")
+			Expect(bucketClusterRef).To(Equal(systemCluster))
+
+			By("asserting the system policy grants the d8-* namespaces by pattern")
+			policy, err := suiteDyn.Resource(objectStorageBucketPolicyGVR).Get(ctx, systemPolicy, metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred(), "get system ObjectStorageBucketPolicy")
+			policyBucketRef, _, _ := unstructured.NestedString(policy.Object, "spec", "bucketRef")
+			Expect(policyBucketRef).To(Equal(systemBucket))
+			patterns, _, _ := unstructured.NestedStringSlice(policy.Object, "spec", "allowedNamespaces", "patterns")
+			Expect(patterns).To(ContainElement("d8-.*"))
+		})
+	})
+}

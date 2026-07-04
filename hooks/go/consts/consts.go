@@ -35,14 +35,18 @@ var AllowedProvisioners = []string{}
 // module-delete hook removes on uninstall.
 var WebhookConfigurationsToDelete = []string{
 	"d8-sds-object-object-storage-cluster-validation",
-	"d8-sds-object-object-bucket-validation",
+	"d8-sds-object-object-storage-bucket-validation",
+	"d8-sds-object-object-storage-bucket-access-validation",
+	"d8-sds-object-object-storage-bucket-policy-validation",
 }
 
 // CRGVKsForFinalizerRemoval lists CRs the module creates and which may carry a
 // controller-managed finalizer, stripped on module delete.
 var CRGVKsForFinalizerRemoval = []CRGVK{
 	{Group: "storage.deckhouse.io", Version: "v1alpha1", Kind: "ObjectStorageCluster", Namespaced: false},
-	{Group: "storage.deckhouse.io", Version: "v1alpha1", Kind: "ObjectBucket", Namespaced: true},
+	{Group: "storage.deckhouse.io", Version: "v1alpha1", Kind: "ObjectStorageBucket", Namespaced: false},
+	{Group: "storage.deckhouse.io", Version: "v1alpha1", Kind: "ObjectStorageBucketAccess", Namespaced: true},
+	{Group: "storage.deckhouse.io", Version: "v1alpha1", Kind: "ObjectStorageBucketPolicy", Namespaced: false},
 }
 
 type CRGVK struct {

@@ -19,10 +19,12 @@ package seaweedfs
 import (
 	"reflect"
 	"testing"
+
+	v1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 )
 
 func TestBucketActions(t *testing.T) {
-	got := bucketActions("media")
+	got := bucketActions("media", v1alpha1.AccessReadWrite)
 	want := []string{"Read:media", "Write:media", "List:media", "Tagging:media"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("bucketActions=%v, want %v", got, want)
@@ -35,7 +37,7 @@ func TestIdentityConfigUpsert(t *testing.T) {
 	id := s3Identity{
 		Name:        "ns.bucket",
 		Credentials: []s3Credential{{AccessKey: "ak", SecretKey: "sk"}},
-		Actions:     bucketActions("bucket"),
+		Actions:     bucketActions("bucket", v1alpha1.AccessReadWrite),
 	}
 
 	if !cfg.upsert(id) {
@@ -57,7 +59,7 @@ func TestIdentityConfigUpsert(t *testing.T) {
 	rotated := s3Identity{
 		Name:        "ns.bucket",
 		Credentials: []s3Credential{{AccessKey: "ak", SecretKey: "sk2"}},
-		Actions:     bucketActions("bucket"),
+		Actions:     bucketActions("bucket", v1alpha1.AccessReadWrite),
 	}
 	if !cfg.upsert(rotated) {
 		t.Error("upsert(changed) should report a change")
@@ -73,7 +75,7 @@ func TestIdentityConfigUpsert(t *testing.T) {
 func TestIdentityConfigRemove(t *testing.T) {
 	cfg := &identityConfig{Identities: []s3Identity{
 		{Name: "admin", Actions: []string{actionAdmin}},
-		{Name: "ns.bucket", Actions: bucketActions("bucket")},
+		{Name: "ns.bucket", Actions: bucketActions("bucket", v1alpha1.AccessReadWrite)},
 	}}
 
 	if !cfg.remove("ns.bucket") {

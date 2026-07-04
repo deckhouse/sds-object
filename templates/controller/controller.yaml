@@ -51,23 +51,64 @@
 {{ include "helm_lib_module_validating_webhook_configuration" (list . $oscWebhookConfig) }}
 
 {{- /*
-  ValidatingWebhookConfiguration for ObjectBucket.
-  Placeholder admission rule wired to the webhooks container (/ob-validate).
+  ValidatingWebhookConfiguration for ObjectStorageBucket (cluster-scoped).
 */ -}}
-{{- $obWebhookConfig := dict
-  "name" "object-bucket-validation"
-  "webhookName" "object-bucket-validation"
+{{- $osbWebhookConfig := dict
+  "name" "object-storage-bucket-validation"
+  "webhookName" "object-storage-bucket-validation"
   "valuesKey" "sdsObject"
-  "path" "/ob-validate"
+  "path" "/osb-validate"
   "failurePolicy" "Fail"
   "rules" (list
     (dict
       "apiGroups" (list "storage.deckhouse.io")
       "apiVersions" (list "v1alpha1")
       "operations" (list "CREATE" "UPDATE")
-      "resources" (list "objectbuckets")
+      "resources" (list "objectstoragebuckets")
+      "scope" "Cluster"
+    )
+  )
+}}
+{{ include "helm_lib_module_validating_webhook_configuration" (list . $osbWebhookConfig) }}
+
+{{- /*
+  ValidatingWebhookConfiguration for ObjectStorageBucketAccess (namespaced).
+*/ -}}
+{{- $osbaWebhookConfig := dict
+  "name" "object-storage-bucket-access-validation"
+  "webhookName" "object-storage-bucket-access-validation"
+  "valuesKey" "sdsObject"
+  "path" "/osba-validate"
+  "failurePolicy" "Fail"
+  "rules" (list
+    (dict
+      "apiGroups" (list "storage.deckhouse.io")
+      "apiVersions" (list "v1alpha1")
+      "operations" (list "CREATE" "UPDATE")
+      "resources" (list "objectstoragebucketaccesses")
       "scope" "Namespaced"
     )
   )
 }}
-{{ include "helm_lib_module_validating_webhook_configuration" (list . $obWebhookConfig) }}
+{{ include "helm_lib_module_validating_webhook_configuration" (list . $osbaWebhookConfig) }}
+
+{{- /*
+  ValidatingWebhookConfiguration for ObjectStorageBucketPolicy (cluster-scoped).
+*/ -}}
+{{- $osbpWebhookConfig := dict
+  "name" "object-storage-bucket-policy-validation"
+  "webhookName" "object-storage-bucket-policy-validation"
+  "valuesKey" "sdsObject"
+  "path" "/osbp-validate"
+  "failurePolicy" "Fail"
+  "rules" (list
+    (dict
+      "apiGroups" (list "storage.deckhouse.io")
+      "apiVersions" (list "v1alpha1")
+      "operations" (list "CREATE" "UPDATE")
+      "resources" (list "objectstoragebucketpolicies")
+      "scope" "Cluster"
+    )
+  )
+}}
+{{ include "helm_lib_module_validating_webhook_configuration" (list . $osbpWebhookConfig) }}

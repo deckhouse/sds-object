@@ -75,6 +75,25 @@ func EmptyBucket(ctx context.Context, mc *minio.Client, name string) error {
 	return nil
 }
 
+// GetBucketPolicy returns the bucket's S3 policy document (empty string when
+// none is set).
+func GetBucketPolicy(ctx context.Context, mc *minio.Client, name string) (string, error) {
+	pol, err := mc.GetBucketPolicy(ctx, name)
+	if err != nil {
+		return "", fmt.Errorf("get bucket policy %q: %w", name, err)
+	}
+	return pol, nil
+}
+
+// SetBucketPolicy sets (or, with an empty document, clears) the bucket's S3
+// policy.
+func SetBucketPolicy(ctx context.Context, mc *minio.Client, name, policy string) error {
+	if err := mc.SetBucketPolicy(ctx, name, policy); err != nil {
+		return fmt.Errorf("set bucket policy %q: %w", name, err)
+	}
+	return nil
+}
+
 // DeleteBucket empties and removes the bucket (best effort).
 func DeleteBucket(ctx context.Context, mc *minio.Client, name string) error {
 	exists, err := mc.BucketExists(ctx, name)

@@ -328,7 +328,7 @@ func buildStatefulSet(cluster *v1alpha1.ObjectStorageCluster, namespace, image s
 			},
 			VolumeClaimTemplates: []corev1.PersistentVolumeClaim{
 				{
-					ObjectMeta: metav1.ObjectMeta{Name: "data"},
+					ObjectMeta: metav1.ObjectMeta{Name: "data", Labels: commonLabels(cluster)},
 					Spec: corev1.PersistentVolumeClaimSpec{
 						AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 						StorageClassName: &storageClass,

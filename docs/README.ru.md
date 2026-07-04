@@ -15,9 +15,11 @@ weight: 1
 | Ресурс | Область | Назначение |
 |--------|---------|------------|
 | `ObjectStorageCluster` (`osc`) | Cluster | Разворачивает кластер объектного хранилища одного из четырёх готовых профилей. |
-| `ObjectBucket` (`ob`) | Namespaced | Создаёт бакет и пишет стандартный `Secret` с S3-учётными данными рядом с приложением. |
+| `ObjectStorageBucket` (`osb`) | Cluster | Объявляет бакет в кластере (без учётных данных). |
+| `ObjectStorageBucketPolicy` (`osbp`) | Cluster | Задаёт, из каких namespace разрешён запрос доступа к бакету (deny-by-default). |
+| `ObjectStorageBucketAccess` (`osba`) | Namespaced | Запрашивает учётные данные к бакету; пишет стандартный `Secret` с S3-учётками рядом с приложением. |
 
-`ObjectBucket` намеренно namespaced: команда создаёт бакет в своём namespace, а сгенерированный ключ доступа попадает в `Secret` в том же namespace — доступ естественно разграничивается через RBAC.
+Бакеты cluster-scoped; учётные данные выдаются по namespace через `ObjectStorageBucketAccess` с проверкой `ObjectStorageBucketPolicy` (доступ без совпадающей политики остаётся в ожидании). Каждый access получает свой ключ, который можно независимо ротировать аннотацией `storage.deckhouse.io/rotate`.
 
 ## Профили кластера
 
@@ -39,7 +41,8 @@ weight: 1
 ## Как это работает
 
 - Контроллер реконсилит каждый `ObjectStorageCluster` в data plane бэкенда (workload'ы, сервисы, конфигурация) и публикует в `status` готовность, S3-эндпойнт и ёмкость.
-- Контроллер реконсилит каждый `ObjectBucket` в бакет и ключ доступа с правами на этот бакет в указанном кластере, затем пишет `Secret` (owned by `ObjectBucket`) со стандартными переменными подключения: `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`.
+- Контроллер реконсилит каждый `ObjectStorageBucket` в бакет в указанном кластере (без учётных данных).
+- Контроллер реконсилит каждый `ObjectStorageBucketAccess` — как только `ObjectStorageBucketPolicy` разрешает его namespace — в ключ доступа с правами на бакет, затем пишет `Secret` (owned by access) со стандартными переменными подключения: `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`.
 
 Пошаговый пример — в разделе [Использование](usage.html).
 

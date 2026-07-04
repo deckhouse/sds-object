@@ -27,34 +27,33 @@ import (
 	"k8s.io/klog/v2"
 )
 
-// ObjectBucketValidate admits ObjectBucket resources. The schema/immutability
-// contract is enforced by the CRD CEL rules; this validator adds the
-// cross-resource checks:
+// ObjectStorageBucketValidate admits ObjectStorageBucket resources. The
+// schema/immutability contract is enforced by the CRD CEL rules; this validator
+// adds the cross-resource checks:
 //
 //   - the effective bucket name must be unique within a cluster: two
-//     ObjectBuckets pointing at the same backend bucket on the same cluster
-//     would fight over its credentials (hard deny);
+//     ObjectStorageBuckets pointing at the same backend bucket on the same
+//     cluster would collide (hard deny);
 //   - the referenced ObjectStorageCluster should already exist (soft warning —
 //     the bucket reconciles to Pending until it does).
-func (v *Validator) ObjectBucketValidate(ctx context.Context, _ *model.AdmissionReview, obj metav1.Object) (*kwhvalidating.ValidatorResult, error) {
+func (v *Validator) ObjectStorageBucketValidate(ctx context.Context, _ *model.AdmissionReview, obj metav1.Object) (*kwhvalidating.ValidatorResult, error) {
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok {
 		return &kwhvalidating.ValidatorResult{Valid: true}, nil
 	}
 
-	ns := u.GetNamespace()
 	name := u.GetName()
 	clusterRef, _, _ := unstructured.NestedString(u.Object, "spec", "clusterRef")
 	bucketName := effectiveBucketName(u)
 	var warnings []string
 
-	list, err := v.dyn.Resource(objectBucketGVR).Namespace(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+	list, err := v.dyn.Resource(objectStorageBucketGVR).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		warnings = append(warnings, fmt.Sprintf("could not verify bucket name uniqueness: %v", err))
 	} else {
 		for i := range list.Items {
 			other := &list.Items[i]
-			if other.GetNamespace() == ns && other.GetName() == name {
+			if other.GetName() == name {
 				continue
 			}
 			if ref, _, _ := unstructured.NestedString(other.Object, "spec", "clusterRef"); ref != clusterRef {
@@ -62,8 +61,8 @@ func (v *Validator) ObjectBucketValidate(ctx context.Context, _ *model.Admission
 			}
 			if effectiveBucketName(other) == bucketName {
 				return reject(fmt.Sprintf(
-					"bucket name %q on cluster %q is already claimed by ObjectBucket %s/%s",
-					bucketName, clusterRef, other.GetNamespace(), other.GetName())), nil
+					"bucket name %q on cluster %q is already claimed by ObjectStorageBucket %q",
+					bucketName, clusterRef, other.GetName())), nil
 			}
 		}
 	}
@@ -75,6 +74,6 @@ func (v *Validator) ObjectBucketValidate(ctx context.Context, _ *model.Admission
 		}
 	}
 
-	klog.Infof("ObjectBucket %s/%s admitted (warnings: %d)", ns, name, len(warnings))
+	klog.Infof("ObjectStorageBucket %s admitted (warnings: %d)", name, len(warnings))
 	return &kwhvalidating.ValidatorResult{Valid: true, Warnings: warnings}, nil
 }

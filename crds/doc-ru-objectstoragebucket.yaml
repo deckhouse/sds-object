@@ -4,12 +4,12 @@ spec:
       schema:
         openAPIV3Schema:
           description: |
-            Описывает один S3-бакет в кластере ObjectStorageCluster и учётные данные
-            доступа к нему. Контроллер создаёт бакет в бэкенде, генерирует пару
-            access key / secret key с доступом только к этому бакету и кладёт в тот же
-            namespace Secret (см. `status.secretRef`) со стандартными переменными
-            подключения к S3 — чтобы приложение могло использовать его напрямую через
-            `envFrom`.
+            Описывает один S3-бакет в кластере ObjectStorageCluster. Контроллер
+            создаёт бакет в бэкенде. Ресурс cluster-scoped: учётные данные здесь
+            не выдаются. Потребляющие namespace запрашивают доступ и получают
+            Secret с учётными данными через namespaced-ресурсы
+            ObjectStorageBucketAccess, а доступ между namespace ограничивается
+            cluster-scoped ресурсами ObjectStorageBucketPolicy (deny-by-default).
           properties:
             spec:
               description: |
@@ -29,16 +29,17 @@ spec:
                   description: |
                     Политика доступа к бакету.
 
-                    - `Private` (по умолчанию) — доступ только с сгенерированными
+                    - `Private` (по умолчанию) — доступ только с выданными
                       учётными данными.
                     - `PublicRead` — объекты доступны на чтение анонимно; запись
                       по-прежнему требует учётных данных.
                 reclaimPolicy:
                   description: |
-                    Что происходит с данными бакета при удалении ObjectBucket.
+                    Что происходит с данными бакета при удалении
+                    ObjectStorageBucket.
 
-                    - `Retain` (по умолчанию) — ключ доступа удаляется, бакет и его
-                      объекты сохраняются в бэкенде.
+                    - `Retain` (по умолчанию) — бакет и его объекты сохраняются
+                      в бэкенде.
                     - `Delete` — бакет и все его объекты удаляются.
                 quota:
                   description: |
@@ -68,18 +69,9 @@ spec:
                 bucketName:
                   description: |
                     Фактическое имя бакета, созданного в бэкенде.
-                secretRef:
-                  description: |
-                    Ссылка на Secret (в namespace этого ObjectBucket) с переменными
-                    подключения и учётными данными S3: `S3_ENDPOINT`, `S3_REGION`,
-                    `S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`.
-                  properties:
-                    name:
-                      description: Имя Secret.
                 conditions:
                   description: |
-                    Покомпонентные condition: `BucketReady`, `CredentialsReady` и
-                    агрегатное `Ready`.
+                    Покомпонентные condition: `BucketReady` и агрегатное `Ready`.
                   items:
                     properties:
                       type:

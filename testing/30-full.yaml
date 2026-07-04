@@ -1,6 +1,7 @@
-# Full profile (SeaweedFS, single-node MVP).
-# Cluster -> bucket -> credentials Secret -> mc read/write, same flow as the
-# Garage profiles. (A distributed master/volume/filer topology is a follow-up.)
+# Full profile (SeaweedFS).
+# Single/Replicated use the built-in leveldb metadata store (single filer, no
+# external DB). HighRedundancy runs a multi-filer HA set backed by a shared
+# managed-postgres database (requires the managed-postgres module).
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
 kind: ObjectStorageCluster
@@ -9,18 +10,37 @@ metadata:
 spec:
   type: Full
   redundancy: Single
+  reclaimPolicy: Delete
   storage:
     size: 10Gi
     class: localpath   # <-- replace with your StorageClass (kubectl get sc)
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectBucket
+kind: ObjectStorageBucket
 metadata:
   name: full-bucket
-  namespace: obj-test
 spec:
   clusterRef: full
   reclaimPolicy: Delete
+---
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectStorageBucketPolicy
+metadata:
+  name: full-bucket-obj-test
+spec:
+  bucketRef: full-bucket
+  allowedNamespaces:
+    names:
+      - obj-test
+---
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectStorageBucketAccess
+metadata:
+  name: full-access
+  namespace: obj-test
+spec:
+  bucketRef: full-bucket
+  permission: ReadWrite
 ---
 apiVersion: batch/v1
 kind: Job
@@ -46,4 +66,4 @@ spec:
               echo "S3 OK"
           envFrom:
             - secretRef:
-                name: full-bucket-s3-credentials
+                name: full-access-s3-credentials

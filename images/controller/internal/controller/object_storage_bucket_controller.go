@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"reflect"
 
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,15 +44,15 @@ import (
 	"github.com/deckhouse/sds-object/images/controller/pkg/logger"
 )
 
-// ObjectBucketReconciler drives every ObjectBucket through a short FSM:
+// ObjectStorageBucketReconciler drives every ObjectStorageBucket through a
+// single-stage FSM:
 //
-//		BucketReady -> CredentialsReady -> Ready
+//	BucketReady -> Ready
 //
-//	  - BucketReady gates on the referenced ObjectStorageCluster (must exist and
-//	    be Ready) and then on the backend.Driver creating the bucket.
-//	  - CredentialsReady (re)writes the S3 credentials Secret in the bucket's
-//	    namespace with the backend-issued access key.
-type ObjectBucketReconciler struct {
+// BucketReady gates on the referenced ObjectStorageCluster (must exist and be
+// Ready) and then on the backend.Driver creating the bucket. Credentials are
+// issued separately per ObjectStorageBucketAccess.
+type ObjectStorageBucketReconciler struct {
 	Client   client.Client
 	Scheme   *runtime.Scheme
 	Log      *logger.Logger
@@ -61,26 +60,24 @@ type ObjectBucketReconciler struct {
 	Registry *backend.Registry
 }
 
-// obStageOrder lists the FSM stage condition types in execution order.
-var obStageOrder = []string{
-	v1alpha1.OBConditionBucketReady,
-	v1alpha1.OBConditionCredentialsReady,
+// osbStageOrder lists the FSM stage condition types in execution order.
+var osbStageOrder = []string{
+	v1alpha1.OSBConditionBucketReady,
 }
 
 // bucketObserved accumulates the status fields the reconciler writes back onto
-// the ObjectBucket (separate from backend.BucketState, which is the driver's
-// result type).
+// the ObjectStorageBucket.
 type bucketObserved struct {
 	bucketName string
 	endpoint   string
-	secretName string
 }
 
-// AddObjectBucketReconcilerToManager wires the OB reconciler into the manager.
-// Besides watching ObjectBucket itself, it watches ObjectStorageCluster so that
-// a cluster becoming Ready re-reconciles every bucket referencing it.
-func AddObjectBucketReconcilerToManager(mgr manager.Manager, cfg *config.Options, log *logger.Logger, reg *backend.Registry) error {
-	r := &ObjectBucketReconciler{
+// AddObjectStorageBucketReconcilerToManager wires the OSB reconciler into the
+// manager. Besides watching ObjectStorageBucket itself, it watches
+// ObjectStorageCluster so that a cluster becoming Ready re-reconciles every
+// bucket referencing it.
+func AddObjectStorageBucketReconcilerToManager(mgr manager.Manager, cfg *config.Options, log *logger.Logger, reg *backend.Registry) error {
+	r := &ObjectStorageBucketReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Log:      log,
@@ -88,8 +85,6 @@ func AddObjectBucketReconcilerToManager(mgr manager.Manager, cfg *config.Options
 		Registry: reg,
 	}
 
-	// Cluster status updates do not bump generation, so fire only on real
-	// Ready transitions of the referenced cluster.
 	clusterReadyPredicate := predicate.Funcs{
 		CreateFunc:  func(_ event.CreateEvent) bool { return true },
 		DeleteFunc:  func(_ event.DeleteEvent) bool { return true },
@@ -102,8 +97,8 @@ func AddObjectBucketReconcilerToManager(mgr manager.Manager, cfg *config.Options
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		Named("object-bucket").
-		For(&v1alpha1.ObjectBucket{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		Named("object-storage-bucket").
+		For(&v1alpha1.ObjectStorageBucket{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&v1alpha1.ObjectStorageCluster{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueBucketsByCluster),
 			builder.WithPredicates(clusterReadyPredicate)).
@@ -124,9 +119,9 @@ func clusterReadyState(c *v1alpha1.ObjectStorageCluster) string {
 }
 
 // enqueueBucketsByCluster maps an ObjectStorageCluster event to every
-// ObjectBucket (in any namespace) that references it via spec.clusterRef.
-func (r *ObjectBucketReconciler) enqueueBucketsByCluster(ctx context.Context, o client.Object) []reconcile.Request {
-	list := &v1alpha1.ObjectBucketList{}
+// ObjectStorageBucket that references it via spec.clusterRef.
+func (r *ObjectStorageBucketReconciler) enqueueBucketsByCluster(ctx context.Context, o client.Object) []reconcile.Request {
+	list := &v1alpha1.ObjectStorageBucketList{}
 	if err := r.Client.List(ctx, list); err != nil {
 		r.Log.Error(err, "[enqueueBucketsByCluster] list failed")
 		return nil
@@ -136,20 +131,15 @@ func (r *ObjectBucketReconciler) enqueueBucketsByCluster(ctx context.Context, o 
 		if list.Items[i].Spec.ClusterRef != o.GetName() {
 			continue
 		}
-		out = append(out, reconcile.Request{
-			NamespacedName: types.NamespacedName{
-				Namespace: list.Items[i].Namespace,
-				Name:      list.Items[i].Name,
-			},
-		})
+		out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Name: list.Items[i].Name}})
 	}
 	return out
 }
 
-func (r *ObjectBucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	r.Log.Info(fmt.Sprintf("[Reconcile] start for ObjectBucket %s", req.NamespacedName))
+func (r *ObjectStorageBucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	r.Log.Info(fmt.Sprintf("[Reconcile] start for ObjectStorageBucket %q", req.Name))
 
-	bucket := &v1alpha1.ObjectBucket{}
+	bucket := &v1alpha1.ObjectStorageBucket{}
 	if err := r.Client.Get(ctx, req.NamespacedName, bucket); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
@@ -171,7 +161,7 @@ func (r *ObjectBucketReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	return r.reconcileNormal(ctx, bucket)
 }
 
-func (r *ObjectBucketReconciler) reconcileDelete(ctx context.Context, bucket *v1alpha1.ObjectBucket) (ctrl.Result, error) {
+func (r *ObjectStorageBucketReconciler) reconcileDelete(ctx context.Context, bucket *v1alpha1.ObjectStorageBucket) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(bucket, Finalizer) {
 		return ctrl.Result{}, nil
 	}
@@ -179,10 +169,8 @@ func (r *ObjectBucketReconciler) reconcileDelete(ctx context.Context, bucket *v1
 	cluster, err := r.getCluster(ctx, bucket.Spec.ClusterRef)
 	switch {
 	case err != nil:
-		// Cluster gone or unresolved: nothing to clean up in a backend we
-		// cannot reach. Drop the finalizer to avoid a stuck bucket.
-		r.Log.Warning(fmt.Sprintf("[reconcileDelete] %s/%s: cluster %q unavailable (%v); removing finalizer",
-			bucket.Namespace, bucket.Name, bucket.Spec.ClusterRef, err))
+		r.Log.Warning(fmt.Sprintf("[reconcileDelete] bucket %q: cluster %q unavailable (%v); removing finalizer",
+			bucket.Name, bucket.Spec.ClusterRef, err))
 	default:
 		if driver, derr := r.Registry.For(cluster); derr == nil {
 			if derr := driver.DeleteBucket(ctx, cluster, bucket); derr != nil {
@@ -198,55 +186,46 @@ func (r *ObjectBucketReconciler) reconcileDelete(ctx context.Context, bucket *v1
 	return ctrl.Result{}, nil
 }
 
-func (r *ObjectBucketReconciler) reconcileNormal(ctx context.Context, bucket *v1alpha1.ObjectBucket) (ctrl.Result, error) {
+func (r *ObjectStorageBucketReconciler) reconcileNormal(ctx context.Context, bucket *v1alpha1.ObjectStorageBucket) (ctrl.Result, error) {
 	status := newStatusBuilder(bucket.Generation)
 	observed := &bucketObserved{}
 
-	// Stage 1: BucketReady — gate on the cluster, then create the bucket.
 	cluster, err := r.getCluster(ctx, bucket.Spec.ClusterRef)
 	if err != nil {
-		status.setCondition(v1alpha1.OBConditionBucketReady, metav1.ConditionFalse, "WaitingForCluster",
+		status.setCondition(v1alpha1.OSBConditionBucketReady, metav1.ConditionFalse, "WaitingForCluster",
 			fmt.Sprintf("ObjectStorageCluster %q is not available: %v", bucket.Spec.ClusterRef, err))
-		gateAfter(status, obStageOrder, v1alpha1.OBConditionBucketReady)
+		gateAfter(status, osbStageOrder, v1alpha1.OSBConditionBucketReady)
 		return r.finish(ctx, bucket, status, observed, nil)
 	}
 	if cluster.Status != nil && cluster.Status.Endpoint != nil {
 		observed.endpoint = cluster.Status.Endpoint.Internal
 	}
 	if clusterReadyState(cluster) != string(metav1.ConditionTrue) {
-		status.setCondition(v1alpha1.OBConditionBucketReady, metav1.ConditionFalse, "WaitingForCluster",
+		status.setCondition(v1alpha1.OSBConditionBucketReady, metav1.ConditionFalse, "WaitingForCluster",
 			fmt.Sprintf("ObjectStorageCluster %q is not Ready", bucket.Spec.ClusterRef))
-		gateAfter(status, obStageOrder, v1alpha1.OBConditionBucketReady)
+		gateAfter(status, osbStageOrder, v1alpha1.OSBConditionBucketReady)
 		return r.finish(ctx, bucket, status, observed, nil)
 	}
 
 	driver, err := r.Registry.For(cluster)
 	if err != nil {
-		status.setCondition(v1alpha1.OBConditionBucketReady, metav1.ConditionFalse, reasonError, err.Error())
-		gateAfter(status, obStageOrder, v1alpha1.OBConditionBucketReady)
+		status.setCondition(v1alpha1.OSBConditionBucketReady, metav1.ConditionFalse, reasonError, err.Error())
+		gateAfter(status, osbStageOrder, v1alpha1.OSBConditionBucketReady)
 		return r.finish(ctx, bucket, status, observed, err)
 	}
 
 	state, err := driver.EnsureBucket(ctx, cluster, bucket)
 	observed.bucketName = state.BucketName
-	if !advance(status, obStageOrder, v1alpha1.OBConditionBucketReady, state.Ready, state.Message, err) {
+	if !advance(status, osbStageOrder, v1alpha1.OSBConditionBucketReady, state.Ready, state.Message, err) {
 		return r.finish(ctx, bucket, status, observed, err)
 	}
 
-	// Stage 2: CredentialsReady — (re)write the credentials Secret.
-	secretName, err := r.ensureCredentialsSecret(ctx, cluster, bucket, &state)
-	if !advance(status, obStageOrder, v1alpha1.OBConditionCredentialsReady, err == nil,
-		"credentials Secret written", err) {
-		return r.finish(ctx, bucket, status, observed, err)
-	}
-	observed.secretName = secretName
-
-	status.setCondition(v1alpha1.OBConditionReady, metav1.ConditionTrue, reasonReady, "All stages reconciled")
+	status.setCondition(v1alpha1.OSBConditionReady, metav1.ConditionTrue, reasonReady, "All stages reconciled")
 	return r.finish(ctx, bucket, status, observed, nil)
 }
 
 // getCluster fetches the cluster-scoped ObjectStorageCluster by name.
-func (r *ObjectBucketReconciler) getCluster(ctx context.Context, name string) (*v1alpha1.ObjectStorageCluster, error) {
+func (r *ObjectStorageBucketReconciler) getCluster(ctx context.Context, name string) (*v1alpha1.ObjectStorageCluster, error) {
 	if name == "" {
 		return nil, fmt.Errorf("spec.clusterRef is empty")
 	}
@@ -257,57 +236,9 @@ func (r *ObjectBucketReconciler) getCluster(ctx context.Context, name string) (*
 	return cluster, nil
 }
 
-// credentialsSecretName returns the name of the Secret holding the bucket's S3
-// credentials, in the bucket's namespace.
-func credentialsSecretName(bucket *v1alpha1.ObjectBucket) string {
-	return bucket.Name + "-s3-credentials"
-}
-
-// ensureCredentialsSecret creates or updates the credentials Secret owned by the
-// bucket and returns its name.
-func (r *ObjectBucketReconciler) ensureCredentialsSecret(
+func (r *ObjectStorageBucketReconciler) finish(
 	ctx context.Context,
-	cluster *v1alpha1.ObjectStorageCluster,
-	bucket *v1alpha1.ObjectBucket,
-	state *backend.BucketState,
-) (string, error) {
-	endpoint := ""
-	region := ""
-	if cluster.Status != nil && cluster.Status.Endpoint != nil {
-		endpoint = cluster.Status.Endpoint.Internal
-		region = cluster.Status.Endpoint.Region
-	}
-
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      credentialsSecretName(bucket),
-			Namespace: bucket.Namespace,
-		},
-	}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
-		if secret.Labels == nil {
-			secret.Labels = map[string]string{}
-		}
-		secret.Labels["storage.deckhouse.io/object-bucket"] = bucket.Name
-		secret.Type = corev1.SecretTypeOpaque
-		secret.StringData = map[string]string{
-			v1alpha1.SecretKeyS3Endpoint:     endpoint,
-			v1alpha1.SecretKeyS3Region:       region,
-			v1alpha1.SecretKeyS3Bucket:       state.BucketName,
-			v1alpha1.SecretKeyAccessKeyID:    state.AccessKeyID,
-			v1alpha1.SecretKeySecretAccessID: state.SecretAccessKey,
-		}
-		return controllerutil.SetControllerReference(bucket, secret, r.Scheme)
-	})
-	if err != nil {
-		return "", err
-	}
-	return secret.Name, nil
-}
-
-func (r *ObjectBucketReconciler) finish(
-	ctx context.Context,
-	bucket *v1alpha1.ObjectBucket,
+	bucket *v1alpha1.ObjectStorageBucket,
 	status *statusBuilder,
 	observed *bucketObserved,
 	reconcileErr error,
@@ -327,19 +258,19 @@ func (r *ObjectBucketReconciler) finish(
 	return ctrl.Result{RequeueAfter: r.Cfg.RequeueInterval}, nil
 }
 
-func (r *ObjectBucketReconciler) updateStatus(
+func (r *ObjectStorageBucketReconciler) updateStatus(
 	ctx context.Context,
-	bucket *v1alpha1.ObjectBucket,
+	bucket *v1alpha1.ObjectStorageBucket,
 	sb *statusBuilder,
 	observed *bucketObserved,
 ) error {
 	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		latest := &v1alpha1.ObjectBucket{}
-		if err := r.Client.Get(ctx, client.ObjectKey{Namespace: bucket.Namespace, Name: bucket.Name}, latest); err != nil {
+		latest := &v1alpha1.ObjectStorageBucket{}
+		if err := r.Client.Get(ctx, client.ObjectKey{Name: bucket.Name}, latest); err != nil {
 			return err
 		}
 		if latest.Status == nil {
-			latest.Status = &v1alpha1.ObjectBucketStatus{}
+			latest.Status = &v1alpha1.ObjectStorageBucketStatus{}
 		}
 		before := latest.Status.DeepCopy()
 
@@ -347,16 +278,13 @@ func (r *ObjectBucketReconciler) updateStatus(
 			apimeta.SetStatusCondition(&latest.Status.Conditions, cond)
 		}
 		latest.Status.ObservedGeneration = bucket.Generation
-		latest.Status.Phase = derivePhase(latest.Status.Conditions, obStageOrder)
+		latest.Status.Phase = derivePhase(latest.Status.Conditions, osbStageOrder)
 
 		if observed.endpoint != "" {
 			latest.Status.Endpoint = observed.endpoint
 		}
 		if observed.bucketName != "" {
 			latest.Status.BucketName = observed.bucketName
-		}
-		if observed.secretName != "" {
-			latest.Status.SecretRef = &v1alpha1.LocalSecretReference{Name: observed.secretName}
 		}
 
 		if reflect.DeepEqual(before, latest.Status) {

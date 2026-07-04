@@ -25,6 +25,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"time"
+
+	v1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 )
 
 // SeaweedFS stores its S3 IAM config in the filer at this path. The S3 gateway
@@ -107,8 +109,16 @@ func identityEqual(a, b s3Identity) bool {
 	return true
 }
 
-// bucketActions returns the per-bucket action set granted to a bucket user.
-func bucketActions(bucket string) []string {
+// bucketActions returns the per-bucket action set granted to a bucket user for
+// the given permission. ReadOnly grants read/list only; ReadWrite adds write
+// and tagging.
+func bucketActions(bucket string, perm v1alpha1.AccessPermission) []string {
+	if perm == v1alpha1.AccessReadOnly {
+		return []string{
+			actionRead + ":" + bucket,
+			actionList + ":" + bucket,
+		}
+	}
 	return []string{
 		actionRead + ":" + bucket,
 		actionWrite + ":" + bucket,

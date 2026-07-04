@@ -1,0 +1,152 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: objectstoragebucketpolicies.storage.deckhouse.io
+  labels:
+    heritage: deckhouse
+    module: sds-object
+    backup.deckhouse.io/cluster-config: "true"
+spec:
+  group: storage.deckhouse.io
+  scope: Cluster
+  names:
+    plural: objectstoragebucketpolicies
+    singular: objectstoragebucketpolicy
+    kind: ObjectStorageBucketPolicy
+    shortNames:
+      - osbp
+  preserveUnknownFields: false
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: |
+            ObjectStorageBucketPolicy declares which namespaces may request
+            access (via ObjectStorageBucketAccess) to a cluster-scoped
+            ObjectStorageBucket. Access is deny-by-default: an
+            ObjectStorageBucketAccess is only provisioned when at least one
+            policy for its bucket matches the access's namespace. Multiple
+            policies for the same bucket are additive (their allowed sets are
+            unioned).
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              description: |
+                Desired policy.
+              required:
+                - bucketRef
+                - allowedNamespaces
+              x-kubernetes-validations:
+                - rule: "oldSelf == null || self.bucketRef == oldSelf.bucketRef"
+                  message: "spec.bucketRef is immutable after creation."
+                - rule: "has(self.allowedNamespaces.names) || has(self.allowedNamespaces.patterns)"
+                  message: "spec.allowedNamespaces must set at least one of names or patterns."
+              properties:
+                bucketRef:
+                  type: string
+                  description: |
+                    Name of the cluster-scoped ObjectStorageBucket this policy
+                    governs. Immutable after creation.
+                  minLength: 1
+                  maxLength: 63
+                  pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+                allowedNamespaces:
+                  type: object
+                  description: |
+                    Namespaces permitted to request access to the bucket. A
+                    namespace matches when it appears in `names` or fully matches
+                    any RE2 regular expression in `patterns`.
+                  properties:
+                    names:
+                      type: array
+                      description: |
+                        Exact namespace names allowed.
+                      items:
+                        type: string
+                        maxLength: 253
+                      x-kubernetes-list-type: set
+                    patterns:
+                      type: array
+                      description: |
+                        RE2 regular expressions matched (anchored, full-string)
+                        against the namespace name, e.g. `team-.*`.
+                      items:
+                        type: string
+                        maxLength: 253
+                      x-kubernetes-list-type: set
+            status:
+              type: object
+              description: |
+                Observed state of the policy.
+              properties:
+                observedGeneration:
+                  type: integer
+                  format: int64
+                  description: |
+                    Most recent `metadata.generation` reconciled by the controller.
+                phase:
+                  type: string
+                  description: |
+                    Coarse-grained summary. `Ready` when the policy is valid and
+                    its bucket exists; `Error` when a pattern fails to compile.
+                  enum:
+                    - Pending
+                    - Ready
+                    - Error
+                conditions:
+                  type: array
+                  description: |
+                    Latest state. Known type: `Ready`.
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                      - lastTransitionTime
+                    properties:
+                      type:
+                        type: string
+                        description: Condition type, for example `Ready`.
+                      status:
+                        type: string
+                        description: Current status of the condition.
+                        enum:
+                          - "True"
+                          - "False"
+                          - "Unknown"
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                        description: |
+                          Value of `metadata.generation` the condition was last set against.
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                        description: |
+                          Timestamp of the last status transition for this condition.
+                      reason:
+                        type: string
+                        description: |
+                          Machine-readable reason for the current status, suitable for
+                          log filtering.
+                      message:
+                        type: string
+                        description: |
+                          Human-readable explanation of the current status.
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - jsonPath: .spec.bucketRef
+          name: Bucket
+          type: string
+        - jsonPath: .status.phase
+          name: Phase
+          type: string
+        - jsonPath: .metadata.creationTimestamp
+          name: Age
+          type: date

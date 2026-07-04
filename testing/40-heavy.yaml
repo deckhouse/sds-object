@@ -1,7 +1,6 @@
 # Heavy profile (Ceph RGW on top of sds-elastic).
 # REQUIRES the sds-elastic module installed with a ready ElasticCluster named
-# below in elasticClusterRef. The full cluster -> bucket -> mc flow works the
-# same as the other profiles.
+# below in elasticClusterRef.
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
 kind: ObjectStorageCluster
@@ -11,15 +10,34 @@ spec:
   type: Heavy
   elasticClusterRef: main   # <-- name of an existing, Ready ElasticCluster
   redundancy: Replicated
+  reclaimPolicy: Delete
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectBucket
+kind: ObjectStorageBucket
 metadata:
   name: heavy-bucket
-  namespace: obj-test
 spec:
   clusterRef: heavy
   reclaimPolicy: Delete
+---
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectStorageBucketPolicy
+metadata:
+  name: heavy-bucket-obj-test
+spec:
+  bucketRef: heavy-bucket
+  allowedNamespaces:
+    names:
+      - obj-test
+---
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectStorageBucketAccess
+metadata:
+  name: heavy-access
+  namespace: obj-test
+spec:
+  bucketRef: heavy-bucket
+  permission: ReadWrite
 ---
 apiVersion: batch/v1
 kind: Job
@@ -45,4 +63,4 @@ spec:
               echo "S3 OK"
           envFrom:
             - secretRef:
-                name: heavy-bucket-s3-credentials
+                name: heavy-access-s3-credentials

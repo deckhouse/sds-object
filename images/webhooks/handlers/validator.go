@@ -40,15 +40,18 @@ var (
 	objectStorageClusterGVR = schema.GroupVersionResource{
 		Group: "storage.deckhouse.io", Version: "v1alpha1", Resource: "objectstorageclusters",
 	}
-	objectBucketGVR = schema.GroupVersionResource{
-		Group: "storage.deckhouse.io", Version: "v1alpha1", Resource: "objectbuckets",
+	objectStorageBucketGVR = schema.GroupVersionResource{
+		Group: "storage.deckhouse.io", Version: "v1alpha1", Resource: "objectstoragebuckets",
+	}
+	objectStorageBucketPolicyGVR = schema.GroupVersionResource{
+		Group: "storage.deckhouse.io", Version: "v1alpha1", Resource: "objectstoragebucketpolicies",
 	}
 	elasticClusterGVR = schema.GroupVersionResource{
 		Group: "storage.deckhouse.io", Version: "v1alpha1", Resource: "elasticclusters",
 	}
 )
 
-// effectiveBucketName is the S3 bucket name an ObjectBucket maps to:
+// effectiveBucketName is the S3 bucket name an ObjectStorageBucket maps to:
 // spec.bucketName when set, otherwise metadata.name.
 func effectiveBucketName(u *unstructured.Unstructured) string {
 	if name, _, _ := unstructured.NestedString(u.Object, "spec", "bucketName"); name != "" {

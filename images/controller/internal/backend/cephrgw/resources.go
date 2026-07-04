@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	v1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
+	"github.com/deckhouse/sds-object/images/controller/internal/backend"
 )
 
 // elasticNamespace is where sds-elastic runs Rook and the CephCluster, and
@@ -77,35 +78,35 @@ func rgwHostPort(cluster *v1alpha1.ObjectStorageCluster, clusterDomain string) s
 	return fmt.Sprintf("rook-ceph-rgw-%s.%s.svc.%s:%d", storeName(cluster), elasticNamespace, clusterDomain, rgwPort)
 }
 
-// userName is the CephObjectStoreUser CR name and RGW user id for a bucket.
-func userName(bucket *v1alpha1.ObjectBucket) string {
-	return fmt.Sprintf("%s-%s", bucket.Namespace, bucket.Name)
+// ownerUID is the RGW user id (and CephObjectStoreUser CR name) of the
+// per-bucket owner user that creates and owns the bucket.
+func ownerUID(bucket *v1alpha1.ObjectStorageBucket) string {
+	return backend.BucketDisplayName(bucket) + "-owner"
 }
 
-// rookUserSecretName is the Secret Rook generates for a CephObjectStoreUser,
-// in elasticNamespace, with data keys AccessKey/SecretKey/Endpoint.
-func rookUserSecretName(cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectBucket) string {
-	return fmt.Sprintf("rook-ceph-object-user-%s-%s", storeName(cluster), userName(bucket))
+// accessUID is the RGW user id (and CephObjectStoreUser CR name) issued for an
+// ObjectStorageBucketAccess.
+func accessUID(access *v1alpha1.ObjectStorageBucketAccess) string {
+	return backend.AccessResourceName(access)
 }
 
-// bucketDisplayName is the S3 bucket name: spec.bucketName, or metadata.name.
-func bucketDisplayName(bucket *v1alpha1.ObjectBucket) string {
-	if bucket.Spec.BucketName != "" {
-		return bucket.Spec.BucketName
-	}
-	return bucket.Name
+// rgwUserSecretName is the Secret Rook generates for a CephObjectStoreUser with
+// the given uid, in elasticNamespace (data keys AccessKey/SecretKey/Endpoint).
+func rgwUserSecretName(cluster *v1alpha1.ObjectStorageCluster, uid string) string {
+	return fmt.Sprintf("rook-ceph-object-user-%s-%s", storeName(cluster), uid)
 }
 
-// buildCephObjectStoreUser returns the Rook CephObjectStoreUser for a bucket.
-func buildCephObjectStoreUser(cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectBucket) *unstructured.Unstructured {
+// buildCephObjectStoreUser returns the Rook CephObjectStoreUser with the given
+// RGW user id.
+func buildCephObjectStoreUser(cluster *v1alpha1.ObjectStorageCluster, uid string) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(cephObjectStoreUserGVK)
-	obj.SetName(userName(bucket))
+	obj.SetName(uid)
 	obj.SetNamespace(elasticNamespace)
 	obj.SetLabels(commonLabels(cluster))
 	obj.Object["spec"] = map[string]interface{}{
 		"store":       storeName(cluster),
-		"displayName": userName(bucket),
+		"displayName": uid,
 	}
 	return obj
 }
@@ -146,7 +147,11 @@ func buildCephObjectStore(cluster *v1alpha1.ObjectStorageCluster) *unstructured.
 			"failureDomain": "host",
 			"replicated":    replicatedPool(cluster),
 		},
-		"preservePoolsOnDelete": false,
+		// Preserve the RGW data/metadata pools unless the cluster is explicitly
+		// reclaimed with Delete. Otherwise deleting the ObjectStorageCluster (or
+		// even a Rook-side CephObjectStore churn) would destroy all bucket data
+		// regardless of any bucket's Retain policy.
+		"preservePoolsOnDelete": cluster.Spec.ReclaimPolicy != v1alpha1.ClusterReclaimDelete,
 		"gateway": map[string]interface{}{
 			"port":      int64(rgwPort),
 			"instances": int64(1),
