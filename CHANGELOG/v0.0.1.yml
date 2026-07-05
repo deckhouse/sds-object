@@ -9,13 +9,13 @@ Changes:
 - ObjectStorageCluster now has a spec.reclaimPolicy field (Retain by default), which
   saves backend data when the cluster is deleted (for Heavy, Ceph RGW pools are saved,
   but CephObjectStore is not deleted) - prevents accidental data loss.
-- The module-delete hook strips finalizers from namespaced resources
-  (ObjectStorageBucketAccess) across all namespaces, not only the module namespace,
-  so they no longer hang in Terminating after the module is removed.
-- Garage (System profile): replication_factor is clamped to the number of
-  control-plane nodes and rounded to an odd value, so a single-master cluster no
-  longer stays degraded on an unreachable factor.
-- spec.redundancy is now immutable (changing the replication factor on a live
-  cluster is not supported).
-- SeaweedFS: values in filer.toml (including the DB password) are TOML-escaped, so
-  special characters no longer break the config.
+- The module removal hook removes finalizers from namespaced resources (ObjectStorageBucketAccess)
+  in all namespaces, not just the module namespace - otherwise they would hang in
+  Terminating after the module was removed.
+- Garage (System profile): replication_factor is limited by the number of control-plane
+    nodes and is set to an odd value - a single-master cluster no longer hangs in
+    degraded due to an unattainable factor.
+- spec.redundancy is made immutable (changing the replication factor on a live cluster
+  is not supported).
+- SeaweedFS: values ​​in filer.toml (including the database password) are escaped
+    according to TOML rules - special characters no longer break the config.
