@@ -3,3 +3,7 @@
   - API объектного хранилища: cluster-scoped ObjectStorageCluster и ObjectStorageBucket, namespaced ObjectStorageBucketAccess (учётные данные S3 по namespace с ротацией ключей по аннотации) и cluster-scoped ObjectStorageBucketPolicy, ограничивающий доступ между namespace (deny-by-default; точные имена и RE2-паттерны).
   - SeaweedFS (профиль Full) использует общий метаданный store PostgreSQL только в HighRedundancy (multi-filer HA); Single/Replicated используют встроенный leveldb на локальном PVC.
   - У ObjectStorageCluster появилось поле spec.reclaimPolicy (по умолчанию Retain), сохраняющее данные бэкенда при удалении кластера (для Heavy пулы Ceph RGW сохраняются, а CephObjectStore не удаляется) — предотвращает случайную потерю данных.
+  - Хук удаления модуля снимает финализаторы с namespaced-ресурсов (ObjectStorageBucketAccess) во всех namespace, а не только в namespace модуля — иначе они зависали в Terminating после удаления модуля.
+  - Garage (профиль System): replication_factor ограничивается числом control-plane узлов и приводится к нечётному значению — одномастерный кластер больше не висит в degraded из-за недостижимого фактора.
+  - spec.redundancy сделан неизменяемым (смена фактора репликации на живом кластере не поддерживается).
+  - SeaweedFS: значения в filer.toml (в т.ч. пароль БД) экранируются по правилам TOML — спецсимволы больше не ломают конфиг.

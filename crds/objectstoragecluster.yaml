@@ -54,6 +54,8 @@ spec:
                   message: "spec.elasticClusterRef is immutable after creation."
                 - rule: "oldSelf == null || !has(oldSelf.reclaimPolicy) || self.reclaimPolicy == oldSelf.reclaimPolicy"
                   message: "spec.reclaimPolicy is immutable after creation."
+                - rule: "oldSelf == null || (has(self.redundancy) == has(oldSelf.redundancy) && (!has(self.redundancy) || self.redundancy == oldSelf.redundancy))"
+                  message: "spec.redundancy is immutable after creation (changing the replication factor on a live cluster is not supported)."
                 - rule: "self.type != 'Heavy' || (has(self.elasticClusterRef) && size(self.elasticClusterRef) > 0)"
                   message: "spec.elasticClusterRef is required when spec.type is Heavy."
                 - rule: "self.type == 'Heavy' || !has(self.elasticClusterRef) || size(self.elasticClusterRef) == 0"
@@ -116,6 +118,10 @@ spec:
                       (typical default).
                     - `HighRedundancy` — maximum durability (extra replicas or
                       erasure coding), requires more nodes.
+
+                    Immutable after creation: changing the replication factor on
+                    a live cluster is not supported. For `System` the effective
+                    factor is capped by the number of control-plane nodes.
                   enum:
                     - Single
                     - Replicated

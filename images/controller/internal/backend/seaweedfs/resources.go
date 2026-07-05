@@ -18,6 +18,7 @@ package seaweedfs
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -279,13 +280,13 @@ func buildMasterStatefulSet(cluster *v1alpha1.ObjectStorageCluster, namespace, i
 		Image:   image,
 		Command: []string{"/weed", "master"},
 		Args: []string{
-			"-port=" + itoa(masterPort),
+			"-port=" + strconv.Itoa(masterPort),
 			"-mdir=" + dataMount,
 			"-ip.bind=0.0.0.0",
 			"-ip=$(POD_NAME)." + name + "." + namespace,
 			"-peers=" + masterServers(cluster, namespace),
 			"-defaultReplication=" + replication,
-			"-volumeSizeLimitMB=" + itoa(volumeSizeLimitMB),
+			"-volumeSizeLimitMB=" + strconv.Itoa(volumeSizeLimitMB),
 		},
 		Env:            []corev1.EnvVar{podNameEnv()},
 		Ports:          []corev1.ContainerPort{{Name: "http", ContainerPort: masterPort}, {Name: "grpc", ContainerPort: masterGRPC}},
@@ -304,7 +305,7 @@ func buildVolumeStatefulSet(cluster *v1alpha1.ObjectStorageCluster, namespace, i
 		Image:   image,
 		Command: []string{"/weed", "volume"},
 		Args: []string{
-			"-port=" + itoa(volumePort),
+			"-port=" + strconv.Itoa(volumePort),
 			"-dir=" + dataMount,
 			"-max=0",
 			"-ip.bind=0.0.0.0",
@@ -341,12 +342,12 @@ func buildFilerStatefulSet(cluster *v1alpha1.ObjectStorageCluster, namespace, im
 		Image:   image,
 		Command: []string{"/weed", "filer"},
 		Args: []string{
-			"-port=" + itoa(filerPort),
+			"-port=" + strconv.Itoa(filerPort),
 			"-ip.bind=0.0.0.0",
 			"-ip=$(POD_IP)",
 			"-master=" + masterServers(cluster, namespace),
 			"-s3",
-			"-s3.port=" + itoa(s3Port),
+			"-s3.port=" + strconv.Itoa(s3Port),
 		},
 		Env: []corev1.EnvVar{podIPEnv()},
 		Ports: []corev1.ContainerPort{
@@ -373,5 +374,3 @@ func requests(cpu, mem string) corev1.ResourceRequirements {
 		corev1.ResourceMemory: resource.MustParse(mem),
 	}}
 }
-
-func itoa(n int) string { return fmt.Sprintf("%d", n) }

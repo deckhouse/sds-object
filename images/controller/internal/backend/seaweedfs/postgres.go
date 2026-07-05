@@ -162,7 +162,41 @@ CREATE TABLE IF NOT EXISTS "%%s" (
   PRIMARY KEY (dirhash, name)
 );
 """
-`, host, port, user, password, database)
+`, tomlBasicEscape(host), port, tomlBasicEscape(user), tomlBasicEscape(password), tomlBasicEscape(database))
+}
+
+// tomlBasicEscape escapes a value for embedding inside a TOML basic (double-
+// quoted) string, so a password/host containing `"`, `\` or control characters
+// cannot break the config or inject extra keys. Follows the TOML v1.0 basic
+// string escape rules.
+func tomlBasicEscape(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case '\\':
+			b.WriteString(`\\`)
+		case '"':
+			b.WriteString(`\"`)
+		case '\b':
+			b.WriteString(`\b`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\f':
+			b.WriteString(`\f`)
+		case '\r':
+			b.WriteString(`\r`)
+		default:
+			if r < 0x20 || r == 0x7f {
+				b.WriteString(fmt.Sprintf(`\u%04X`, r))
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	return b.String()
 }
 
 // renderFilerTomlLeveldb renders filer.toml configuring the built-in leveldb2

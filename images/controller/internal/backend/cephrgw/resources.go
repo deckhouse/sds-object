@@ -118,6 +118,9 @@ func replicatedPool(cluster *v1alpha1.ObjectStorageCluster) map[string]interface
 	safe := true
 	switch cluster.Spec.Redundancy {
 	case v1alpha1.RedundancySingle:
+		// Ceph size=1 is unsafe/impractical (any OSD loss loses data and blocks
+		// I/O), so the minimum for the Single intent is 2 copies with the safe-
+		// replica-size guard disabled (mirrors sds-elastic's convention).
 		size, safe = 2, false
 	case v1alpha1.RedundancyHighRedundancy:
 		size = 4
