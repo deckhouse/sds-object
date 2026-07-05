@@ -17,7 +17,7 @@ Changes:
     degraded due to an unattainable factor.
 - spec.redundancy is made immutable (changing the replication factor on a live cluster
   is not supported).
-- SeaweedFS: values in filer.toml (including the database password) are escaped
+- SeaweedFS: values ​​in filer.toml (including the database password) are escaped
     according to TOML rules - special characters no longer break the config.
-- Disabling the module now requires confirmation and warns about possible object
-  storage data loss (like sds-elastic).
+- Disabling the module requires confirmation and warns of possible loss of object
+  storage data (similar to sds-elastic).
