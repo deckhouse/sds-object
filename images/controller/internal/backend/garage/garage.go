@@ -146,8 +146,11 @@ func (d *Driver) effectiveReplicationFactor(ctx context.Context, cluster *v1alph
 	if cluster.Spec.Type != v1alpha1.ClusterTypeSystem {
 		return desired, nil
 	}
+	// Read through the non-cached apiReader: a cache-backed List would start a
+	// cluster-wide Node informer (extra RBAC/watch on every Node) and, if the
+	// controller lacks node list/watch, block the reconcile instead of erroring.
 	nodes := &corev1.NodeList{}
-	if err := d.client.List(ctx, nodes, client.HasLabels{controlPlaneNodeLabel}); err != nil {
+	if err := d.apiReader.List(ctx, nodes, client.HasLabels{controlPlaneNodeLabel}); err != nil {
 		return 0, err
 	}
 	n := int32(len(nodes.Items))
