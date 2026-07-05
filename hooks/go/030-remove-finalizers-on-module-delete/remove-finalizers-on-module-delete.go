@@ -129,17 +129,18 @@ func handlerRemoveFinalizersOnModuleDelete(ctx context.Context, input *pkg.HookI
 	}
 
 	for _, crgvk := range consts.CRGVKsForFinalizerRemoval {
-		ns := ""
-		if crgvk.Namespaced {
-			ns = consts.ModuleNamespace
-		}
+		// List cluster-wide (no namespace scoping): the module's namespaced CRs
+		// (e.g. ObjectStorageBucketAccess) live in the consuming applications'
+		// namespaces, not in the module namespace, so restricting to
+		// ModuleNamespace would leave their finalizers set and the objects stuck
+		// in Terminating forever after the module (and its controller) is gone.
 		crList := &unstructured.UnstructuredList{}
 		crList.SetGroupVersionKind(schema.GroupVersionKind{
 			Group:   crgvk.Group,
 			Version: crgvk.Version,
 			Kind:    crgvk.Kind + "List",
 		})
-		if err := cl.List(ctx, crList, client.InNamespace(ns)); err != nil {
+		if err := cl.List(ctx, crList); err != nil {
 			input.Logger.Info(fmt.Sprintf("[%s]: skipping CR %s (may not exist): %v", hookName, crgvk.Kind, err))
 			continue
 		}

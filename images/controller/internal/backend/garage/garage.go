@@ -17,15 +17,11 @@ limitations under the License.
 // Package garage implements the backend.Driver for the Garage object storage
 // backend (the System and Lightweight cluster profiles).
 //
-// Scope of the current milestone: it reconciles the Garage data plane — the
-// ServiceAccount, RPC/admin secret, garage.toml ConfigMap, the workload
-// (DaemonSet on control-plane + hostPath for System, StatefulSet + PVC for
-// Lightweight) and the S3/RPC Services — and reports workload readiness.
-//
-// Cluster meshing (connecting the RPC peers) and layout assignment via the
-// Garage admin API, plus bucket/key provisioning, are the next milestone:
-// until then a cluster reports BackendReady=false with an explanatory message
-// and does not yet serve S3.
+// It reconciles the Garage data plane — the ServiceAccount, RPC/admin secret,
+// garage.toml ConfigMap, the workload (DaemonSet on control-plane + hostPath for
+// System, StatefulSet + PVC for Lightweight) and the S3/RPC Services — then
+// connects the RPC peers and assigns the cluster layout via the Garage admin API
+// (see mesh.go), and provisions buckets/access keys (buckets.go, access.go).
 package garage
 
 import (
@@ -98,7 +94,11 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 	if err := d.ensureSecret(ctx, cluster); err != nil {
 		return state, fmt.Errorf("ensure secret: %w", err)
 	}
-	if err := d.apply(ctx, cluster, buildConfigMap(cluster, d.namespace)); err != nil {
+	rf, err := d.effectiveReplicationFactor(ctx, cluster)
+	if err != nil {
+		return state, fmt.Errorf("compute replication factor: %w", err)
+	}
+	if err := d.apply(ctx, cluster, buildConfigMap(cluster, d.namespace, rf)); err != nil {
 		return state, fmt.Errorf("ensure configmap: %w", err)
 	}
 	if err := d.apply(ctx, cluster, buildServiceAccount(cluster, d.namespace)); err != nil {
@@ -133,6 +133,31 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 	state.Ready = mesh.ready
 	state.Message = mesh.msg
 	return state, nil
+}
+
+// effectiveReplicationFactor returns the replication_factor to bake into
+// garage.toml. For System (a DaemonSet on control-plane nodes) it clamps the
+// intent to the number of control-plane nodes and to an odd value, so a
+// single-master cluster does not sit degraded forever on an unreachable factor.
+// Lightweight runs a StatefulSet with exactly replicationFactor replicas, so the
+// factor is always satisfiable and returned as-is.
+func (d *Driver) effectiveReplicationFactor(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) (int32, error) {
+	desired := replicationFactor(cluster)
+	if cluster.Spec.Type != v1alpha1.ClusterTypeSystem {
+		return desired, nil
+	}
+	// Read through the non-cached apiReader: a cache-backed List would start a
+	// cluster-wide Node informer (extra RBAC/watch on every Node) and, if the
+	// controller lacks node list/watch, block the reconcile instead of erroring.
+	nodes := &corev1.NodeList{}
+	if err := d.apiReader.List(ctx, nodes, client.HasLabels{controlPlaneNodeLabel}); err != nil {
+		return 0, err
+	}
+	n := int32(len(nodes.Items))
+	if n < 1 {
+		n = 1
+	}
+	return clampOdd(desired, n), nil
 }
 
 // DeleteCluster relies on owner-reference GC for the workloads and Services.

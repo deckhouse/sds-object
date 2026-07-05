@@ -118,7 +118,9 @@ type ObjectStorageClusterSpec struct {
 	Storage *ObjectStorageClusterStorageSpec `json:"storage,omitempty"`
 
 	// Redundancy picks the high-level fault-tolerance intent. When omitted,
-	// a sensible default is derived from Type.
+	// a sensible default is derived from Type. Immutable after creation
+	// (changing the replication factor on a live cluster is not supported). For
+	// System the effective factor is capped by the control-plane node count.
 	// +optional
 	Redundancy RedundancyMode `json:"redundancy,omitempty"`
 

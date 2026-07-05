@@ -8,3 +8,16 @@ descriptions:
 requirements:
   deckhouse: ">= 1.72"
 namespace: d8-sds-object
+disable:
+  confirmation: true
+  message: |
+    Attention!
+
+    Disabling this module stops the controller that deploys and reconciles the object storage backends (Garage, SeaweedFS, Ceph RGW). Data stored in clusters managed by this module may become unavailable or be lost.
+
+    Before disabling the module, be sure to do the following:
+
+    - Delete all ObjectStorageBucketAccess, ObjectStorageBucketPolicy, ObjectStorageBucket, and ObjectStorageCluster resources and wait until the controller has torn down the underlying backends, buckets, access keys, and related objects.
+    - Check for remaining resources with: `kubectl get objectstorageclusters.storage.deckhouse.io` (short name: `osc`), `kubectl get objectstoragebuckets.storage.deckhouse.io` (short name: `osb`), `kubectl get objectstoragebucketaccesses.storage.deckhouse.io -A` (short name: `osba`), and `kubectl get objectstoragebucketpolicies.storage.deckhouse.io` (short name: `osbp`). If any objects are listed, remove them before deactivating the module.
+
+    Failure to do so may result in data loss for deployed object storage clusters or incorrect cluster operation.

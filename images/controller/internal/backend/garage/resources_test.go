@@ -68,7 +68,7 @@ func TestStorageSize(t *testing.T) {
 }
 
 func TestRenderConfig(t *testing.T) {
-	cfg := renderConfig(cluster("c", v1alpha1.RedundancyHighRedundancy))
+	cfg := renderConfig(5)
 	for _, want := range []string{
 		"replication_factor = 5",
 		"[s3_api]",
@@ -77,6 +77,23 @@ func TestRenderConfig(t *testing.T) {
 	} {
 		if !strings.Contains(cfg, want) {
 			t.Errorf("renderConfig missing %q in:\n%s", want, cfg)
+		}
+	}
+}
+
+func TestClampOdd(t *testing.T) {
+	cases := []struct{ desired, nodes, want int32 }{
+		{1, 1, 1},
+		{3, 1, 1}, // one master -> single copy
+		{3, 2, 1}, // two nodes -> nearest odd below
+		{3, 3, 3},
+		{5, 3, 3}, // HighRedundancy on three masters
+		{5, 5, 5},
+		{3, 0, 1}, // floor
+	}
+	for _, c := range cases {
+		if got := clampOdd(c.desired, c.nodes); got != c.want {
+			t.Errorf("clampOdd(%d, %d)=%d, want %d", c.desired, c.nodes, got, c.want)
 		}
 	}
 }

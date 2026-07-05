@@ -329,6 +329,11 @@ tolerations: []
 
 ## 8. Что меняется относительно текущего скелета
 
+> **Неактуально (исторический раздел).** Скелет давно заменён рабочей
+> реализацией: оба CRD, три драйвера, оба реконсайлера, вебхуки и хуки готовы,
+> а модель бакетов переработана (см. врезку в начале документа и `crds/`).
+> Раздел оставлен для истории миграции с placeholder-CRD `ObjectStorageClass`.
+
 1. `crds/objectstorageclass.yaml` → удалить; добавить
    `crds/objectstoragecluster.yaml` и `crds/objectbucket.yaml`.
 2. `api/v1alpha1/object_storage_class.go` → заменить на

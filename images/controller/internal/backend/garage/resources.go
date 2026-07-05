@@ -46,6 +46,11 @@ const (
 	hostPathBase = "/var/lib/deckhouse/sds-object/garage"
 
 	registryPullSecret = "deckhouse-registry"
+
+	// controlPlaneNodeLabel marks control-plane nodes; the System profile
+	// schedules its DaemonSet there and the replication factor is clamped to the
+	// count of nodes carrying it.
+	controlPlaneNodeLabel = "node-role.kubernetes.io/control-plane"
 )
 
 // resourceName is the common name/prefix for every object backing a cluster.
@@ -87,8 +92,11 @@ func adminEndpoint(cluster *v1alpha1.ObjectStorageCluster, namespace, clusterDom
 	return fmt.Sprintf("http://%s.%s.svc.%s:%d", s3SvcName(cluster), namespace, clusterDomain, adminPort)
 }
 
-// replicationFactor maps the high-level redundancy intent to a Garage
-// replication_factor. The empty value defaults to Replicated.
+// replicationFactor maps the high-level redundancy intent to the desired Garage
+// replication_factor. The empty value defaults to Replicated. This is the
+// intent only; for System it must be clamped to the number of control-plane
+// nodes (see Driver.effectiveReplicationFactor) — Garage stays degraded if the
+// factor exceeds the node count.
 func replicationFactor(cluster *v1alpha1.ObjectStorageCluster) int32 {
 	switch cluster.Spec.Redundancy {
 	case v1alpha1.RedundancySingle:
@@ -98,6 +106,23 @@ func replicationFactor(cluster *v1alpha1.ObjectStorageCluster) int32 {
 	default: // RedundancyReplicated or unset
 		return 3
 	}
+}
+
+// clampOdd caps desired at the available node count and rounds down to the
+// nearest odd value (Garage wants an odd replication_factor for quorum), with a
+// floor of 1. E.g. clampOdd(3, 1)=1, clampOdd(5, 3)=3, clampOdd(3, 2)=1.
+func clampOdd(desired, nodes int32) int32 {
+	rf := desired
+	if nodes < rf {
+		rf = nodes
+	}
+	if rf%2 == 0 {
+		rf--
+	}
+	if rf < 1 {
+		rf = 1
+	}
+	return rf
 }
 
 // lightweightReplicas is the StatefulSet replica count for the Lightweight
@@ -117,9 +142,10 @@ func storageSize(cluster *v1alpha1.ObjectStorageCluster) resource.Quantity {
 	return resource.MustParse("10Gi")
 }
 
-// renderConfig produces the garage.toml content. Secrets (rpc, admin token) are
-// supplied via environment variables, not the file.
-func renderConfig(cluster *v1alpha1.ObjectStorageCluster) string {
+// renderConfig produces the garage.toml content for the given (already clamped)
+// replication factor. Secrets (rpc, admin token) are supplied via environment
+// variables, not the file.
+func renderConfig(rf int32) string {
 	return fmt.Sprintf(`metadata_dir = "%s/meta"
 data_dir = "%s/data"
 db_engine = "lmdb"
@@ -135,18 +161,19 @@ root_domain = ".s3.garage"
 
 [admin]
 api_bind_addr = "[::]:%d"
-`, dataMountPath, dataMountPath, replicationFactor(cluster), rpcPort, s3Port, adminPort)
+`, dataMountPath, dataMountPath, rf, rpcPort, s3Port, adminPort)
 }
 
-// buildConfigMap returns the ConfigMap holding garage.toml.
-func buildConfigMap(cluster *v1alpha1.ObjectStorageCluster, namespace string) *corev1.ConfigMap {
+// buildConfigMap returns the ConfigMap holding garage.toml with the given
+// replication factor.
+func buildConfigMap(cluster *v1alpha1.ObjectStorageCluster, namespace string, rf int32) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      configName(cluster),
 			Namespace: namespace,
 			Labels:    commonLabels(cluster),
 		},
-		Data: map[string]string{configFileName: renderConfig(cluster)},
+		Data: map[string]string{configFileName: renderConfig(rf)},
 	}
 }
 
@@ -358,7 +385,7 @@ func buildDaemonSet(cluster *v1alpha1.ObjectStorageCluster, namespace, image str
 	spec := podSpec(cluster, image, dataVolume)
 
 	// System runs on control-plane nodes and must tolerate their taints.
-	spec.NodeSelector = map[string]string{"node-role.kubernetes.io/control-plane": ""}
+	spec.NodeSelector = map[string]string{controlPlaneNodeLabel: ""}
 	spec.Tolerations = []corev1.Toleration{
 		{Key: "node-role.kubernetes.io/control-plane", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoSchedule},
 		{Key: "node-role.kubernetes.io/master", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoSchedule},
