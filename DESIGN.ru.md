@@ -28,21 +28,25 @@ Deckhouse. Платформа noops: пользователь деклариру
 не выносятся — по аналогии с тем, как `sds-elastic` прячет настройки Ceph за
 интент-абстракциями (`replication: ConsistencyAndAvailability` и т. п.).
 
-Модуль предоставляет **два CRD**:
+Модуль предоставляет **четыре CRD**:
 
-| CRD | Scope | Назначение | Аналог в sds-elastic |
-|-----|-------|------------|----------------------|
-| `ObjectStorageCluster` (osc) | Cluster | Развернуть кластер объектного хранилища одного из 4 типов | `ElasticCluster` |
-| `ObjectBucket` (ob) | **Namespaced** | Создать бакет + S3-учётку (Secret) рядом с приложением | `ElasticStorageClass` |
+| CRD | Scope | Назначение |
+|-----|-------|------------|
+| `ObjectStorageCluster` (osc) | Cluster | Развернуть кластер объектного хранилища одного из 4 типов |
+| `ObjectStorageBucket` (osb) | Cluster | Объявить бакет в кластере (без учётных данных) |
+| `ObjectStorageBucketAccess` (osba) | **Namespaced** | Запросить доступ к бакету — отдельная пара ключей + `Secret` рядом с приложением; ротация по аннотации |
+| `ObjectStorageBucketPolicy` (osbp) | Cluster | Задать, из каких namespace разрешён доступ к бакету (deny-by-default; имена + RE2-паттерны) |
 
-`ObjectBucket` namespaced — это ключевое отличие от sds-elastic и осознанный
-выбор под noops-самообслуживание: команда создаёт бакет в своём namespace, а
-сгенерированные ключи доступа кладутся в `Secret` в том же namespace. RBAC
-естественно разграничивается по namespace.
+Бакет — общая (cluster-scoped) платформенная сущность; per-namespace
+самообслуживание сведено к `ObjectStorageBucketAccess`, который выдаёт отдельные
+ключи (независимый отзыв/ротация) и гейтится политикой `ObjectStorageBucketPolicy`
+(deny-by-default). Это закрывает риск «захвата» чужого/системного бакета, который
+был возможен в исходной namespaced-`ObjectBucket`-модели (см. историческую
+врезку выше и ADR).
 
 Существующий placeholder `ObjectStorageClass` (cluster-scoped) при реализации
-**удаляется** и заменяется на два CRD выше (нужно обновить хуки удаления
-финализаторов, вебхук-конфигурацию и RBAC — см. §8).
+удалён и заменён на CRD выше (обновлены хуки удаления финализаторов,
+вебхук-конфигурация и RBAC — см. §8).
 
 ## 2. Четыре типа кластера
 
@@ -183,98 +187,121 @@ Ready       .status.conditions[?(@.type=="Ready")].status
 Age         .metadata.creationTimestamp
 ```
 
-## 4. CRD `ObjectBucket` (namespaced)
+## 4. CRD `ObjectStorageBucket` (cluster-scoped), `ObjectStorageBucketAccess` (namespaced), `ObjectStorageBucketPolicy` (cluster-scoped)
 
-### 4.1 Spec
+### 4.1 `ObjectStorageBucket` — объявление бакета (без учётных данных)
 
 ```yaml
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectBucket
+kind: ObjectStorageBucket
 metadata:
-  name: my-bucket
-  namespace: my-app
+  name: my-bucket              # cluster-scoped
 spec:
-  clusterRef: system            # имя ObjectStorageCluster — REQUIRED, immutable
-  bucketName: ""                # имя бакета в S3; по умолчанию = metadata.name; immutable
-  accessPolicy: Private         # Private | PublicRead   (default Private)
+  clusterRef: system           # имя ObjectStorageCluster — REQUIRED, immutable
+  bucketName: ""               # имя бакета в S3; по умолчанию = metadata.name; immutable
+  accessPolicy: Private        # Private | PublicRead   (default Private)
+  reclaimPolicy: Retain        # Retain | Delete   (default Retain)
   quota:
-    maxSize: 10Gi               # optional, лимит ёмкости бакета
-    maxObjects: 0               # optional, 0 = без лимита
+    maxSize: 10Gi              # optional, лимит ёмкости бакета
+    maxObjects: 0              # optional, 0 = без лимита
 ```
 
-### 4.2 Status
+Status: `phase`, `endpoint`, `bucketName`, `conditions` (`BucketReady`, `Ready`).
+Учётных данных бакет не содержит.
+
+### 4.2 `ObjectStorageBucketPolicy` — кто допущен к бакету (deny-by-default)
 
 ```yaml
-status:
-  observedGeneration: 1
-  phase: Ready                  # Pending | InProgress | Ready | Error
-  endpoint: http://system.d8-sds-object.svc.cluster.local
-  bucketName: my-bucket
-  # Secret в ТОМ ЖЕ namespace с учёткой доступа к бакету
-  secretRef:
-    name: my-bucket-credentials
-  conditions:                   # BucketReady | CredentialsReady | Ready
-    - type: Ready
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectStorageBucketPolicy
+metadata:
+  name: my-bucket-teams        # cluster-scoped
+spec:
+  bucketRef: my-bucket         # ObjectStorageBucket — REQUIRED, immutable
+  allowedNamespaces:
+    names: [my-app]            # точные имена namespace
+    patterns: ["team-.*"]      # RE2-паттерны (полное совпадение)
 ```
 
-### 4.3 Контракт Secret (стандартизированный для noops)
+Без совпадающей политики `ObjectStorageBucketAccess` не провижнится (остаётся
+`Pending` с condition `DeniedByPolicy`). Несколько политик на один бакет
+складываются. Enforcement — в реконсайлере доступа (webhook лишь предупреждает).
 
-Контроллер создаёт в namespace бакета `Secret` (owned by `ObjectBucket`) с
-ключами, удобными для прямого `envFrom` / монтирования:
+### 4.3 `ObjectStorageBucketAccess` — доступ и ключи (namespaced, self-service)
+
+```yaml
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectStorageBucketAccess
+metadata:
+  name: my-access
+  namespace: my-app
+  annotations:
+    storage.deckhouse.io/rotate: "1"   # смена значения → ротация ключей
+spec:
+  bucketRef: my-bucket         # cluster-scoped ObjectStorageBucket — REQUIRED, immutable
+  permission: ReadWrite        # ReadWrite | ReadOnly   (default ReadWrite)
+  secretName: ""               # optional; по умолчанию <access>-s3-credentials
+```
+
+Status: `phase`, `endpoint`, `bucketName`, `accessKeyID`, `secretRef`,
+`observedRotation`, `lastRotationTime`, `conditions` (`AccessGranted`,
+`CredentialsReady`, `Ready`).
+
+### 4.4 Контракт Secret (стандартизированный для noops)
+
+Контроллер создаёт в namespace доступа `Secret` (owned by
+`ObjectStorageBucketAccess`) с ключами, удобными для прямого `envFrom`:
 
 ```yaml
 apiVersion: v1
 kind: Secret
 metadata:
-  name: my-bucket-credentials
+  name: my-access-s3-credentials
   namespace: my-app
 type: Opaque
 stringData:
   S3_ENDPOINT: http://system.d8-sds-object.svc.cluster.local
   S3_REGION: us-east-1
   S3_BUCKET: my-bucket
-  AWS_ACCESS_KEY_ID: <generated>
-  AWS_SECRET_ACCESS_KEY: <generated>
+  AWS_ACCESS_KEY_ID: <generated per access>
+  AWS_SECRET_ACCESS_KEY: <generated per access>
 ```
 
-### 4.4 Валидация
+Каждый access получает **свою** пару ключей: независимый отзыв (удаление access)
+и ротация (аннотация `storage.deckhouse.io/rotate` → новая пара, обновление
+`Secret`, отзыв старого ключа).
 
-- `spec.clusterRef` — immutable; ссылка должна существовать (иначе `phase=Pending`
-  с условием, пока кластер не появится / не станет Ready).
-- `spec.bucketName` (или `metadata.name`) — соответствует правилам именования
-  S3-бакета; immutable.
-- Бакет уникален в рамках `(clusterRef, bucketName)`.
+### 4.5 Валидация
 
-### 4.5 Printer columns
-
-```
-Cluster   .spec.clusterRef
-Bucket    .status.bucketName
-Phase     .status.phase
-Secret    .status.secretRef.name
-Ready     .status.conditions[?(@.type=="Ready")].status
-Age       .metadata.creationTimestamp
-```
+- `spec.clusterRef`/`spec.bucketRef` — immutable; ссылки должны существовать
+  (иначе `Pending`, пока не появятся / не станут Ready).
+- `spec.bucketName` (или `metadata.name`) — правила именования S3; immutable.
+  Бакет уникален в рамках `(clusterRef, bucketName)`.
+- `ObjectStorageBucketPolicy.spec.allowedNamespaces.patterns` — валидные RE2
+  (webhook отклоняет некомпилируемые); доступ deny-by-default.
 
 ## 5. Архитектура контроллера
 
-Один контроллер (controller-runtime), два реконсайлера + слой бэкенд-драйверов
-с общим интерфейсом:
+Один контроллер (controller-runtime), реконсайлеры на каждый CRD + слой
+бэкенд-драйверов с общим интерфейсом:
 
 ```
-ObjectStorageClusterReconciler ──┐
-                                 ├─→ backend.Driver (Garage | SeaweedFS | CephRGW)
-ObjectBucketReconciler ──────────┘
+ObjectStorageClusterReconciler       ──┐
+ObjectStorageBucketReconciler         ─┼─→ backend.Driver (Garage | SeaweedFS | CephRGW)
+ObjectStorageBucketAccessReconciler   ─┤
+ObjectStorageBucketPolicyReconciler   ──┘   (валидирует политику; enforcement — в Access-реконсайлере)
 ```
 
-Интерфейс драйвера (примерно):
+Интерфейс драйвера (бакет и доступ разделены):
 
 ```go
 type Driver interface {
-    EnsureCluster(ctx, *ObjectStorageCluster) (Endpoint, error)  // развернуть/обновить dataplane
-    ClusterStatus(ctx, *ObjectStorageCluster) (BackendStatus, error)
-    EnsureBucket(ctx, cluster, *ObjectBucket) (BucketCreds, error)  // создать бакет + ключи
-    DeleteBucket(ctx, cluster, *ObjectBucket) error
+    EnsureCluster(ctx, *ObjectStorageCluster) (ClusterState, error)  // развернуть/обновить dataplane
+    DeleteCluster(ctx, *ObjectStorageCluster) error                  // с учётом reclaimPolicy
+    EnsureBucket(ctx, cluster, *ObjectStorageBucket) (BucketState, error)  // только бакет, без ключей
+    DeleteBucket(ctx, cluster, *ObjectStorageBucket) error
+    EnsureAccess(ctx, cluster, bucket, *ObjectStorageBucketAccess, mintFresh bool) (AccessState, error)  // ключи per-access
+    DeleteAccess(ctx, cluster, bucket, *ObjectStorageBucketAccess) error
 }
 ```
 
@@ -282,24 +309,44 @@ type Driver interface {
 
 - **System (Garage):** DaemonSet с `nodeSelector: node-role.kubernetes.io/control-plane`
   и tolerations на мастера; том `hostPath` (напр. `/var/lib/deckhouse/sds-object/garage`);
-  Service (S3 API) + headless для членства; admin API для layout; replication_factor
-  по числу мастеров. Админ-ключ → Secret в namespace модуля.
+  Service (S3 API) + headless для членства; admin API для layout. `replication_factor`
+  ограничивается числом control-plane узлов (нечётное, floor 1) — иначе на 1 мастере
+  кластер завис бы в degraded. Админ-ключ → Secret в namespace модуля.
 - **Lightweight (Garage):** StatefulSet с `volumeClaimTemplates` (`storage.class`,
-  `storage.size`); в остальном как System.
+  `storage.size`); число реплик = `replication_factor`, фактор достижим по построению.
 - **Full (SeaweedFS):** master(ы) (raft 1/3), volume-servers (StatefulSet+PVC),
   filer со встроенным S3-gateway; Service на S3-эндпойнт; репликация/EC из `redundancy`.
+  Метаданные filer: встроенный leveldb (Single/Replicated, один filer, без внешних
+  зависимостей) или общий PostgreSQL из `managed-postgres` (HighRedundancy, multi-filer HA).
 - **Heavy (Ceph RGW):** контроллер создаёт `CephObjectStore` в namespace
   `sds-elastic` (`d8-sds-elastic`), привязанный к CephCluster из `elasticClusterRef`;
   RGW-поды и Service поднимает Rook; пулы метаданных/данных — из `redundancy`.
+  `preservePoolsOnDelete` завязан на `reclaimPolicy` кластера (Retain → пулы
+  сохраняются).
 
-### 5.2 Реконсиляция бакета
+### 5.2 Реконсиляция бакета и доступа
+
+Бакет (`ObjectStorageBucket`):
 
 1. Найти `ObjectStorageCluster` по `clusterRef`, дождаться `Ready`.
-2. Через admin API бэкенда создать бакет (если нет), применить policy/quota.
-3. Создать access key/secret key с правами на этот бакет.
-4. Записать `Secret` в namespace бакета (§4.3), проставить `status.secretRef`.
-5. Финализатор: при удалении `ObjectBucket` — удалить ключ и (опционально по
-   reclaim-политике) бакет.
+2. Через admin/S3 API бэкенда создать бакет (если нет), применить policy/quota.
+3. Финализатор: при удалении — удалить бакет только при `reclaimPolicy: Delete`.
+
+Доступ (`ObjectStorageBucketAccess`):
+
+1. Найти бакет по `bucketRef`, дождаться `Ready`; проверить, что namespace
+   разрешён `ObjectStorageBucketPolicy` (deny-by-default). При отзыве политики у
+   уже выданного доступа ключ **отзывается**, `Secret` удаляется.
+2. Выдать отдельную пару ключей (Garage key / SeaweedFS identity / Ceph RGW user
+   + bucket policy) с правами из `permission`; при смене аннотации ротации —
+   новая пара + отзыв старого ключа.
+3. Записать `Secret` в namespace доступа (§4.4), проставить `status.secretRef`.
+4. Финализатор: при удалении `ObjectStorageBucketAccess` — отозвать ключ.
+
+Системное хранилище: модуль по умолчанию (`sdsObject.systemBucket.enabled`,
+default true) шипует системный `ObjectStorageCluster` (`System`) + `system`-бакет
++ политику на `d8-*`; `redundancy` кластера следует режиму HA
+(`helm_lib_is_ha_to_value`: HA → Replicated, иначе Single).
 
 Маппинг admin-операций по бэкендам: Garage Admin API; SeaweedFS S3/filer API;
 Ceph RGW admin ops (или `CephObjectStoreUser` + bucket через S3 от его имени).
@@ -314,6 +361,8 @@ controller:
   resourcesManagement: { mode: VPA, ... }    # ресурсы контроллера
 nodeSelector: {}                              # размещение служебных подов модуля
 tolerations: []
+systemBucket:
+  enabled: true                               # шипать системный кластер+бакет (default true)
 ```
 
 Вся специфика кластеров и бакетов — только через CRD.
@@ -325,7 +374,8 @@ tolerations: []
   — она нужна только для типа Heavy; проверяется в рантайме реконсайлером
   (условие `Error`/`Pending`, если sds-elastic недоступен).
 - System/Lightweight/Full самодостаточны (Garage/SeaweedFS вендорятся в образы
-  модуля).
+  модуля). Исключение: `Full` в режиме `HighRedundancy` требует модуля
+  `managed-postgres` (общий слой метаданных filer); в остальных режимах — нет.
 
 ## 8. Что меняется относительно текущего скелета
 
@@ -352,8 +402,11 @@ tolerations: []
 
 ## 9. Открытые вопросы
 
-- Reclaim-политика бакета при удалении CR (удалять данные или только ключ?) —
-  предлагается поле `spec.reclaimPolicy: Delete|Retain` (default `Retain`).
+- Reclaim-политика (удалять данные или сохранять) — **реализована**:
+  `reclaimPolicy: Retain|Delete` (default `Retain`) на бакете и на кластере
+  (для Heavy `Retain` сохраняет пулы Ceph). Вопрос закрыт.
+- Owner-тег бэкенд-бакета: `EnsureBucket` пока переиспользует уже существующий
+  бакет по имени без проверки владельца — остаточный вопрос изоляции (см. ADR).
 - Мульти-регион / геораспределение Garage — вне первой версии.
 - Экспонирование S3-эндпойнта наружу кластера (Ingress) — вне первой версии,
   пока только внутрикластерный Service.
