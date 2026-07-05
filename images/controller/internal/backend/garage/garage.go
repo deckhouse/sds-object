@@ -135,11 +135,15 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 	return state, nil
 }
 
-// DeleteCluster is a no-op: every object the driver creates carries an owner
-// reference to the ObjectStorageCluster, so Kubernetes garbage-collects them
-// once the CR is removed (after the controller drops its finalizer).
-func (d *Driver) DeleteCluster(_ context.Context, _ *v1alpha1.ObjectStorageCluster) error {
-	return nil
+// DeleteCluster relies on owner-reference GC for the workloads and Services.
+// The StatefulSet's PVCs (Lightweight) are NOT garbage-collected by Kubernetes,
+// so they persist by default (Retain). Only when the cluster reclaim policy is
+// Delete are they removed; System (hostPath) data is left to node cleanup.
+func (d *Driver) DeleteCluster(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) error {
+	if cluster.Spec.ReclaimPolicy != v1alpha1.ClusterReclaimDelete {
+		return nil
+	}
+	return backend.DeleteClusterPVCs(ctx, d.client, d.namespace, commonLabels(cluster))
 }
 
 // EnsureBucket and DeleteBucket are implemented in buckets.go.

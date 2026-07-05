@@ -50,11 +50,11 @@ type ClusterState struct {
 	Capacity *v1alpha1.ObjectCapacityStatus
 }
 
-// BucketState is the observed state a Driver reports for an ObjectBucket. When
-// Ready is true the credentials fields are populated and the reconciler
-// (re)writes the credentials Secret in the bucket's namespace.
+// BucketState is the observed state a Driver reports for an ObjectStorageBucket.
+// Buckets no longer carry credentials: access keys are issued per
+// ObjectStorageBucketAccess (see AccessState).
 type BucketState struct {
-	// Ready is true once the bucket exists and credentials are valid.
+	// Ready is true once the bucket exists in the backend.
 	Ready bool
 
 	// Message is a human-readable explanation of the current state.
@@ -62,10 +62,26 @@ type BucketState struct {
 
 	// BucketName is the effective bucket name created in the backend.
 	BucketName string
+}
 
-	// AccessKeyID / SecretAccessKey are the S3 credentials scoped to the
-	// bucket. Populated only when Ready is true.
-	AccessKeyID     string
+// AccessState is the observed state a Driver reports for an
+// ObjectStorageBucketAccess. When SecretAccessKey is non-empty a fresh key was
+// issued and the reconciler (re)writes the credentials Secret with it; when it
+// is empty the access already had a live key and the existing Secret is
+// preserved (backends other than Ceph RGW cannot recover a secret key after
+// creation).
+type AccessState struct {
+	// Ready is true once a key scoped to the bucket is provisioned.
+	Ready bool
+
+	// Message is a human-readable explanation of the current state.
+	Message string
+
+	// AccessKeyID is the public access key id for the access.
+	AccessKeyID string
+
+	// SecretAccessKey is the secret key; populated only when a fresh key was
+	// just issued (mintFresh) — see the type comment.
 	SecretAccessKey string
 }
 
@@ -79,16 +95,43 @@ type Driver interface {
 	// desired state and reports the observed state.
 	EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) (ClusterState, error)
 
-	// DeleteCluster tears down the data plane for the given cluster.
+	// DeleteCluster tears down the data plane for the given cluster. It must
+	// honour cluster.Spec.ReclaimPolicy: Retain preserves persisted data,
+	// Delete may destroy it.
 	DeleteCluster(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) error
 
-	// EnsureBucket creates/updates the bucket and its access key in the
-	// backend and reports the observed state (including credentials).
-	EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectBucket) (BucketState, error)
+	// EnsureBucket creates/updates the bucket in the backend (no credentials)
+	// and reports the observed state.
+	EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectStorageBucket) (BucketState, error)
 
-	// DeleteBucket removes the access key and, depending on the bucket's
-	// reclaim policy, the bucket itself.
-	DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectBucket) error
+	// DeleteBucket removes the bucket when the bucket's reclaim policy is
+	// Delete (otherwise a no-op on the bucket data).
+	DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectStorageBucket) error
+
+	// EnsureAccess provisions an S3 access key scoped to the bucket for the
+	// given access and reports the observed state. When mintFresh is true it
+	// issues a brand-new key pair (rotating/replacing any previous key for the
+	// access, revoking the old one) and returns it; when false it ensures a
+	// key exists without minting a duplicate.
+	EnsureAccess(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectStorageBucket, access *v1alpha1.ObjectStorageBucketAccess, mintFresh bool) (AccessState, error)
+
+	// DeleteAccess revokes the access key issued for the given access.
+	DeleteAccess(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectStorageBucket, access *v1alpha1.ObjectStorageBucketAccess) error
+}
+
+// AccessResourceName is the backend-facing identifier (access key display name /
+// IAM identity / RGW user) for an access, unique per (namespace, name).
+func AccessResourceName(access *v1alpha1.ObjectStorageBucketAccess) string {
+	return fmt.Sprintf("%s.%s", access.Namespace, access.Name)
+}
+
+// BucketDisplayName is the S3 bucket name for a bucket: spec.bucketName, or
+// metadata.name when unset.
+func BucketDisplayName(bucket *v1alpha1.ObjectStorageBucket) string {
+	if bucket.Spec.BucketName != "" {
+		return bucket.Spec.BucketName
+	}
+	return bucket.Name
 }
 
 // ResolveBackendType maps a cluster profile (spec.type) to the backend that

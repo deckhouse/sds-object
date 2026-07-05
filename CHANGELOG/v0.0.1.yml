@@ -1,2 +1,11 @@
 Changes:
 - Initial module framework (assembly, CI, helm chart, Go application templates).
+- Object Storage API: cluster-scoped ObjectStorageCluster and ObjectStorageBucket,
+    namespaced ObjectStorageBucketAccess (S3 credentials by namespace with key rotation
+    by annotation) and cluster-scoped ObjectStorageBucketPolicy, restricting access
+    between namespaces (deny-by-default; exact names and RE2 patterns).
+- SeaweedFS (Full profile) uses the shared PostgreSQL store metadata only in HighRedundancy
+  (multi-filer HA); Single/Replicated use built-in leveldb on the local PVC.
+- ObjectStorageCluster now has a spec.reclaimPolicy field (Retain by default), which
+  saves backend data when the cluster is deleted (for Heavy, Ceph RGW pools are saved,
+  but CephObjectStore is not deleted) - prevents accidental data loss.

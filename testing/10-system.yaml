@@ -1,6 +1,12 @@
 # System profile (Garage on control-plane nodes, hostPath).
-# Apply, wait for the cluster to be Ready, then re-apply so the bucket and the
-# test Job provision against the ready cluster.
+# Apply, wait for the cluster to be Ready, then re-apply so the bucket, policy,
+# access and the test Job provision against the ready cluster.
+#
+# Flow (new model):
+#   ObjectStorageCluster (cluster-scoped)
+#     -> ObjectStorageBucket (cluster-scoped)
+#     -> ObjectStorageBucketPolicy (allow the obj-test namespace)
+#     -> ObjectStorageBucketAccess (namespaced; issues the creds Secret)
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
 kind: ObjectStorageCluster
@@ -9,15 +15,34 @@ metadata:
 spec:
   type: System
   redundancy: Single
+  reclaimPolicy: Delete
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectBucket
+kind: ObjectStorageBucket
 metadata:
   name: sys-bucket
-  namespace: obj-test
 spec:
   clusterRef: system
   reclaimPolicy: Delete
+---
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectStorageBucketPolicy
+metadata:
+  name: sys-bucket-obj-test
+spec:
+  bucketRef: sys-bucket
+  allowedNamespaces:
+    names:
+      - obj-test
+---
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectStorageBucketAccess
+metadata:
+  name: sys-access
+  namespace: obj-test
+spec:
+  bucketRef: sys-bucket
+  permission: ReadWrite
 ---
 apiVersion: batch/v1
 kind: Job
@@ -43,4 +68,4 @@ spec:
               echo "S3 OK"
           envFrom:
             - secretRef:
-                name: sys-bucket-s3-credentials
+                name: sys-access-s3-credentials

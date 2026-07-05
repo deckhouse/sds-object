@@ -1,6 +1,6 @@
 ---
 title: "Использование"
-description: "Развёртывание объектного хранилища через sds-object: включение модуля, создание ObjectStorageCluster и ObjectBucket, использование сгенерированного Secret с учётными данными."
+description: "Развёртывание объектного хранилища через sds-object: включение модуля, создание cluster-scoped ObjectStorageBucket, выдача доступа namespace через ObjectStorageBucketPolicy и получение учётных данных через ObjectStorageBucketAccess."
 weight: 50
 ---
 
@@ -60,14 +60,13 @@ d8 k get objectstoragecluster
 
 ## Создание бакета
 
-`ObjectBucket` — namespaced-ресурс, создавайте его в namespace приложения:
+`ObjectStorageBucket` — **cluster-scoped**-ресурс: объявляет бакет в кластере, но не содержит учётных данных:
 
 ```yaml
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectBucket
+kind: ObjectStorageBucket
 metadata:
   name: app-data
-  namespace: my-app
 spec:
   clusterRef: shared
   # bucketName по умолчанию равен metadata.name
@@ -75,12 +74,49 @@ spec:
   reclaimPolicy: Retain
 ```
 
-После перехода в `Ready` контроллер пишет `Secret` с именем `<bucket>-s3-credentials` в том же namespace:
+```shell
+d8 k get objectstoragebucket app-data
+# NAME       CLUSTER   BUCKET     PHASE   READY   AGE
+# app-data   shared    app-data   Ready   True    30s
+```
+
+## Выдача доступа namespace
+
+Доступ к бакету работает по принципу **deny-by-default**: namespace может получить учётные данные только если существует `ObjectStorageBucketPolicy` для этого бакета, совпадающая с namespace. Namespace выбираются точными именами `names` и/или RE2-паттернами `patterns`:
+
+```yaml
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectStorageBucketPolicy
+metadata:
+  name: app-data-teams
+spec:
+  bucketRef: app-data
+  allowedNamespaces:
+    names:
+      - my-app
+    patterns:
+      - "team-.*"
+```
+
+## Запрос учётных данных
+
+Каждый потребляющий namespace создаёт `ObjectStorageBucketAccess`. Контроллер генерирует отдельную пару access key / secret key с доступом к бакету и пишет `Secret` (по умолчанию `<access>-s3-credentials`) в том же namespace:
+
+```yaml
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectStorageBucketAccess
+metadata:
+  name: app-data
+  namespace: my-app
+spec:
+  bucketRef: app-data
+  permission: ReadWrite   # или ReadOnly
+```
 
 ```shell
-d8 k -n my-app get objectbucket app-data
-# NAME       CLUSTER   BUCKET     PHASE   SECRET                  READY   AGE
-# app-data   shared    app-data   Ready   app-data-s3-credentials True    30s
+d8 k -n my-app get objectstoragebucketaccess app-data
+# NAME       BUCKET     PHASE   SECRET                    READY   AGE
+# app-data   app-data   Ready   app-data-s3-credentials   True    20s
 ```
 
 ## Использование учётных данных
@@ -112,10 +148,20 @@ spec:
                 name: app-data-s3-credentials
 ```
 
+## Ротация учётных данных
+
+Чтобы сменить access key у `ObjectStorageBucketAccess`, установите или измените аннотацию `storage.deckhouse.io/rotate`. Контроллер выпустит новую пару ключей, обновит `Secret` и отзовёт предыдущий ключ:
+
+```shell
+d8 k -n my-app annotate objectstoragebucketaccess app-data \
+  storage.deckhouse.io/rotate="$(date +%s)" --overwrite
+```
+
 ## Политика высвобождения
 
-- `reclaimPolicy: Retain` (по умолчанию) — при удалении `ObjectBucket` ключ доступа удаляется, бакет и объекты сохраняются.
-- `reclaimPolicy: Delete` — при удалении `ObjectBucket` удаляются бакет и все его объекты.
+- Бакет `reclaimPolicy: Retain` (по умолчанию) — при удалении `ObjectStorageBucket` бакет и объекты сохраняются; `Delete` — удаляются.
+- Удаление `ObjectStorageBucketAccess` всегда отзывает его ключ доступа и удаляет его `Secret` (данные бакета не затрагиваются).
+- Кластер `reclaimPolicy: Retain` (по умолчанию) — при удалении `ObjectStorageCluster` данные сохраняются (для `Heavy` — пулы Ceph RGW; для профилей на PVC — сами PVC). `Delete` — данные уничтожаются.
 
 ## Профиль Heavy
 
@@ -132,5 +178,5 @@ spec:
 ```
 
 {{< alert level="info" >}}
-Профиль `Heavy` разворачивает data plane Ceph RGW (Rook CephObjectStore на указанном кластере sds-elastic). Бакеты работают так же, как у остальных профилей: `ObjectBucket` создаёт Rook `CephObjectStoreUser` и бакет, а Secret с учётками пишется в namespace бакета.
+Профиль `Heavy` разворачивает data plane Ceph RGW (Rook CephObjectStore на указанном кластере sds-elastic). Бакеты и доступ работают так же, как у остальных профилей: `ObjectStorageBucket` создаёт владельца-бакета Rook `CephObjectStoreUser` и сам бакет, а каждый `ObjectStorageBucketAccess` получает собственного `CephObjectStoreUser`, которому доступ к бакету выдаётся через bucket policy.
 {{< /alert >}}

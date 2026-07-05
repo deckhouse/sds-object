@@ -127,8 +127,14 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 	return state, nil
 }
 
-// DeleteCluster removes the CephObjectStore (idempotent).
+// DeleteCluster removes the CephObjectStore only when the cluster reclaim
+// policy is Delete. With the default Retain the store (and thus all bucket
+// data) is left intact — deleting it would destroy the RGW pools regardless of
+// any per-bucket Retain policy.
 func (d *Driver) DeleteCluster(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) error {
+	if cluster.Spec.ReclaimPolicy != v1alpha1.ClusterReclaimDelete {
+		return nil
+	}
 	store := newUnstructured(cephObjectStoreGVK)
 	ns, name := objectStoreKey(cluster)
 	store.SetNamespace(ns)

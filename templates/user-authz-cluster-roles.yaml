@@ -11,7 +11,9 @@ rules:
   - storage.deckhouse.io
   resources:
   - objectstorageclusters
-  - objectbuckets
+  - objectstoragebuckets
+  - objectstoragebucketaccesses
+  - objectstoragebucketpolicies
   verbs:
   - get
   - list
@@ -29,7 +31,9 @@ rules:
   - storage.deckhouse.io
   resources:
   - objectstorageclusters
-  - objectbuckets
+  - objectstoragebuckets
+  - objectstoragebucketaccesses
+  - objectstoragebucketpolicies
   verbs:
   - create
   - delete

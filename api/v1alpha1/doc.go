@@ -19,8 +19,11 @@ limitations under the License.
 //
 //   - ObjectStorageCluster — cluster-scoped CR describing an S3-compatible
 //     object storage cluster (one of four turnkey profiles).
-//   - ObjectBucket — namespaced CR declaring a single bucket plus its S3
-//     credentials Secret.
+//   - ObjectStorageBucket — cluster-scoped CR declaring a single bucket.
+//   - ObjectStorageBucketAccess — namespaced CR requesting scoped credentials
+//     for a bucket (writes an S3 credentials Secret).
+//   - ObjectStorageBucketPolicy — cluster-scoped CR gating which namespaces may
+//     request access to a bucket.
 //
 // +groupName=storage.deckhouse.io
 // +k8s:deepcopy-gen=package

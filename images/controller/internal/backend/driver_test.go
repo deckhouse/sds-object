@@ -85,7 +85,7 @@ func TestNotImplementedDriver(t *testing.T) {
 		t.Errorf("EnsureCluster: stub must explain why it is not ready")
 	}
 
-	bs, err := d.EnsureBucket(context.Background(), &v1alpha1.ObjectStorageCluster{}, &v1alpha1.ObjectBucket{})
+	bs, err := d.EnsureBucket(context.Background(), &v1alpha1.ObjectStorageCluster{}, &v1alpha1.ObjectStorageBucket{})
 	if err != nil {
 		t.Fatalf("EnsureBucket: unexpected error %v", err)
 	}

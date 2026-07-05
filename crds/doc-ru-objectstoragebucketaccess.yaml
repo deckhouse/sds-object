@@ -1,0 +1,90 @@
+spec:
+  versions:
+    - name: v1alpha1
+      schema:
+        openAPIV3Schema:
+          description: |
+            Запрашивает доступ к cluster-scoped бакету ObjectStorageBucket из
+            потребляющего namespace. Контроллер генерирует отдельную пару
+            access key / secret key для этого доступа, кладёт в тот же namespace
+            Secret (см. `status.secretRef`) со стандартными переменными
+            подключения к S3 и отзывает ключ при удалении ресурса.
+
+            Разрешён ли доступ, определяется ресурсами ObjectStorageBucketPolicy
+            (deny-by-default): доступ, namespace которого не совпал ни с одной
+            политикой для указанного бакета, остаётся в фазе `Pending`.
+
+            Ротация ключей: установите или измените аннотацию
+            `storage.deckhouse.io/rotate`, чтобы выпустить новую пару ключей
+            (Secret обновляется, предыдущий ключ отзывается).
+          properties:
+            spec:
+              description: |
+                Желаемое состояние доступа.
+              properties:
+                bucketRef:
+                  description: |
+                    Имя cluster-scoped бакета ObjectStorageBucket, к которому
+                    запрашивается доступ. Неизменяемо после создания.
+                permission:
+                  description: |
+                    Уровень доступа для выданных учётных данных.
+
+                    - `ReadWrite` (по умолчанию) — чтение и запись объектов.
+                    - `ReadOnly` — только чтение объектов.
+                secretName:
+                  description: |
+                    Переопределяет имя Secret с учётными данными в namespace
+                    доступа. По умолчанию `<metadata.name>-s3-credentials`.
+            status:
+              description: |
+                Наблюдаемое состояние доступа.
+              properties:
+                observedGeneration:
+                  description: |
+                    Последнее значение `metadata.generation`, обработанное контроллером.
+                phase:
+                  description: |
+                    Агрегатная фаза: `Pending`, `InProgress`, `Ready`, `Error`.
+                endpoint:
+                  description: |
+                    Внутрикластерный URL S3-эндпойнта кластера-владельца.
+                bucketName:
+                  description: |
+                    Фактическое имя бакета, к которому предоставлен доступ.
+                accessKeyID:
+                  description: |
+                    Публичный идентификатор ключа доступа, выданного для этого
+                    доступа (секретный ключ пишется только в Secret).
+                secretRef:
+                  description: |
+                    Ссылка на Secret (в namespace этого доступа) с переменными
+                    подключения и учётными данными S3: `S3_ENDPOINT`, `S3_REGION`,
+                    `S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`.
+                  properties:
+                    name:
+                      description: Имя Secret.
+                observedRotation:
+                  description: |
+                    Последнее обработанное контроллером значение аннотации
+                    `storage.deckhouse.io/rotate`.
+                lastRotationTime:
+                  description: Время последней выдачи ключа.
+                conditions:
+                  description: |
+                    Покомпонентные condition: `AccessGranted`, `CredentialsReady`
+                    и агрегатное `Ready`.
+                  items:
+                    properties:
+                      type:
+                        description: Тип condition.
+                      status:
+                        description: Текущий статус condition.
+                      observedGeneration:
+                        description: Значение `metadata.generation`, для которого выставлен condition.
+                      lastTransitionTime:
+                        description: Время последнего перехода condition.
+                      reason:
+                        description: Машинно-читаемая причина текущего статуса.
+                      message:
+                        description: Человекочитаемое описание текущего статуса.

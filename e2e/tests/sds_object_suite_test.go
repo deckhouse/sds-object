@@ -80,12 +80,15 @@ var _ = Describe("sds-object e2e", Ordered, ContinueOnFailure, func() {
 		dumpFailedSpecDiagnostics(ctx)
 	})
 
-	createSpecs()      // create_test.go: OSC -> Ready, OB -> Ready, creds Secret, S3 round-trip
-	validationSpecs()  // validation_test.go: webhook + CEL admission guards
-	lightweightSpecs() // lightweight_test.go: Lightweight (Garage on PVC) create -> bucket -> round-trip -> delete
-	fullSpecs()        // full_test.go: Full (SeaweedFS + managed-postgres) create -> bucket -> round-trip -> delete
-	heavySpecs()       // heavy_test.go: Heavy (Ceph RGW on sds-elastic ElasticCluster) bring-up -> create -> bucket -> round-trip -> delete
-	deleteSpecs()      // delete_test.go: OB delete (+ creds Secret + reclaim), OSC delete
+	createSpecs()             // create_test.go: OSC -> Ready, OB -> Ready, creds Secret, S3 round-trip
+	validationSpecs()         // validation_test.go: webhook + CEL admission guards
+	accessSpecs()             // access_test.go: deny-by-default + revocation, regexp policy, key rotation, ReadOnly, cross-namespace
+	systemBucketSpecs()       // system_test.go: built-in system OSCluster+OSB+policy shipped by templates
+	lightweightSpecs()        // lightweight_test.go: Lightweight (Garage on PVC) create -> bucket -> round-trip -> delete
+	fullSpecs()               // full_test.go: Full (SeaweedFS, Single/leveldb) create -> bucket -> round-trip -> delete
+	fullHighRedundancySpecs() // full_test.go: Full HighRedundancy (SeaweedFS multi-filer HA + managed-postgres)
+	heavySpecs()              // heavy_test.go: Heavy (Ceph RGW on sds-elastic ElasticCluster) bring-up -> create -> bucket -> round-trip -> delete
+	deleteSpecs()             // delete_test.go: OB delete (+ creds Secret + reclaim), OSC delete
 })
 
 func prepareSuite() {

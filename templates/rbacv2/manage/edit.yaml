@@ -14,7 +14,9 @@ rules:
       - storage.deckhouse.io
     resources:
       - objectstorageclusters
-      - objectbuckets
+      - objectstoragebuckets
+      - objectstoragebucketaccesses
+      - objectstoragebucketpolicies
     verbs:
       - create
       - update

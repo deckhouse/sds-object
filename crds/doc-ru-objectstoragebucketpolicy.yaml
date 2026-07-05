@@ -1,0 +1,62 @@
+spec:
+  versions:
+    - name: v1alpha1
+      schema:
+        openAPIV3Schema:
+          description: |
+            Определяет, из каких namespace разрешён запрос доступа (через
+            ObjectStorageBucketAccess) к cluster-scoped бакету
+            ObjectStorageBucket. Доступ работает по принципу deny-by-default:
+            ObjectStorageBucketAccess провижнится только если хотя бы одна
+            политика для его бакета совпадает с namespace доступа. Несколько
+            политик для одного бакета складываются (их разрешённые множества
+            объединяются).
+          properties:
+            spec:
+              description: |
+                Желаемая политика.
+              properties:
+                bucketRef:
+                  description: |
+                    Имя cluster-scoped бакета ObjectStorageBucket, к которому
+                    относится политика. Неизменяемо после создания.
+                allowedNamespaces:
+                  description: |
+                    Namespace, которым разрешён запрос доступа к бакету. Namespace
+                    совпадает, если он присутствует в `names` или полностью
+                    соответствует любому RE2-регулярному выражению из `patterns`.
+                  properties:
+                    names:
+                      description: |
+                        Список точных имён namespace.
+                    patterns:
+                      description: |
+                        RE2-регулярные выражения, применяемые к имени namespace
+                        (полное совпадение), например `team-.*`.
+            status:
+              description: |
+                Наблюдаемое состояние политики.
+              properties:
+                observedGeneration:
+                  description: |
+                    Последнее значение `metadata.generation`, обработанное контроллером.
+                phase:
+                  description: |
+                    Агрегатная фаза: `Pending`, `Ready`, `Error`.
+                conditions:
+                  description: |
+                    Состояние. Известный тип: `Ready`.
+                  items:
+                    properties:
+                      type:
+                        description: Тип condition.
+                      status:
+                        description: Текущий статус condition.
+                      observedGeneration:
+                        description: Значение `metadata.generation`, для которого выставлен condition.
+                      lastTransitionTime:
+                        description: Время последнего перехода condition.
+                      reason:
+                        description: Машинно-читаемая причина текущего статуса.
+                      message:
+                        description: Человекочитаемое описание текущего статуса.

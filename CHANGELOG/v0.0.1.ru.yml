@@ -1,2 +1,5 @@
 Изменения:
   - Первоначальный каркас модуля (сборка, CI, helm-чарт, заготовки Go-приложений).
+  - API объектного хранилища: cluster-scoped ObjectStorageCluster и ObjectStorageBucket, namespaced ObjectStorageBucketAccess (учётные данные S3 по namespace с ротацией ключей по аннотации) и cluster-scoped ObjectStorageBucketPolicy, ограничивающий доступ между namespace (deny-by-default; точные имена и RE2-паттерны).
+  - SeaweedFS (профиль Full) использует общий метаданный store PostgreSQL только в HighRedundancy (multi-filer HA); Single/Replicated используют встроенный leveldb на локальном PVC.
+  - У ObjectStorageCluster появилось поле spec.reclaimPolicy (по умолчанию Retain), сохраняющее данные бэкенда при удалении кластера (для Heavy пулы Ceph RGW сохраняются, а CephObjectStore не удаляется) — предотвращает случайную потерю данных.

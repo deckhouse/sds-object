@@ -141,15 +141,29 @@ func TestFilerReplicas(t *testing.T) {
 		r    v1alpha1.RedundancyMode
 		want int32
 	}{
+		// Only HighRedundancy runs a multi-replica filer (backed by Postgres);
+		// Single/Replicated run a single filer on the built-in leveldb store.
 		{v1alpha1.RedundancySingle, 1},
-		{v1alpha1.RedundancyReplicated, 2},
-		{v1alpha1.RedundancyMode(""), 2},
+		{v1alpha1.RedundancyReplicated, 1},
+		{v1alpha1.RedundancyMode(""), 1},
 		{v1alpha1.RedundancyHighRedundancy, 3},
 	}
 	for _, c := range cases {
 		if got := filerReplicas(cluster("c", c.r)); got != c.want {
 			t.Errorf("filerReplicas(%q)=%d, want %d", c.r, got, c.want)
 		}
+	}
+}
+
+func TestUsesPostgres(t *testing.T) {
+	if usesPostgres(cluster("c", v1alpha1.RedundancySingle)) {
+		t.Errorf("Single must not use Postgres")
+	}
+	if usesPostgres(cluster("c", v1alpha1.RedundancyReplicated)) {
+		t.Errorf("Replicated must not use Postgres")
+	}
+	if !usesPostgres(cluster("c", v1alpha1.RedundancyHighRedundancy)) {
+		t.Errorf("HighRedundancy must use Postgres")
 	}
 }
 

@@ -1,5 +1,21 @@
 type: object
 properties:
+  systemBucket:
+    type: object
+    default: {}
+    description: |
+      The built-in system object storage: a `System` ObjectStorageCluster
+      (Garage on control-plane nodes) with a `system` ObjectStorageBucket for
+      platform needs. The cluster redundancy follows the cluster HA mode
+      (`Replicated` when HA is enabled, otherwise `Single`).
+    properties:
+      enabled:
+        type: boolean
+        default: true
+        description: |
+          Whether to provision the system ObjectStorageCluster and its
+          `system` bucket. Disable if the platform does not need a built-in
+          object storage.
   logLevel:
     type: string
     enum:
@@ -67,8 +83,9 @@ properties:
     type: object
     default: {}
     description: |
-      Settings of the sds-object-controller (reconciler for ObjectStorageCluster
-      and ObjectBucket CRs).
+      Settings of the sds-object-controller (reconciler for ObjectStorageCluster,
+      ObjectStorageBucket, ObjectStorageBucketAccess and
+      ObjectStorageBucketPolicy CRs).
     properties:
       resourcesManagement:
         description: |

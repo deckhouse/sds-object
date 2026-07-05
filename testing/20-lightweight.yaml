@@ -8,18 +8,37 @@ metadata:
 spec:
   type: Lightweight
   redundancy: Single
+  reclaimPolicy: Delete
   storage:
     size: 5Gi
     class: localpath   # <-- replace with your StorageClass (kubectl get sc)
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectBucket
+kind: ObjectStorageBucket
 metadata:
   name: light-bucket
-  namespace: obj-test
 spec:
   clusterRef: lightweight
   reclaimPolicy: Delete
+---
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectStorageBucketPolicy
+metadata:
+  name: light-bucket-obj-test
+spec:
+  bucketRef: light-bucket
+  allowedNamespaces:
+    names:
+      - obj-test
+---
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectStorageBucketAccess
+metadata:
+  name: light-access
+  namespace: obj-test
+spec:
+  bucketRef: light-bucket
+  permission: ReadWrite
 ---
 apiVersion: batch/v1
 kind: Job
@@ -45,4 +64,4 @@ spec:
               echo "S3 OK"
           envFrom:
             - secretRef:
-                name: light-bucket-s3-credentials
+                name: light-access-s3-credentials

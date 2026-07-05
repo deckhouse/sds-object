@@ -1,0 +1,43 @@
+{{- /*
+  Built-in system object storage.
+
+  Ships a cluster-scoped `system` ObjectStorageCluster (type System — Garage on
+  control-plane nodes with hostPath) plus a `system` ObjectStorageBucket for
+  platform needs, and an ObjectStorageBucketPolicy granting d8-* module
+  namespaces access to it (access is deny-by-default otherwise).
+
+  The cluster redundancy — and therefore the number of Garage data-plane
+  replicas — follows the cluster HA mode: `Replicated` (rf=3 across the 3
+  control-plane nodes) when HA is enabled, otherwise `Single` (rf=1).
+*/ -}}
+{{- if .Values.sdsObject.systemBucket.enabled }}
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectStorageCluster
+metadata:
+  name: system
+  {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
+spec:
+  type: System
+  redundancy: {{ include "helm_lib_is_ha_to_value" (list . "Replicated" "Single") | trim }}
+  reclaimPolicy: Retain
+---
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectStorageBucket
+metadata:
+  name: system
+  {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
+spec:
+  clusterRef: system
+  reclaimPolicy: Retain
+---
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectStorageBucketPolicy
+metadata:
+  name: system-d8-namespaces
+  {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
+spec:
+  bucketRef: system
+  allowedNamespaces:
+    patterns:
+      - "d8-.*"
+{{- end }}

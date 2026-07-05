@@ -15,9 +15,11 @@ The `sds-object` module manages S3-compatible object storage in a Deckhouse Kube
 | Resource | Scope | Purpose |
 |----------|-------|---------|
 | `ObjectStorageCluster` (`osc`) | Cluster | Provisions an object storage cluster of one of four turnkey profiles. |
-| `ObjectBucket` (`ob`) | Namespaced | Creates a bucket and writes a standard S3 credentials `Secret` next to your application. |
+| `ObjectStorageBucket` (`osb`) | Cluster | Declares a bucket in a cluster (no credentials). |
+| `ObjectStorageBucketPolicy` (`osbp`) | Cluster | Declares which namespaces may request access to a bucket (deny-by-default). |
+| `ObjectStorageBucketAccess` (`osba`) | Namespaced | Requests scoped credentials for a bucket; writes a standard S3 credentials `Secret` next to your application. |
 
-`ObjectBucket` is namespaced on purpose: an application team creates a bucket in its own namespace, and the generated access key lands in a `Secret` in that namespace, so access is naturally scoped by RBAC.
+Buckets are cluster-scoped; credentials are issued per namespace via `ObjectStorageBucketAccess`, gated by `ObjectStorageBucketPolicy` (an access whose namespace matches no policy stays pending). Each access gets its own access key, which can be rotated independently via the `storage.deckhouse.io/rotate` annotation.
 
 ## Cluster profiles
 
@@ -39,7 +41,8 @@ The `Full` profile therefore requires the `managed-postgres` module to be enable
 ## How it works
 
 - The controller reconciles each `ObjectStorageCluster` into a backend data plane (workloads, services, configuration) and reports readiness, the S3 endpoint, and capacity in `status`.
-- The controller reconciles each `ObjectBucket` into a bucket and a scoped access key on the referenced cluster, then writes a `Secret` (owned by the `ObjectBucket`) with the standard connection variables: `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`.
+- The controller reconciles each `ObjectStorageBucket` into a bucket on the referenced cluster (no credentials).
+- The controller reconciles each `ObjectStorageBucketAccess` — once an `ObjectStorageBucketPolicy` allows its namespace — into a scoped access key, then writes a `Secret` (owned by the access) with the standard connection variables: `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`.
 
 See [Usage](usage.html) for a walkthrough.
 

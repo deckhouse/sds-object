@@ -22,6 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
+	"github.com/deckhouse/sds-object/images/controller/internal/backend"
 )
 
 func heavy(name string, r v1alpha1.RedundancyMode) *v1alpha1.ObjectStorageCluster {
@@ -66,22 +67,26 @@ func TestRGWEndpointAndStore(t *testing.T) {
 
 func TestUserAndSecretNames(t *testing.T) {
 	c := heavy("main", "")
-	b := &v1alpha1.ObjectBucket{ObjectMeta: metav1.ObjectMeta{Namespace: "app", Name: "data"}}
+	b := &v1alpha1.ObjectStorageBucket{ObjectMeta: metav1.ObjectMeta{Name: "data"}}
+	access := &v1alpha1.ObjectStorageBucketAccess{ObjectMeta: metav1.ObjectMeta{Namespace: "app", Name: "reader"}}
 
-	if got := userName(b); got != "app-data" {
-		t.Errorf("userName=%q, want app-data", got)
+	if got := ownerUID(b); got != "data-owner" {
+		t.Errorf("ownerUID=%q, want data-owner", got)
 	}
-	if got := rookUserSecretName(c, b); got != "rook-ceph-object-user-main-app-data" {
-		t.Errorf("rookUserSecretName=%q", got)
+	if got := accessUID(access); got != "app.reader" {
+		t.Errorf("accessUID=%q, want app.reader", got)
+	}
+	if got := rgwUserSecretName(c, "app.reader"); got != "rook-ceph-object-user-main-app.reader" {
+		t.Errorf("rgwUserSecretName=%q", got)
 	}
 	if got := rgwHostPort(c, "internal.cluster.local"); got != "rook-ceph-rgw-main.d8-sds-elastic.svc.internal.cluster.local:80" {
 		t.Errorf("rgwHostPort=%q", got)
 	}
-	if got := bucketDisplayName(b); got != "data" {
-		t.Errorf("bucketDisplayName=%q, want data", got)
+	if got := backend.BucketDisplayName(b); got != "data" {
+		t.Errorf("BucketDisplayName=%q, want data", got)
 	}
 
-	user := buildCephObjectStoreUser(c, b)
+	user := buildCephObjectStoreUser(c, "data-owner")
 	if user.GetNamespace() != elasticNamespace {
 		t.Errorf("user namespace=%q", user.GetNamespace())
 	}

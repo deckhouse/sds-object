@@ -39,17 +39,19 @@ import (
 func validationSpecs() {
 	Describe("validation", func() {
 		It("denies a second System ObjectStorageCluster", func() {
-			if !suiteCfg.isSystem() {
-				Skip("shared cluster is not type System; the single-System webhook guard is not armed")
-			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 
-			second := buildOSC(suiteCfg.oscName + "-2")
+			// The module always ships a `system` System cluster, so any extra
+			// System cluster must be denied regardless of the primary profile.
+			second := newOSC("e2e-extra-system", map[string]interface{}{
+				"type":       string(objectv1alpha1.ClusterTypeSystem),
+				"redundancy": string(objectv1alpha1.RedundancySingle),
+			})
 			err := createOSC(ctx, second)
 			// Best-effort cleanup in case the guard ever regresses and admits it.
 			defer func() {
-				_ = suiteDyn.Resource(objectStorageClusterGVR).Delete(context.Background(), suiteCfg.oscName+"-2", metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(objectStorageClusterGVR).Delete(context.Background(), "e2e-extra-system", metav1.DeleteOptions{})
 			}()
 			expectDenied(err, "only one System ObjectStorageCluster is allowed")
 		})
@@ -59,14 +61,15 @@ func validationSpecs() {
 			defer cancel()
 
 			// Distinct metadata.name, but spec.bucketName collides with the shared
-			// bucket on the same clusterRef -> the webhook must reject it.
-			dup := buildOB("e2e-bucket-dup", suiteCfg.namespace, suiteCfg.oscName, objectv1alpha1.BucketReclaimRetain)
+			// cluster-scoped bucket on the same clusterRef -> the webhook must
+			// reject it (bucket-name uniqueness per clusterRef is a hard deny).
+			dup := buildOSB("e2e-bucket-dup", suiteCfg.oscName, objectv1alpha1.BucketReclaimRetain)
 			spec := dup.Object["spec"].(map[string]interface{})
 			spec["bucketName"] = suiteCfg.bucketName
 
-			err := createOB(ctx, dup)
+			err := createOSB(ctx, dup)
 			defer func() {
-				_ = suiteDyn.Resource(objectBucketGVR).Namespace(suiteCfg.namespace).Delete(context.Background(), "e2e-bucket-dup", metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(objectStorageBucketGVR).Delete(context.Background(), "e2e-bucket-dup", metav1.DeleteOptions{})
 			}()
 			expectDenied(err, "already claimed by")
 		})
@@ -129,6 +132,24 @@ func validationSpecs() {
 				_ = suiteDyn.Resource(objectStorageClusterGVR).Delete(context.Background(), "e2e-light-noclass", metav1.DeleteOptions{})
 			}()
 			expectDenied(err, "storage.class is required")
+		})
+
+		It("denies an ObjectStorageBucketPolicy with an invalid regex pattern", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+
+			// The policy validator warns on most inputs, but rejects patterns that
+			// fail to compile as RE2 (an unclosed group is invalid).
+			bad := buildOSBPolicy("e2e-bad-pattern", suiteCfg.bucketName, nil)
+			spec := bad.Object["spec"].(map[string]interface{})
+			spec["allowedNamespaces"] = map[string]interface{}{
+				"patterns": []interface{}{"("},
+			}
+			err := createOSBPolicy(ctx, bad)
+			defer func() {
+				_ = suiteDyn.Resource(objectStorageBucketPolicyGVR).Delete(context.Background(), "e2e-bad-pattern", metav1.DeleteOptions{})
+			}()
+			expectDenied(err, "pattern")
 		})
 	})
 }

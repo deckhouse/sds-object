@@ -36,27 +36,27 @@ const (
 	rookSecretSecretKey = "SecretKey"
 )
 
-// EnsureBucket provisions an RGW user (CephObjectStoreUser → Rook issues its
-// access/secret key in a Secret) and creates the bucket via the S3 API with
-// that key. The reconciler then writes the standard credentials Secret. Rook
-// owns the key, so it is stable across reconciles.
-func (d *Driver) EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectBucket) (backend.BucketState, error) {
-	if err := d.ensureUser(ctx, cluster, bucket); err != nil {
+// EnsureBucket provisions the per-bucket owner RGW user (CephObjectStoreUser →
+// Rook issues its keys in a Secret) and creates the bucket via the S3 API with
+// that key. Per-access credentials are issued separately (see access.go);
+// cross-user access is granted through the bucket policy.
+func (d *Driver) EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectStorageBucket) (backend.BucketState, error) {
+	if err := d.ensureUser(ctx, cluster, ownerUID(bucket)); err != nil {
 		if isNoMatch(err) {
 			return backend.BucketState{Message: "CephObjectStoreUser CRD not found; is the sds-elastic module installed?"}, nil
 		}
-		return backend.BucketState{}, fmt.Errorf("ensure CephObjectStoreUser: %w", err)
+		return backend.BucketState{}, fmt.Errorf("ensure owner CephObjectStoreUser: %w", err)
 	}
 
-	accessKey, secretKey, err := d.userKeys(ctx, cluster, bucket)
+	accessKey, secretKey, err := d.userKeys(ctx, cluster, ownerUID(bucket))
 	if err != nil {
 		return backend.BucketState{}, err
 	}
 	if accessKey == "" || secretKey == "" {
-		return backend.BucketState{Message: "waiting for Rook to issue RGW user credentials"}, nil
+		return backend.BucketState{Message: "waiting for Rook to issue the bucket owner credentials"}, nil
 	}
 
-	name := bucketDisplayName(bucket)
+	name := backend.BucketDisplayName(bucket)
 	mc, err := s3util.NewClient(rgwHostPort(cluster, d.clusterDomain), accessKey, secretKey)
 	if err != nil {
 		return backend.BucketState{}, fmt.Errorf("build S3 client: %w", err)
@@ -65,21 +65,14 @@ func (d *Driver) EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStora
 		return backend.BucketState{}, err
 	}
 
-	return backend.BucketState{
-		Ready:           true,
-		Message:         "bucket and access key provisioned",
-		BucketName:      name,
-		AccessKeyID:     accessKey,
-		SecretAccessKey: secretKey,
-	}, nil
+	return backend.BucketState{Ready: true, Message: "bucket provisioned", BucketName: name}, nil
 }
 
-// DeleteBucket removes the bucket (when reclaimPolicy=Delete) and the
-// CephObjectStoreUser (which revokes the key). Idempotent.
-func (d *Driver) DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectBucket) error {
+// DeleteBucket removes the bucket (when reclaimPolicy=Delete) and the owner
+// CephObjectStoreUser. Idempotent.
+func (d *Driver) DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectStorageBucket) error {
 	if bucket.Spec.ReclaimPolicy == v1alpha1.BucketReclaimDelete {
-		// Use the user's key (while it still exists) to empty + remove the bucket.
-		accessKey, secretKey, err := d.userKeys(ctx, cluster, bucket)
+		accessKey, secretKey, err := d.userKeys(ctx, cluster, ownerUID(bucket))
 		if err != nil {
 			return err
 		}
@@ -88,30 +81,24 @@ func (d *Driver) DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStora
 			if err != nil {
 				return fmt.Errorf("build S3 client: %w", err)
 			}
-			if err := s3util.DeleteBucket(ctx, mc, bucketDisplayName(bucket)); err != nil {
+			if err := s3util.DeleteBucket(ctx, mc, backend.BucketDisplayName(bucket)); err != nil {
 				return err
 			}
 		}
 	}
 
-	user := newUnstructured(cephObjectStoreUserGVK)
-	user.SetNamespace(elasticNamespace)
-	user.SetName(userName(bucket))
-	if err := d.client.Delete(ctx, user); err != nil && !apierrors.IsNotFound(err) && !isNoMatch(err) {
-		return fmt.Errorf("delete CephObjectStoreUser: %w", err)
-	}
-	return nil
+	return d.deleteUser(ctx, ownerUID(bucket))
 }
 
-// ensureUser creates or updates the CephObjectStoreUser for the bucket.
-func (d *Driver) ensureUser(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectBucket) error {
-	desired := buildCephObjectStoreUser(cluster, bucket)
+// ensureUser creates or updates the CephObjectStoreUser with the given uid.
+func (d *Driver) ensureUser(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, uid string) error {
+	desired := buildCephObjectStoreUser(cluster, uid)
 	if err := controllerutil.SetControllerReference(cluster, desired, d.client.Scheme()); err != nil {
 		return err
 	}
 
 	existing := newUnstructured(cephObjectStoreUserGVK)
-	if err := d.apiReader.Get(ctx, client.ObjectKey{Namespace: elasticNamespace, Name: userName(bucket)}, existing); err != nil {
+	if err := d.apiReader.Get(ctx, client.ObjectKey{Namespace: elasticNamespace, Name: uid}, existing); err != nil {
 		if apierrors.IsNotFound(err) {
 			return d.client.Create(ctx, desired)
 		}
@@ -123,11 +110,22 @@ func (d *Driver) ensureUser(ctx context.Context, cluster *v1alpha1.ObjectStorage
 	return d.client.Update(ctx, existing)
 }
 
-// userKeys reads the access/secret key from the Rook-generated user Secret
-// (empty strings when it does not exist yet).
-func (d *Driver) userKeys(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectBucket) (string, string, error) {
+// deleteUser removes the CephObjectStoreUser with the given uid (idempotent).
+func (d *Driver) deleteUser(ctx context.Context, uid string) error {
+	user := newUnstructured(cephObjectStoreUserGVK)
+	user.SetNamespace(elasticNamespace)
+	user.SetName(uid)
+	if err := d.client.Delete(ctx, user); err != nil && !apierrors.IsNotFound(err) && !isNoMatch(err) {
+		return fmt.Errorf("delete CephObjectStoreUser %q: %w", uid, err)
+	}
+	return nil
+}
+
+// userKeys reads the access/secret key from the Rook-generated user Secret for
+// the given uid (empty strings when it does not exist yet).
+func (d *Driver) userKeys(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, uid string) (string, string, error) {
 	secret := &corev1.Secret{}
-	key := client.ObjectKey{Namespace: elasticNamespace, Name: rookUserSecretName(cluster, bucket)}
+	key := client.ObjectKey{Namespace: elasticNamespace, Name: rgwUserSecretName(cluster, uid)}
 	if err := d.apiReader.Get(ctx, key, secret); err != nil {
 		if apierrors.IsNotFound(err) {
 			return "", "", nil

@@ -1,8 +1,24 @@
 # sds-object — дизайн модуля
 
-> Статус: дизайн (черновик). Модуль сейчас в состоянии скелета (placeholder-CRD
-> `ObjectStorageClass`, заготовки контроллера/вебхуков/хуков). Этот документ
-> описывает целевую архитектуру и контракт CRD.
+> Статус: дизайн (черновик). Этот документ описывает исходную целевую
+> архитектуру и контракт CRD.
+>
+> **Обновление модели бакетов (актуальная реализация).** Описанный ниже
+> namespaced `ObjectBucket` заменён на три ресурса:
+> - `ObjectStorageBucket` (**cluster-scoped**) — только объявление бакета, без
+>   учётных данных;
+> - `ObjectStorageBucketAccess` (namespaced) — запрос доступа из namespace:
+>   контроллер выдаёт отдельную пару ключей на каждый access, пишет `Secret`
+>   с учётками (owned by access) и поддерживает ротацию ключей по аннотации
+>   `storage.deckhouse.io/rotate`;
+> - `ObjectStorageBucketPolicy` (cluster-scoped) — из каких namespace разрешён
+>   доступ к бакету (deny-by-default; списки имён и RE2-паттерны).
+>
+> Также: у `ObjectStorageCluster` появился `spec.reclaimPolicy`
+> (`Retain`/`Delete`, по умолчанию `Retain`), защищающий данные от случайного
+> удаления (для Heavy — `preservePoolsOnDelete`); SeaweedFS использует общий
+> PostgreSQL только в `HighRedundancy`, иначе встроенный leveldb. Актуальный
+> контракт — в `crds/` и `docs/`.
 
 ## 1. Назначение
 

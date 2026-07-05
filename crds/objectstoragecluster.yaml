@@ -30,8 +30,9 @@ spec:
             (Garage / SeaweedFS / Ceph RGW) and its low-level settings are hidden
             from the user (noops).
 
-            Buckets and their S3 credentials are declared separately in
-            namespaced ObjectBucket resources that reference this cluster by name.
+            Buckets are declared separately in cluster-scoped ObjectStorageBucket
+            resources that reference this cluster by name; per-namespace
+            credentials are requested via ObjectStorageBucketAccess.
           required:
             - spec
           x-kubernetes-validations:
@@ -51,6 +52,8 @@ spec:
                   message: "spec.type is immutable after creation."
                 - rule: "oldSelf == null || (has(self.elasticClusterRef) == has(oldSelf.elasticClusterRef) && (!has(self.elasticClusterRef) || self.elasticClusterRef == oldSelf.elasticClusterRef))"
                   message: "spec.elasticClusterRef is immutable after creation."
+                - rule: "oldSelf == null || !has(oldSelf.reclaimPolicy) || self.reclaimPolicy == oldSelf.reclaimPolicy"
+                  message: "spec.reclaimPolicy is immutable after creation."
                 - rule: "self.type != 'Heavy' || (has(self.elasticClusterRef) && size(self.elasticClusterRef) > 0)"
                   message: "spec.elasticClusterRef is required when spec.type is Heavy."
                 - rule: "self.type == 'Heavy' || !has(self.elasticClusterRef) || size(self.elasticClusterRef) == 0"
@@ -158,6 +161,25 @@ spec:
                           tolerationSeconds:
                             type: integer
                             format: int64
+                reclaimPolicy:
+                  type: string
+                  description: |
+                    What happens to the backend data plane and its persisted
+                    data when the ObjectStorageCluster is deleted.
+
+                    - `Retain` (default) — persisted data is preserved. For
+                      `Heavy` the Ceph RGW pools are kept
+                      (`preservePoolsOnDelete: true`) and the CephObjectStore is
+                      not deleted, so no stored objects are lost. For other
+                      profiles the PVCs/hostPath data are left in place.
+                    - `Delete` — the backend data (PVCs, hostPath data, or Ceph
+                      RGW pools) is destroyed.
+
+                    Immutable after creation.
+                  enum:
+                    - Retain
+                    - Delete
+                  default: Retain
                 elasticClusterRef:
                   type: string
                   description: |

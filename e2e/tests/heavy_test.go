@@ -140,19 +140,21 @@ func heavySpecs() {
 			Expect(endpoint).NotTo(BeEmpty())
 		})
 
-		It("provisions a bucket and a complete credentials Secret", func() {
+		It("provisions a bucket, access + policy and a complete credentials Secret", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), suiteCfg.obReadyTimeout+2*time.Minute)
 			defer cancel()
 
-			By("creating ObjectBucket " + bucketName)
-			ob := buildOB(bucketName, suiteCfg.namespace, oscName, objectv1alpha1.BucketReclaimDelete)
-			Expect(createOB(ctx, ob)).To(Succeed())
+			By("creating ObjectStorageBucket " + bucketName)
+			Expect(createOSB(ctx, buildOSB(bucketName, oscName, objectv1alpha1.BucketReclaimDelete))).To(Succeed())
+			Expect(waitOSBReady(ctx, bucketName)).To(Succeed())
 
-			By("waiting for the bucket Ready condition")
-			Expect(waitOBReady(ctx, suiteCfg.namespace, bucketName)).To(Succeed())
+			By("creating policy + ObjectStorageBucketAccess " + accessName(bucketName))
+			Expect(createOSBPolicy(ctx, buildOSBPolicy(policyName(bucketName), bucketName, []string{suiteCfg.namespace}))).To(Succeed())
+			Expect(createOSBAccess(ctx, buildOSBAccess(accessName(bucketName), suiteCfg.namespace, bucketName, objectv1alpha1.AccessReadWrite))).To(Succeed())
+			Expect(waitAccessReady(ctx, suiteCfg.namespace, accessName(bucketName))).To(Succeed())
 
 			var err error
-			secretName, err = getStringField(ctx, objectBucketGVR, suiteCfg.namespace, bucketName, "status", "secretRef", "name")
+			secretName, err = getStringField(ctx, objectStorageBucketAccessGVR, suiteCfg.namespace, accessName(bucketName), "status", "secretRef", "name")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(secretName).NotTo(BeEmpty())
 
@@ -172,17 +174,23 @@ func heavySpecs() {
 			Expect(runS3ProbeJob(ctx, "s3-probe-heavy", suiteCfg.namespace, secretName)).To(Succeed())
 		})
 
-		It("deletes the Heavy bucket and cluster", func() {
+		It("deletes the Heavy access, bucket and cluster", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), resourceGoneTimeout+2*time.Minute)
 			defer cancel()
 
-			By("deleting ObjectBucket " + bucketName)
-			Expect(suiteDyn.Resource(objectBucketGVR).Namespace(suiteCfg.namespace).
-				Delete(ctx, bucketName, metav1.DeleteOptions{})).To(Succeed())
-			Expect(waitResourceGone(ctx, objectBucketGVR, suiteCfg.namespace, bucketName, resourceGoneTimeout)).To(Succeed())
+			By("deleting ObjectStorageBucketAccess " + accessName(bucketName))
+			Expect(suiteDyn.Resource(objectStorageBucketAccessGVR).Namespace(suiteCfg.namespace).
+				Delete(ctx, accessName(bucketName), metav1.DeleteOptions{})).To(Succeed())
+			Expect(waitResourceGone(ctx, objectStorageBucketAccessGVR, suiteCfg.namespace, accessName(bucketName), resourceGoneTimeout)).To(Succeed())
 			if secretName != "" {
 				Expect(waitSecretGone(ctx, suiteCfg.namespace, secretName, 2*time.Minute)).To(Succeed())
 			}
+
+			By("deleting ObjectStorageBucketPolicy + ObjectStorageBucket " + bucketName)
+			_ = suiteDyn.Resource(objectStorageBucketPolicyGVR).Delete(ctx, policyName(bucketName), metav1.DeleteOptions{})
+			Expect(suiteDyn.Resource(objectStorageBucketGVR).
+				Delete(ctx, bucketName, metav1.DeleteOptions{})).To(Succeed())
+			Expect(waitResourceGone(ctx, objectStorageBucketGVR, "", bucketName, resourceGoneTimeout)).To(Succeed())
 
 			By("deleting ObjectStorageCluster " + oscName)
 			Expect(suiteDyn.Resource(objectStorageClusterGVR).

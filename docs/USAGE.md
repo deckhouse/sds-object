@@ -1,6 +1,6 @@
 ---
 title: "Usage"
-description: "Deploying object storage with sds-object: enabling the module, declaring an ObjectStorageCluster, creating an ObjectBucket, and consuming the generated credentials Secret."
+description: "Deploying object storage with sds-object: enabling the module, declaring an ObjectStorageCluster, creating a cluster-scoped ObjectStorageBucket, granting namespaces access with ObjectStorageBucketPolicy, and consuming per-namespace credentials via ObjectStorageBucketAccess."
 weight: 50
 ---
 
@@ -60,14 +60,13 @@ d8 k get objectstoragecluster
 
 ## Creating a bucket
 
-`ObjectBucket` is namespaced — create it in your application's namespace:
+`ObjectStorageBucket` is **cluster-scoped** — it declares a bucket in a cluster but carries no credentials:
 
 ```yaml
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectBucket
+kind: ObjectStorageBucket
 metadata:
   name: app-data
-  namespace: my-app
 spec:
   clusterRef: shared
   # bucketName defaults to metadata.name
@@ -75,12 +74,49 @@ spec:
   reclaimPolicy: Retain
 ```
 
-Once `Ready`, the controller writes a `Secret` named `<bucket>-s3-credentials` in the same namespace:
+```shell
+d8 k get objectstoragebucket app-data
+# NAME       CLUSTER   BUCKET     PHASE   READY   AGE
+# app-data   shared    app-data   Ready   True    30s
+```
+
+## Granting a namespace access
+
+Access to a bucket is **deny-by-default**: a namespace can obtain credentials only when an `ObjectStorageBucketPolicy` for the bucket matches it. Namespaces are selected by exact `names` and/or RE2 `patterns`:
+
+```yaml
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectStorageBucketPolicy
+metadata:
+  name: app-data-teams
+spec:
+  bucketRef: app-data
+  allowedNamespaces:
+    names:
+      - my-app
+    patterns:
+      - "team-.*"
+```
+
+## Requesting credentials
+
+Each consuming namespace declares an `ObjectStorageBucketAccess`. The controller mints a dedicated access key / secret key scoped to the bucket and writes a `Secret` (named `<access>-s3-credentials` by default) in the same namespace:
+
+```yaml
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: ObjectStorageBucketAccess
+metadata:
+  name: app-data
+  namespace: my-app
+spec:
+  bucketRef: app-data
+  permission: ReadWrite   # or ReadOnly
+```
 
 ```shell
-d8 k -n my-app get objectbucket app-data
-# NAME       CLUSTER   BUCKET     PHASE   SECRET                  READY   AGE
-# app-data   shared    app-data   Ready   app-data-s3-credentials True    30s
+d8 k -n my-app get objectstoragebucketaccess app-data
+# NAME       BUCKET     PHASE   SECRET                    READY   AGE
+# app-data   app-data   Ready   app-data-s3-credentials   True    20s
 ```
 
 ## Consuming the credentials
@@ -112,10 +148,20 @@ spec:
                 name: app-data-s3-credentials
 ```
 
+## Rotating credentials
+
+To rotate the access key of an `ObjectStorageBucketAccess`, set or change the `storage.deckhouse.io/rotate` annotation. The controller issues a fresh key pair, updates the `Secret`, and revokes the previous key:
+
+```shell
+d8 k -n my-app annotate objectstoragebucketaccess app-data \
+  storage.deckhouse.io/rotate="$(date +%s)" --overwrite
+```
+
 ## Reclaim policy
 
-- `reclaimPolicy: Retain` (default) — deleting the `ObjectBucket` removes the access key but keeps the bucket and its objects.
-- `reclaimPolicy: Delete` — deleting the `ObjectBucket` deletes the bucket and all its objects.
+- Bucket `reclaimPolicy: Retain` (default) — deleting the `ObjectStorageBucket` keeps the bucket and its objects; `Delete` removes them.
+- Deleting an `ObjectStorageBucketAccess` always revokes its access key and removes its credentials `Secret` (it does not touch bucket data).
+- Cluster `reclaimPolicy: Retain` (default) — deleting the `ObjectStorageCluster` preserves persisted data (for `Heavy`, the Ceph RGW pools are kept; for PVC-backed profiles the PVCs are left in place). `Delete` destroys it.
 
 ## Heavy profile
 
@@ -132,5 +178,5 @@ spec:
 ```
 
 {{< alert level="info" >}}
-The `Heavy` profile provisions the Ceph RGW data plane (a Rook CephObjectStore on the referenced sds-elastic cluster). Buckets work the same as for the other profiles: an `ObjectBucket` creates a Rook `CephObjectStoreUser` and the bucket, and the credentials `Secret` is written in the bucket's namespace.
+The `Heavy` profile provisions the Ceph RGW data plane (a Rook CephObjectStore on the referenced sds-elastic cluster). Buckets and access work the same as for the other profiles: the `ObjectStorageBucket` creates a per-bucket owner Rook `CephObjectStoreUser` and the bucket, and each `ObjectStorageBucketAccess` gets its own `CephObjectStoreUser` granted on the bucket via a bucket policy.
 {{< /alert >}}

@@ -1,0 +1,194 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: objectstoragebucketaccesses.storage.deckhouse.io
+  labels:
+    heritage: deckhouse
+    module: sds-object
+    backup.deckhouse.io/cluster-config: "true"
+spec:
+  group: storage.deckhouse.io
+  scope: Namespaced
+  names:
+    plural: objectstoragebucketaccesses
+    singular: objectstoragebucketaccess
+    kind: ObjectStorageBucketAccess
+    shortNames:
+      - osba
+  preserveUnknownFields: false
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: |
+            ObjectStorageBucketAccess requests scoped S3 access to a
+            cluster-scoped ObjectStorageBucket from a consuming namespace. The
+            controller mints a dedicated access key / secret key for this
+            access, writes a Secret in the same namespace (see
+            `status.secretRef`) with the standard S3 connection variables, and
+            revokes the key when the access is deleted.
+
+            Whether the access is provisioned is governed by
+            ObjectStorageBucketPolicy resources (deny-by-default): an access
+            whose namespace matches no policy for the referenced bucket stays
+            `Pending`.
+
+            Key rotation: set or change the annotation
+            `storage.deckhouse.io/rotate` to trigger issuance of a fresh key
+            pair (the Secret is updated and the previous key is revoked).
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              description: |
+                Desired state of the access.
+              required:
+                - bucketRef
+              x-kubernetes-validations:
+                - rule: "oldSelf == null || self.bucketRef == oldSelf.bucketRef"
+                  message: "spec.bucketRef is immutable after creation."
+              properties:
+                bucketRef:
+                  type: string
+                  description: |
+                    Name of the cluster-scoped ObjectStorageBucket this access
+                    targets. Immutable after creation.
+                  minLength: 1
+                  maxLength: 63
+                  pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+                permission:
+                  type: string
+                  description: |
+                    Access level granted to the issued credentials.
+
+                    - `ReadWrite` (default) — read and write objects.
+                    - `ReadOnly` — read objects only.
+                  enum:
+                    - ReadWrite
+                    - ReadOnly
+                  default: ReadWrite
+                secretName:
+                  type: string
+                  description: |
+                    Overrides the name of the credentials Secret written in this
+                    access's namespace. Defaults to
+                    `<metadata.name>-s3-credentials`.
+                  minLength: 1
+                  maxLength: 253
+            status:
+              type: object
+              description: |
+                Observed state of the access.
+              properties:
+                observedGeneration:
+                  type: integer
+                  format: int64
+                  description: |
+                    Most recent `metadata.generation` reconciled by the controller.
+                phase:
+                  type: string
+                  description: |
+                    Coarse-grained summary derived from Conditions.
+                  enum:
+                    - Pending
+                    - InProgress
+                    - Ready
+                    - Error
+                endpoint:
+                  type: string
+                  description: |
+                    In-cluster S3 endpoint URL of the backing cluster.
+                bucketName:
+                  type: string
+                  description: |
+                    Effective bucket name the access is scoped to.
+                accessKeyID:
+                  type: string
+                  description: |
+                    Public access key id issued for this access (the secret key
+                    is only written into the credentials Secret).
+                secretRef:
+                  type: object
+                  description: |
+                    Reference to the Secret (in this access's namespace) holding
+                    the S3 connection variables and credentials: `S3_ENDPOINT`,
+                    `S3_REGION`, `S3_BUCKET`, `AWS_ACCESS_KEY_ID`,
+                    `AWS_SECRET_ACCESS_KEY`.
+                  properties:
+                    name:
+                      type: string
+                observedRotation:
+                  type: string
+                  description: |
+                    Last value of the `storage.deckhouse.io/rotate` annotation
+                    processed by the controller.
+                lastRotationTime:
+                  type: string
+                  format: date-time
+                  description: |
+                    Timestamp of the most recent key issuance.
+                conditions:
+                  type: array
+                  description: |
+                    Per-component conditions: `AccessGranted`,
+                    `CredentialsReady`, and the aggregate `Ready`.
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                      - lastTransitionTime
+                    properties:
+                      type:
+                        type: string
+                        description: |
+                          Condition type, for example `Ready`, `AccessGranted`,
+                          or `CredentialsReady`.
+                      status:
+                        type: string
+                        description: Current status of the condition.
+                        enum:
+                          - "True"
+                          - "False"
+                          - "Unknown"
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                        description: |
+                          Value of `metadata.generation` the condition was last set against.
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                        description: |
+                          Timestamp of the last status transition for this condition.
+                      reason:
+                        type: string
+                        description: |
+                          Machine-readable reason for the current status, suitable for
+                          log filtering.
+                      message:
+                        type: string
+                        description: |
+                          Human-readable explanation of the current status.
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - jsonPath: .spec.bucketRef
+          name: Bucket
+          type: string
+        - jsonPath: .status.phase
+          name: Phase
+          type: string
+        - jsonPath: .status.secretRef.name
+          name: Secret
+          type: string
+        - jsonPath: .status.conditions[?(@.type=="Ready")].status
+          name: Ready
+          type: string
+        - jsonPath: .metadata.creationTimestamp
+          name: Age
+          type: date

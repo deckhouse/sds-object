@@ -50,14 +50,25 @@ func (d NotImplementedDriver) DeleteCluster(_ context.Context, _ *v1alpha1.Objec
 	return nil
 }
 
-func (d NotImplementedDriver) EnsureBucket(_ context.Context, _ *v1alpha1.ObjectStorageCluster, _ *v1alpha1.ObjectBucket) (BucketState, error) {
+func (d NotImplementedDriver) EnsureBucket(_ context.Context, _ *v1alpha1.ObjectStorageCluster, _ *v1alpha1.ObjectStorageBucket) (BucketState, error) {
 	return BucketState{
 		Ready:   false,
 		Message: fmt.Sprintf("backend %q is not implemented yet", d.BackendType),
 	}, nil
 }
 
-func (d NotImplementedDriver) DeleteBucket(_ context.Context, _ *v1alpha1.ObjectStorageCluster, _ *v1alpha1.ObjectBucket) error {
+func (d NotImplementedDriver) DeleteBucket(_ context.Context, _ *v1alpha1.ObjectStorageCluster, _ *v1alpha1.ObjectStorageBucket) error {
+	return nil
+}
+
+func (d NotImplementedDriver) EnsureAccess(_ context.Context, _ *v1alpha1.ObjectStorageCluster, _ *v1alpha1.ObjectStorageBucket, _ *v1alpha1.ObjectStorageBucketAccess, _ bool) (AccessState, error) {
+	return AccessState{
+		Ready:   false,
+		Message: fmt.Sprintf("backend %q is not implemented yet", d.BackendType),
+	}, nil
+}
+
+func (d NotImplementedDriver) DeleteAccess(_ context.Context, _ *v1alpha1.ObjectStorageCluster, _ *v1alpha1.ObjectStorageBucket, _ *v1alpha1.ObjectStorageBucketAccess) error {
 	return nil
 }
 
