@@ -186,8 +186,9 @@ func accessSpecs() {
 			By("ensuring an object exists (written earlier by the ReadWrite round-trip)")
 			// The shared ReadWrite access already wrote hello.txt in create_test.go.
 
-			By("creating a ReadOnly access to the shared bucket (allowed by the shared policy)")
-			Expect(createBucketClaim(ctx, buildBucketClaim(claimName(suiteCfg.bucketName), suiteCfg.namespace, suiteCfg.bucketName))).To(Succeed())
+			By("creating a ReadOnly access against the shared bucket's existing claim")
+			// The shared BucketClaim (claimName(bucketName)) was already created and
+			// Bound by the create_test.go flow; reuse it here rather than re-creating.
 			Expect(createOSBAccess(ctx, buildOSBAccess(access, suiteCfg.namespace, claimName(suiteCfg.bucketName), objectv1alpha1.AccessReadOnly))).To(Succeed())
 			Expect(waitAccessReady(ctx, suiteCfg.namespace, access)).To(Succeed())
 
