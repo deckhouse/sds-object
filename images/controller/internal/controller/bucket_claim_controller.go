@@ -205,10 +205,18 @@ func (r *BucketClaimReconciler) reconcileNormal(ctx context.Context, claim *v1al
 	status := newStatusBuilder(claim.Generation)
 	observed := &claimObserved{}
 
-	boundName, done, err := r.ensureBound(ctx, claim, status, observed)
-	if !advance(status, bucketClaimStageOrder, v1alpha1.BucketClaimConditionBound, done, "bucket bound", err) {
+	boundName, gated, err := r.ensureBound(ctx, claim, status, observed)
+	if err != nil {
+		status.setCondition(v1alpha1.BucketClaimConditionBound, metav1.ConditionFalse, reasonError, err.Error())
+		gateAfter(status, bucketClaimStageOrder, v1alpha1.BucketClaimConditionBound)
 		return r.finish(ctx, claim, status, observed, err)
 	}
+	if gated {
+		// ensureBound already recorded the Bound condition (with its specific
+		// reason) and gated the remaining stages; don't overwrite it.
+		return r.finish(ctx, claim, status, observed, nil)
+	}
+	status.setCondition(v1alpha1.BucketClaimConditionBound, metav1.ConditionTrue, reasonReady, "bucket bound")
 
 	// BucketReady: the bound Bucket must report Ready.
 	bucket := &v1alpha1.Bucket{}
@@ -231,8 +239,10 @@ func (r *BucketClaimReconciler) reconcileNormal(ctx context.Context, claim *v1al
 }
 
 // ensureBound establishes the binding and returns the bound bucket name. When it
-// cannot bind it writes the Bound condition itself and returns done=false so the
-// caller gates without overwriting the reason.
+// cannot bind, it writes the Bound condition itself (with a specific reason),
+// gates the remaining stages, and returns gated=true so the caller finishes
+// without overwriting the reason. On success it returns (name, false, nil); a
+// non-nil error signals a transient failure the caller reports as Error.
 func (r *BucketClaimReconciler) ensureBound(
 	ctx context.Context,
 	claim *v1alpha1.BucketClaim,
@@ -260,7 +270,7 @@ func (r *BucketClaimReconciler) ensureBrownfield(
 			status.setCondition(v1alpha1.BucketClaimConditionBound, metav1.ConditionFalse, "WaitingForBucket",
 				fmt.Sprintf("Shared Bucket %q not found", name))
 			gateAfter(status, bucketClaimStageOrder, v1alpha1.BucketClaimConditionBound)
-			return "", false, nil
+			return "", true, nil
 		}
 		return "", false, err
 	}
@@ -269,7 +279,7 @@ func (r *BucketClaimReconciler) ensureBrownfield(
 		status.setCondition(v1alpha1.BucketClaimConditionBound, metav1.ConditionFalse, "NotShared",
 			fmt.Sprintf("Bucket %q is owned by another claim and cannot be bound", name))
 		gateAfter(status, bucketClaimStageOrder, v1alpha1.BucketClaimConditionBound)
-		return "", false, nil
+		return "", true, nil
 	}
 
 	allowed, reason, err := namespaceAllowedForBucket(ctx, r.Client, name, claim.Namespace)
@@ -279,11 +289,11 @@ func (r *BucketClaimReconciler) ensureBrownfield(
 	if !allowed {
 		status.setCondition(v1alpha1.BucketClaimConditionBound, metav1.ConditionFalse, "DeniedByPolicy", reason)
 		gateAfter(status, bucketClaimStageOrder, v1alpha1.BucketClaimConditionBound)
-		return "", false, nil
+		return "", true, nil
 	}
 
 	observed.boundBucketName = name
-	return name, true, nil
+	return name, false, nil
 }
 
 // ensureGreenfield creates (idempotently) the claim-owned Bucket and binds it.
@@ -297,7 +307,7 @@ func (r *BucketClaimReconciler) ensureGreenfield(
 		status.setCondition(v1alpha1.BucketClaimConditionBound, metav1.ConditionFalse, "MissingObjectStoreRef",
 			"spec.objectStoreRef is required for a greenfield claim")
 		gateAfter(status, bucketClaimStageOrder, v1alpha1.BucketClaimConditionBound)
-		return "", false, nil
+		return "", true, nil
 	}
 
 	name := greenfieldBucketName(claim)
@@ -320,7 +330,7 @@ func (r *BucketClaimReconciler) ensureGreenfield(
 	}
 
 	observed.boundBucketName = name
-	return name, true, nil
+	return name, false, nil
 }
 
 // referencingAccesses counts the BucketAccess objects in the claim's namespace
