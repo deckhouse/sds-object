@@ -10,7 +10,7 @@ spec:
             и его низкоуровневые настройки скрыты от пользователя (noops).
 
             Бакеты описываются отдельно — в cluster-scoped ресурсах
-            ObjectStorageBucket, ссылающихся на этот кластер по имени.
+            Bucket, ссылающихся на этот кластер по имени.
           properties:
             spec:
               description: |
@@ -81,7 +81,7 @@ spec:
                 reclaimPolicy:
                   description: |
                     Что происходит с дата-плейном бэкенда и его данными при
-                    удалении ObjectStorageCluster.
+                    удалении ObjectStore.
 
                     - `Retain` (по умолчанию) — данные сохраняются. Для `Heavy`
                       пулы Ceph RGW сохраняются (`preservePoolsOnDelete: true`)

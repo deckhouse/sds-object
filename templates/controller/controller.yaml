@@ -29,21 +29,21 @@
 {{ include "helm_lib_module_webhook_service" (list . dict) }}
 
 {{- /*
-  ValidatingWebhookConfiguration for ObjectStorageCluster.
-  Placeholder admission rule wired to the webhooks container (/osc-validate).
+  ValidatingWebhookConfiguration for ObjectStore.
+  Wired to the webhooks container (/objectstore-validate).
 */ -}}
 {{- $oscWebhookConfig := dict
-  "name" "object-storage-cluster-validation"
-  "webhookName" "object-storage-cluster-validation"
+  "name" "objectstore-validation"
+  "webhookName" "objectstore-validation"
   "valuesKey" "sdsObject"
-  "path" "/osc-validate"
+  "path" "/objectstore-validate"
   "failurePolicy" "Fail"
   "rules" (list
     (dict
       "apiGroups" (list "storage.deckhouse.io")
       "apiVersions" (list "v1alpha1")
       "operations" (list "CREATE" "UPDATE")
-      "resources" (list "objectstorageclusters")
+      "resources" (list "objectstores")
       "scope" "Cluster"
     )
   )
@@ -51,20 +51,20 @@
 {{ include "helm_lib_module_validating_webhook_configuration" (list . $oscWebhookConfig) }}
 
 {{- /*
-  ValidatingWebhookConfiguration for ObjectStorageBucket (cluster-scoped).
+  ValidatingWebhookConfiguration for Bucket (cluster-scoped).
 */ -}}
 {{- $osbWebhookConfig := dict
-  "name" "object-storage-bucket-validation"
-  "webhookName" "object-storage-bucket-validation"
+  "name" "bucket-validation"
+  "webhookName" "bucket-validation"
   "valuesKey" "sdsObject"
-  "path" "/osb-validate"
+  "path" "/bucket-validate"
   "failurePolicy" "Fail"
   "rules" (list
     (dict
       "apiGroups" (list "storage.deckhouse.io")
       "apiVersions" (list "v1alpha1")
       "operations" (list "CREATE" "UPDATE")
-      "resources" (list "objectstoragebuckets")
+      "resources" (list "buckets")
       "scope" "Cluster"
     )
   )
@@ -72,20 +72,41 @@
 {{ include "helm_lib_module_validating_webhook_configuration" (list . $osbWebhookConfig) }}
 
 {{- /*
-  ValidatingWebhookConfiguration for ObjectStorageBucketAccess (namespaced).
+  ValidatingWebhookConfiguration for BucketClaim (namespaced).
 */ -}}
-{{- $osbaWebhookConfig := dict
-  "name" "object-storage-bucket-access-validation"
-  "webhookName" "object-storage-bucket-access-validation"
+{{- $bucketClaimWebhookConfig := dict
+  "name" "bucketclaim-validation"
+  "webhookName" "bucketclaim-validation"
   "valuesKey" "sdsObject"
-  "path" "/osba-validate"
+  "path" "/bucketclaim-validate"
   "failurePolicy" "Fail"
   "rules" (list
     (dict
       "apiGroups" (list "storage.deckhouse.io")
       "apiVersions" (list "v1alpha1")
       "operations" (list "CREATE" "UPDATE")
-      "resources" (list "objectstoragebucketaccesses")
+      "resources" (list "bucketclaims")
+      "scope" "Namespaced"
+    )
+  )
+}}
+{{ include "helm_lib_module_validating_webhook_configuration" (list . $bucketClaimWebhookConfig) }}
+
+{{- /*
+  ValidatingWebhookConfiguration for BucketAccess (namespaced).
+*/ -}}
+{{- $osbaWebhookConfig := dict
+  "name" "bucketaccess-validation"
+  "webhookName" "bucketaccess-validation"
+  "valuesKey" "sdsObject"
+  "path" "/bucketaccess-validate"
+  "failurePolicy" "Fail"
+  "rules" (list
+    (dict
+      "apiGroups" (list "storage.deckhouse.io")
+      "apiVersions" (list "v1alpha1")
+      "operations" (list "CREATE" "UPDATE")
+      "resources" (list "bucketaccesses")
       "scope" "Namespaced"
     )
   )
@@ -93,20 +114,20 @@
 {{ include "helm_lib_module_validating_webhook_configuration" (list . $osbaWebhookConfig) }}
 
 {{- /*
-  ValidatingWebhookConfiguration for ObjectStorageBucketPolicy (cluster-scoped).
+  ValidatingWebhookConfiguration for BucketPolicy (cluster-scoped).
 */ -}}
 {{- $osbpWebhookConfig := dict
-  "name" "object-storage-bucket-policy-validation"
-  "webhookName" "object-storage-bucket-policy-validation"
+  "name" "bucketpolicy-validation"
+  "webhookName" "bucketpolicy-validation"
   "valuesKey" "sdsObject"
-  "path" "/osbp-validate"
+  "path" "/bucketpolicy-validate"
   "failurePolicy" "Fail"
   "rules" (list
     (dict
       "apiGroups" (list "storage.deckhouse.io")
       "apiVersions" (list "v1alpha1")
       "operations" (list "CREATE" "UPDATE")
-      "resources" (list "objectstoragebucketpolicies")
+      "resources" (list "bucketpolicies")
       "scope" "Cluster"
     )
   )

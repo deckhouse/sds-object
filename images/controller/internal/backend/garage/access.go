@@ -31,7 +31,7 @@ import (
 // access.Status.AccessKeyID, is revoked) — the reconciler passes it on rotation
 // or when the credentials Secret is missing. Otherwise the recorded key is
 // reused (its secret cannot be recovered from Garage, so it is not returned).
-func (d *Driver) EnsureAccess(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectStorageBucket, access *v1alpha1.ObjectStorageBucketAccess, mintFresh bool) (backend.AccessState, error) {
+func (d *Driver) EnsureAccess(ctx context.Context, cluster *v1alpha1.ObjectStore, bucket *v1alpha1.Bucket, access *v1alpha1.BucketAccess, mintFresh bool) (backend.AccessState, error) {
 	svc, ready, err := d.adminClientFor(ctx, cluster)
 	if err != nil {
 		return backend.AccessState{}, err
@@ -90,7 +90,7 @@ func (d *Driver) EnsureAccess(ctx context.Context, cluster *v1alpha1.ObjectStora
 
 // DeleteAccess revokes the access key recorded for the access. Idempotent and
 // tolerant of an already-deleted cluster.
-func (d *Driver) DeleteAccess(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, _ *v1alpha1.ObjectStorageBucket, access *v1alpha1.ObjectStorageBucketAccess) error {
+func (d *Driver) DeleteAccess(ctx context.Context, cluster *v1alpha1.ObjectStore, _ *v1alpha1.Bucket, access *v1alpha1.BucketAccess) error {
 	keyID := accessKeyID(access)
 	if keyID == "" {
 		return nil
@@ -113,7 +113,7 @@ func (d *Driver) DeleteAccess(ctx context.Context, cluster *v1alpha1.ObjectStora
 
 // accessKeyID returns the access key id recorded in the access status (empty
 // when not yet issued).
-func accessKeyID(access *v1alpha1.ObjectStorageBucketAccess) string {
+func accessKeyID(access *v1alpha1.BucketAccess) string {
 	if access.Status == nil {
 		return ""
 	}
@@ -121,7 +121,7 @@ func accessKeyID(access *v1alpha1.ObjectStorageBucketAccess) string {
 }
 
 // garagePermissions maps the access permission to Garage bucket permissions.
-func garagePermissions(access *v1alpha1.ObjectStorageBucketAccess) permissions {
+func garagePermissions(access *v1alpha1.BucketAccess) permissions {
 	if access.Spec.Permission == v1alpha1.AccessReadOnly {
 		return permissions{Read: true}
 	}

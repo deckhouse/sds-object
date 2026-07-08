@@ -81,7 +81,7 @@ func New(c client.Client, apiReader client.Reader, log *logger.Logger, namespace
 func (d *Driver) Type() v1alpha1.BackendType { return v1alpha1.BackendGarage }
 
 // EnsureCluster reconciles the Garage data plane and reports its state.
-func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) (backend.ClusterState, error) {
+func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStore) (backend.ClusterState, error) {
 	state := backend.ClusterState{
 		Backend: v1alpha1.BackendStatus{Type: v1alpha1.BackendGarage, Version: garageVersion},
 	}
@@ -141,7 +141,7 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 // single-master cluster does not sit degraded forever on an unreachable factor.
 // Lightweight runs a StatefulSet with exactly replicationFactor replicas, so the
 // factor is always satisfiable and returned as-is.
-func (d *Driver) effectiveReplicationFactor(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) (int32, error) {
+func (d *Driver) effectiveReplicationFactor(ctx context.Context, cluster *v1alpha1.ObjectStore) (int32, error) {
 	desired := replicationFactor(cluster)
 	if cluster.Spec.Type != v1alpha1.ClusterTypeSystem {
 		return desired, nil
@@ -164,7 +164,7 @@ func (d *Driver) effectiveReplicationFactor(ctx context.Context, cluster *v1alph
 // The StatefulSet's PVCs (Lightweight) are NOT garbage-collected by Kubernetes,
 // so they persist by default (Retain). Only when the cluster reclaim policy is
 // Delete are they removed; System (hostPath) data is left to node cleanup.
-func (d *Driver) DeleteCluster(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) error {
+func (d *Driver) DeleteCluster(ctx context.Context, cluster *v1alpha1.ObjectStore) error {
 	if cluster.Spec.ReclaimPolicy != v1alpha1.ClusterReclaimDelete {
 		return nil
 	}
@@ -175,7 +175,7 @@ func (d *Driver) DeleteCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 
 // ensureSecret creates the per-cluster Garage secret (rpc secret + admin token)
 // on first reconcile and never overwrites existing values.
-func (d *Driver) ensureSecret(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) error {
+func (d *Driver) ensureSecret(ctx context.Context, cluster *v1alpha1.ObjectStore) error {
 	key := client.ObjectKey{Namespace: d.namespace, Name: secretName(cluster)}
 	existing := &corev1.Secret{}
 	err := d.client.Get(ctx, key, existing)
@@ -215,7 +215,7 @@ func (d *Driver) ensureSecret(ctx context.Context, cluster *v1alpha1.ObjectStora
 
 // ensureWorkload creates/updates the profile workload (DaemonSet for System,
 // StatefulSet otherwise) and reports whether its pods are ready.
-func (d *Driver) ensureWorkload(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) (bool, string, error) {
+func (d *Driver) ensureWorkload(ctx context.Context, cluster *v1alpha1.ObjectStore) (bool, string, error) {
 	if cluster.Spec.Type == v1alpha1.ClusterTypeSystem {
 		ds := buildDaemonSet(cluster, d.namespace, d.image)
 		if err := d.apply(ctx, cluster, ds); err != nil {
@@ -245,7 +245,7 @@ func (d *Driver) ensureWorkload(ctx context.Context, cluster *v1alpha1.ObjectSto
 
 // apply creates or updates obj, setting the cluster as its controller owner.
 // On update it overwrites the spec-bearing fields with the desired object.
-func (d *Driver) apply(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, obj client.Object) error {
+func (d *Driver) apply(ctx context.Context, cluster *v1alpha1.ObjectStore, obj client.Object) error {
 	desired := obj.DeepCopyObject().(client.Object)
 	_, err := controllerutil.CreateOrUpdate(ctx, d.client, obj, func() error {
 		mergeDesired(obj, desired)

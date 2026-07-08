@@ -4,7 +4,7 @@
 # managed-postgres database (requires the managed-postgres module).
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectStorageCluster
+kind: ObjectStore
 metadata:
   name: full
 spec:
@@ -16,15 +16,15 @@ spec:
     class: localpath   # <-- replace with your StorageClass (kubectl get sc)
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectStorageBucket
+kind: Bucket
 metadata:
   name: full-bucket
 spec:
-  clusterRef: full
+  objectStoreRef: full
   reclaimPolicy: Delete
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectStorageBucketPolicy
+kind: BucketPolicy
 metadata:
   name: full-bucket-obj-test
 spec:
@@ -34,12 +34,20 @@ spec:
       - obj-test
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectStorageBucketAccess
+kind: BucketClaim
+metadata:
+  name: full-claim
+  namespace: obj-test
+spec:
+  existingBucketName: full-bucket
+---
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: BucketAccess
 metadata:
   name: full-access
   namespace: obj-test
 spec:
-  bucketRef: full-bucket
+  bucketClaimName: full-claim
   permission: ReadWrite
 ---
 apiVersion: batch/v1

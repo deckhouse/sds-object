@@ -28,21 +28,21 @@ import (
 
 func listKinds() map[schema.GroupVersionResource]string {
 	return map[schema.GroupVersionResource]string{
-		objectStorageClusterGVR:      "ObjectStorageClusterList",
-		objectStorageBucketGVR:       "ObjectStorageBucketList",
-		objectStorageBucketPolicyGVR: "ObjectStorageBucketPolicyList",
-		elasticClusterGVR:            "ElasticClusterList",
+		objectStoreGVR:    "ObjectStoreList",
+		bucketGVR:         "BucketList",
+		bucketPolicyGVR:   "BucketPolicyList",
+		elasticClusterGVR: "ElasticClusterList",
 	}
 }
 
 func obObj(name, bucketName string) *unstructured.Unstructured {
-	spec := map[string]interface{}{"clusterRef": "c1"}
+	spec := map[string]interface{}{"objectStoreRef": "c1"}
 	if bucketName != "" {
 		spec["bucketName"] = bucketName
 	}
 	return &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "storage.deckhouse.io/v1alpha1",
-		"kind":       "ObjectStorageBucket",
+		"kind":       "Bucket",
 		"metadata":   map[string]interface{}{"name": name},
 		"spec":       spec,
 	}}
@@ -51,7 +51,7 @@ func obObj(name, bucketName string) *unstructured.Unstructured {
 func oscObj(name, clusterType string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "storage.deckhouse.io/v1alpha1",
-		"kind":       "ObjectStorageCluster",
+		"kind":       "ObjectStore",
 		"metadata":   map[string]interface{}{"name": name},
 		"spec":       map[string]interface{}{"type": clusterType},
 	}}
@@ -71,49 +71,49 @@ func TestEffectiveBucketName(t *testing.T) {
 	}
 }
 
-func TestObjectStorageBucketValidate(t *testing.T) {
+func TestBucketValidate(t *testing.T) {
 	// Existing bucket "x" on cluster c1.
 	v := newFakeValidator(obObj("x", ""))
 
 	// Duplicate effective name on the same cluster -> deny.
 	dup := obObj("y", "x")
-	res, err := v.ObjectStorageBucketValidate(context.Background(), nil, dup)
+	res, err := v.BucketValidate(context.Background(), nil, dup)
 	if err != nil {
-		t.Fatalf("ObjectStorageBucketValidate(dup): %v", err)
+		t.Fatalf("BucketValidate(dup): %v", err)
 	}
 	if res.Valid {
-		t.Errorf("ObjectStorageBucketValidate(dup): want deny, got allow")
+		t.Errorf("BucketValidate(dup): want deny, got allow")
 	}
 
 	// Unique name -> allow (clusterRef missing only yields a warning).
 	uniq := obObj("y", "")
-	res, err = v.ObjectStorageBucketValidate(context.Background(), nil, uniq)
+	res, err = v.BucketValidate(context.Background(), nil, uniq)
 	if err != nil {
-		t.Fatalf("ObjectStorageBucketValidate(uniq): %v", err)
+		t.Fatalf("BucketValidate(uniq): %v", err)
 	}
 	if !res.Valid {
-		t.Errorf("ObjectStorageBucketValidate(uniq): want allow, got deny (%s)", res.Message)
+		t.Errorf("BucketValidate(uniq): want allow, got deny (%s)", res.Message)
 	}
 }
 
-func TestObjectStorageClusterValidate(t *testing.T) {
+func TestObjectStoreValidate(t *testing.T) {
 	v := newFakeValidator(oscObj("system1", "System"))
 
 	// A second System cluster -> deny.
-	res, err := v.ObjectStorageClusterValidate(context.Background(), nil, oscObj("system2", "System"))
+	res, err := v.ObjectStoreValidate(context.Background(), nil, oscObj("system2", "System"))
 	if err != nil {
-		t.Fatalf("ObjectStorageClusterValidate(2nd System): %v", err)
+		t.Fatalf("ObjectStoreValidate(2nd System): %v", err)
 	}
 	if res.Valid {
-		t.Errorf("ObjectStorageClusterValidate(2nd System): want deny, got allow")
+		t.Errorf("ObjectStoreValidate(2nd System): want deny, got allow")
 	}
 
 	// A non-System cluster -> allow.
-	res, err = v.ObjectStorageClusterValidate(context.Background(), nil, oscObj("lw", "Lightweight"))
+	res, err = v.ObjectStoreValidate(context.Background(), nil, oscObj("lw", "Lightweight"))
 	if err != nil {
-		t.Fatalf("ObjectStorageClusterValidate(Lightweight): %v", err)
+		t.Fatalf("ObjectStoreValidate(Lightweight): %v", err)
 	}
 	if !res.Valid {
-		t.Errorf("ObjectStorageClusterValidate(Lightweight): want allow, got deny (%s)", res.Message)
+		t.Errorf("ObjectStoreValidate(Lightweight): want allow, got deny (%s)", res.Message)
 	}
 }

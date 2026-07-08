@@ -34,11 +34,11 @@ import (
 // module templates (templates/system-object-storage.yaml), gated by the
 // sdsObject.systemBucket.enabled config value (default true). It asserts the
 // three CRs exist and carry the expected shape:
-//   - a cluster-scoped `system` ObjectStorageCluster of type System, whose
+//   - a cluster-scoped `system` ObjectStore of type System, whose
 //     redundancy follows the cluster HA mode (Replicated in HA, else Single),
 //     with reclaimPolicy Retain;
-//   - a cluster-scoped `system` ObjectStorageBucket referencing it;
-//   - a `system-d8-namespaces` ObjectStorageBucketPolicy allowing the d8-*
+//   - a cluster-scoped `system` Bucket referencing it;
+//   - a `system-d8-namespaces` BucketPolicy allowing the d8-*
 //     namespaces via a pattern.
 //
 // It asserts both the CR shape and that the system cluster + bucket are
@@ -57,15 +57,15 @@ func systemBucketSpecs() {
 		testAccess := "system-e2e-access"
 		testSecret := credsSecretName(testAccess)
 
-		It("ships and runs the system ObjectStorageCluster, bucket and policy", func() {
+		It("ships and runs the system ObjectStore, bucket and policy", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), suiteCfg.oscReadyTimeout+suiteCfg.probeJobTimeout+5*time.Minute)
 			defer cancel()
 
-			osc, err := suiteDyn.Resource(objectStorageClusterGVR).Get(ctx, systemCluster, metav1.GetOptions{})
+			osc, err := suiteDyn.Resource(objectStoreGVR).Get(ctx, systemCluster, metav1.GetOptions{})
 			if apierrors.IsNotFound(err) {
-				Skip("system ObjectStorageCluster not present (sdsObject.systemBucket.enabled is false)")
+				Skip("system ObjectStore not present (sdsObject.systemBucket.enabled is false)")
 			}
-			Expect(err).NotTo(HaveOccurred(), "get system ObjectStorageCluster")
+			Expect(err).NotTo(HaveOccurred(), "get system ObjectStore")
 
 			By("asserting the system cluster is type System with reclaimPolicy Retain")
 			clusterType, _, _ := unstructured.NestedString(osc.Object, "spec", "type")
@@ -80,15 +80,15 @@ func systemBucketSpecs() {
 				Equal(string(objectv1alpha1.RedundancySingle)),
 			), "system cluster redundancy is HA-dependent")
 
-			By("asserting the system ObjectStorageBucket references the system cluster")
-			osb, err := suiteDyn.Resource(objectStorageBucketGVR).Get(ctx, systemBucket, metav1.GetOptions{})
-			Expect(err).NotTo(HaveOccurred(), "get system ObjectStorageBucket")
-			bucketClusterRef, _, _ := unstructured.NestedString(osb.Object, "spec", "clusterRef")
-			Expect(bucketClusterRef).To(Equal(systemCluster))
+			By("asserting the system Bucket references the system cluster")
+			osb, err := suiteDyn.Resource(bucketGVR).Get(ctx, systemBucket, metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred(), "get system Bucket")
+			bucketObjectStoreRef, _, _ := unstructured.NestedString(osb.Object, "spec", "objectStoreRef")
+			Expect(bucketObjectStoreRef).To(Equal(systemCluster))
 
 			By("asserting the system policy grants the d8-* namespaces by pattern")
-			policy, err := suiteDyn.Resource(objectStorageBucketPolicyGVR).Get(ctx, systemPolicy, metav1.GetOptions{})
-			Expect(err).NotTo(HaveOccurred(), "get system ObjectStorageBucketPolicy")
+			policy, err := suiteDyn.Resource(bucketPolicyGVR).Get(ctx, systemPolicy, metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred(), "get system BucketPolicy")
 			policyBucketRef, _, _ := unstructured.NestedString(policy.Object, "spec", "bucketRef")
 			Expect(policyBucketRef).To(Equal(systemBucket))
 			patterns, _, _ := unstructured.NestedStringSlice(policy.Object, "spec", "allowedNamespaces", "patterns")
@@ -100,13 +100,14 @@ func systemBucketSpecs() {
 
 			DeferCleanup(func() {
 				bg := context.Background()
-				_ = suiteDyn.Resource(objectStorageBucketAccessGVR).Namespace(suiteCfg.namespace).Delete(bg, testAccess, metav1.DeleteOptions{})
-				_ = suiteDyn.Resource(objectStorageBucketPolicyGVR).Delete(bg, testPolicy, metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketAccessGVR).Namespace(suiteCfg.namespace).Delete(bg, testAccess, metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketPolicyGVR).Delete(bg, testPolicy, metav1.DeleteOptions{})
 			})
 
 			By("granting the test namespace access to the system bucket and running an S3 round-trip")
 			Expect(createOSBPolicy(ctx, buildOSBPolicy(testPolicy, systemBucket, []string{suiteCfg.namespace}))).To(Succeed())
-			Expect(createOSBAccess(ctx, buildOSBAccess(testAccess, suiteCfg.namespace, systemBucket, objectv1alpha1.AccessReadWrite))).To(Succeed())
+			Expect(createBucketClaim(ctx, buildBucketClaim(claimName(systemBucket), suiteCfg.namespace, systemBucket))).To(Succeed())
+			Expect(createOSBAccess(ctx, buildOSBAccess(testAccess, suiteCfg.namespace, claimName(systemBucket), objectv1alpha1.AccessReadWrite))).To(Succeed())
 			Expect(waitAccessReady(ctx, suiteCfg.namespace, testAccess)).To(Succeed())
 			Expect(runS3ProbeJob(ctx, "s3-probe-system", suiteCfg.namespace, testSecret)).To(Succeed())
 		})

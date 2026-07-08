@@ -34,19 +34,21 @@ var AllowedProvisioners = []string{}
 // WebhookConfigurationsToDelete lists ValidatingWebhookConfigurations the
 // module-delete hook removes on uninstall.
 var WebhookConfigurationsToDelete = []string{
-	"d8-sds-object-object-storage-cluster-validation",
-	"d8-sds-object-object-storage-bucket-validation",
-	"d8-sds-object-object-storage-bucket-access-validation",
-	"d8-sds-object-object-storage-bucket-policy-validation",
+	"d8-sds-object-objectstore-validation",
+	"d8-sds-object-bucket-validation",
+	"d8-sds-object-bucketclaim-validation",
+	"d8-sds-object-bucketaccess-validation",
+	"d8-sds-object-bucketpolicy-validation",
 }
 
 // CRGVKsForFinalizerRemoval lists CRs the module creates and which may carry a
 // controller-managed finalizer, stripped on module delete.
 var CRGVKsForFinalizerRemoval = []CRGVK{
-	{Group: "storage.deckhouse.io", Version: "v1alpha1", Kind: "ObjectStorageCluster", Namespaced: false},
-	{Group: "storage.deckhouse.io", Version: "v1alpha1", Kind: "ObjectStorageBucket", Namespaced: false},
-	{Group: "storage.deckhouse.io", Version: "v1alpha1", Kind: "ObjectStorageBucketAccess", Namespaced: true},
-	{Group: "storage.deckhouse.io", Version: "v1alpha1", Kind: "ObjectStorageBucketPolicy", Namespaced: false},
+	{Group: "storage.deckhouse.io", Version: "v1alpha1", Kind: "ObjectStore", Namespaced: false},
+	{Group: "storage.deckhouse.io", Version: "v1alpha1", Kind: "Bucket", Namespaced: false},
+	{Group: "storage.deckhouse.io", Version: "v1alpha1", Kind: "BucketClaim", Namespaced: true},
+	{Group: "storage.deckhouse.io", Version: "v1alpha1", Kind: "BucketAccess", Namespaced: true},
+	{Group: "storage.deckhouse.io", Version: "v1alpha1", Kind: "BucketPolicy", Namespaced: false},
 }
 
 type CRGVK struct {

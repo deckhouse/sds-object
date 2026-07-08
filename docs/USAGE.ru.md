@@ -1,6 +1,6 @@
 ---
 title: "Использование"
-description: "Развёртывание объектного хранилища через sds-object: включение модуля, создание cluster-scoped ObjectStorageBucket, выдача доступа namespace через ObjectStorageBucketPolicy и получение учётных данных через ObjectStorageBucketAccess."
+description: "Развёртывание объектного хранилища через sds-object: включение модуля, создание cluster-scoped Bucket, выдача доступа namespace через BucketPolicy и получение учётных данных через BucketAccess."
 weight: 50
 ---
 
@@ -28,7 +28,7 @@ EOF
 
 ```yaml
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectStorageCluster
+kind: ObjectStore
 metadata:
   name: shared
 spec:
@@ -43,7 +43,7 @@ spec:
 
 ```yaml
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectStorageCluster
+kind: ObjectStore
 metadata:
   name: system
 spec:
@@ -53,40 +53,40 @@ spec:
 Отслеживание готовности:
 
 ```shell
-d8 k get objectstoragecluster
+d8 k get objectstore
 # NAME     TYPE          PHASE   ENDPOINT                                           READY   AGE
 # shared   Lightweight   Ready   http://shared-garage.d8-sds-object.svc...:3900     True    3m
 ```
 
-## Создание бакета
+## Объявление Shared-бакета
 
-`ObjectStorageBucket` — **cluster-scoped**-ресурс: объявляет бакет в кластере, но не содержит учётных данных:
+`Bucket` — **cluster-scoped**-ресурс: администратор объявляет бакет в объектном хранилище, учётных данных он не содержит. Это **Shared**-бакет, предназначенный для потребления из нескольких namespace через заявки с проверкой политики:
 
 ```yaml
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectStorageBucket
+kind: Bucket
 metadata:
   name: app-data
 spec:
-  clusterRef: shared
+  objectStoreRef: shared
   # bucketName по умолчанию равен metadata.name
   accessPolicy: Private
   reclaimPolicy: Retain
 ```
 
 ```shell
-d8 k get objectstoragebucket app-data
-# NAME       CLUSTER   BUCKET     PHASE   READY   AGE
-# app-data   shared    app-data   Ready   True    30s
+d8 k get bucket app-data
+# NAME       OBJECTSTORE   BUCKET     PHASE   READY   AGE
+# app-data   shared        app-data   Ready   True    30s
 ```
 
-## Выдача доступа namespace
+## Разрешение namespace привязывать бакет
 
-Доступ к бакету работает по принципу **deny-by-default**: namespace может получить учётные данные только если существует `ObjectStorageBucketPolicy` для этого бакета, совпадающая с namespace. Namespace выбираются точными именами `names` и/или RE2-паттернами `patterns`:
+Привязка Shared-бакета работает по принципу **deny-by-default**: namespace может заявить его, только если существует совпадающая `BucketPolicy` для этого бакета. Namespace выбираются точными именами `names` и/или RE2-паттернами `patterns`:
 
 ```yaml
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectStorageBucketPolicy
+kind: BucketPolicy
 metadata:
   name: app-data-teams
 spec:
@@ -98,24 +98,48 @@ spec:
       - "team-.*"
 ```
 
-## Запрос учётных данных
+## Заявка на бакет
 
-Каждый потребляющий namespace создаёт `ObjectStorageBucketAccess`. Контроллер генерирует отдельную пару access key / secret key с доступом к бакету и пишет `Secret` (по умолчанию `<access>-s3-credentials`) в том же namespace:
+Каждый потребляющий namespace создаёт `BucketClaim`. Чтобы привязать Shared-бакет выше (brownfield), задайте `existingBucketName`. Чтобы вместо этого создать **новый приватный** бакет (greenfield), опустите `existingBucketName` и задайте `objectStoreRef` — для greenfield-заявок политика не требуется.
 
 ```yaml
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectStorageBucketAccess
+kind: BucketClaim
 metadata:
   name: app-data
   namespace: my-app
 spec:
-  bucketRef: app-data
+  existingBucketName: app-data   # brownfield: привязать Shared-бакет (гейтится политикой)
+  # --- или, для нового приватного бакета, уберите existingBucketName и используйте: ---
+  # objectStoreRef: shared
+  # accessPolicy: Private
+  # reclaimPolicy: Retain
+```
+
+```shell
+d8 k -n my-app get bucketclaim app-data
+# NAME       BUCKET     PHASE   READY   AGE
+# app-data   app-data   Ready   True    20s
+```
+
+## Запрос учётных данных
+
+Каждый workload создаёт `BucketAccess`, ссылающийся на `BucketClaim` в состоянии Bound в своём namespace. Контроллер генерирует отдельную пару access key / secret key с доступом к привязанному бакету и пишет `Secret` (по умолчанию `<access>-s3-credentials`) в том же namespace:
+
+```yaml
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: BucketAccess
+metadata:
+  name: app-data
+  namespace: my-app
+spec:
+  bucketClaimName: app-data
   permission: ReadWrite   # или ReadOnly
 ```
 
 ```shell
-d8 k -n my-app get objectstoragebucketaccess app-data
-# NAME       BUCKET     PHASE   SECRET                    READY   AGE
+d8 k -n my-app get bucketaccess app-data
+# NAME       CLAIM      PHASE   SECRET                    READY   AGE
 # app-data   app-data   Ready   app-data-s3-credentials   True    20s
 ```
 
@@ -150,18 +174,18 @@ spec:
 
 ## Ротация учётных данных
 
-Чтобы сменить access key у `ObjectStorageBucketAccess`, установите или измените аннотацию `storage.deckhouse.io/rotate`. Контроллер выпустит новую пару ключей, обновит `Secret` и отзовёт предыдущий ключ:
+Чтобы сменить access key у `BucketAccess`, установите или измените аннотацию `storage.deckhouse.io/rotate`. Контроллер выпустит новую пару ключей, обновит `Secret` и отзовёт предыдущий ключ:
 
 ```shell
-d8 k -n my-app annotate objectstoragebucketaccess app-data \
+d8 k -n my-app annotate bucketaccess app-data \
   storage.deckhouse.io/rotate="$(date +%s)" --overwrite
 ```
 
 ## Политика высвобождения
 
-- Бакет `reclaimPolicy: Retain` (по умолчанию) — при удалении `ObjectStorageBucket` бакет и объекты сохраняются; `Delete` — удаляются.
-- Удаление `ObjectStorageBucketAccess` всегда отзывает его ключ доступа и удаляет его `Secret` (данные бакета не затрагиваются).
-- Кластер `reclaimPolicy: Retain` (по умолчанию) — при удалении `ObjectStorageCluster` данные сохраняются (для `Heavy` — пулы Ceph RGW; для профилей на PVC — сами PVC). `Delete` — данные уничтожаются.
+- Бакет `reclaimPolicy: Retain` (по умолчанию) — при удалении `Bucket` бакет и объекты сохраняются; `Delete` — удаляются.
+- Удаление `BucketAccess` всегда отзывает его ключ доступа и удаляет его `Secret` (данные бакета не затрагиваются).
+- Кластер `reclaimPolicy: Retain` (по умолчанию) — при удалении `ObjectStore` данные сохраняются (для `Heavy` — пулы Ceph RGW; для профилей на PVC — сами PVC). `Delete` — данные уничтожаются.
 
 ## Профиль Heavy
 
@@ -169,7 +193,7 @@ d8 k -n my-app annotate objectstoragebucketaccess app-data \
 
 ```yaml
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectStorageCluster
+kind: ObjectStore
 metadata:
   name: heavy
 spec:
@@ -178,5 +202,5 @@ spec:
 ```
 
 {{< alert level="info" >}}
-Профиль `Heavy` разворачивает data plane Ceph RGW (Rook CephObjectStore на указанном кластере sds-elastic). Бакеты и доступ работают так же, как у остальных профилей: `ObjectStorageBucket` создаёт владельца-бакета Rook `CephObjectStoreUser` и сам бакет, а каждый `ObjectStorageBucketAccess` получает собственного `CephObjectStoreUser`, которому доступ к бакету выдаётся через bucket policy.
+Профиль `Heavy` разворачивает data plane Ceph RGW (Rook CephObjectStore на указанном кластере sds-elastic). Бакеты и доступ работают так же, как у остальных профилей: `Bucket` создаёт владельца-бакета Rook `CephObjectStoreUser` и сам бакет, а каждый `BucketAccess` получает собственного `CephObjectStoreUser`, которому доступ к бакету выдаётся через bucket policy.
 {{< /alert >}}

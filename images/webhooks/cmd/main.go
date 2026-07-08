@@ -57,10 +57,11 @@ func initFlags() (config, error) {
 const (
 	port = ":8443"
 
-	ObjectStorageClusterValidatorID      = "ObjectStorageClusterValidator"
-	ObjectStorageBucketValidatorID       = "ObjectStorageBucketValidator"
-	ObjectStorageBucketAccessValidatorID = "ObjectStorageBucketAccessValidator"
-	ObjectStorageBucketPolicyValidatorID = "ObjectStorageBucketPolicyValidator"
+	ObjectStoreValidatorID  = "ObjectStoreValidator"
+	BucketValidatorID       = "BucketValidator"
+	BucketClaimValidatorID  = "BucketClaimValidator"
+	BucketAccessValidatorID = "BucketAccessValidator"
+	BucketPolicyValidatorID = "BucketPolicyValidator"
 )
 
 func main() {
@@ -87,8 +88,8 @@ func main() {
 	validator := handlers.NewValidator(dynClient)
 
 	oscValidatingWebhookHandler, err := handlers.GetValidatingWebhookHandler(
-		validator.ObjectStorageClusterValidate,
-		ObjectStorageClusterValidatorID,
+		validator.ObjectStoreValidate,
+		ObjectStoreValidatorID,
 		&unstructured.Unstructured{},
 		logger,
 	)
@@ -98,8 +99,8 @@ func main() {
 	}
 
 	osbValidatingWebhookHandler, err := handlers.GetValidatingWebhookHandler(
-		validator.ObjectStorageBucketValidate,
-		ObjectStorageBucketValidatorID,
+		validator.BucketValidate,
+		BucketValidatorID,
 		&unstructured.Unstructured{},
 		logger,
 	)
@@ -108,9 +109,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	bucketClaimValidatingWebhookHandler, err := handlers.GetValidatingWebhookHandler(
+		validator.BucketClaimValidate,
+		BucketClaimValidatorID,
+		&unstructured.Unstructured{},
+		logger,
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error creating bucketClaimValidatingWebhookHandler: %s", err)
+		os.Exit(1)
+	}
+
 	osbaValidatingWebhookHandler, err := handlers.GetValidatingWebhookHandler(
-		validator.ObjectStorageBucketAccessValidate,
-		ObjectStorageBucketAccessValidatorID,
+		validator.BucketAccessValidate,
+		BucketAccessValidatorID,
 		&unstructured.Unstructured{},
 		logger,
 	)
@@ -120,8 +132,8 @@ func main() {
 	}
 
 	osbpValidatingWebhookHandler, err := handlers.GetValidatingWebhookHandler(
-		validator.ObjectStorageBucketPolicyValidate,
-		ObjectStorageBucketPolicyValidatorID,
+		validator.BucketPolicyValidate,
+		BucketPolicyValidatorID,
 		&unstructured.Unstructured{},
 		logger,
 	)
@@ -131,10 +143,11 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("/osc-validate", oscValidatingWebhookHandler)
-	mux.Handle("/osb-validate", osbValidatingWebhookHandler)
-	mux.Handle("/osba-validate", osbaValidatingWebhookHandler)
-	mux.Handle("/osbp-validate", osbpValidatingWebhookHandler)
+	mux.Handle("/objectstore-validate", oscValidatingWebhookHandler)
+	mux.Handle("/bucket-validate", osbValidatingWebhookHandler)
+	mux.Handle("/bucketclaim-validate", bucketClaimValidatingWebhookHandler)
+	mux.Handle("/bucketaccess-validate", osbaValidatingWebhookHandler)
+	mux.Handle("/bucketpolicy-validate", osbpValidatingWebhookHandler)
 	mux.HandleFunc("/healthz", httpHandlerHealthz)
 
 	logger.Infof("Listening on %s", port)

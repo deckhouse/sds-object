@@ -28,10 +28,10 @@ import (
 	"k8s.io/klog/v2"
 )
 
-// ObjectStorageBucketPolicyValidate admits ObjectStorageBucketPolicy resources.
+// BucketPolicyValidate admits BucketPolicy resources.
 // It hard-denies patterns that fail to compile (CEL cannot validate RE2
 // compilation) and warns when the referenced bucket does not exist yet.
-func (v *Validator) ObjectStorageBucketPolicyValidate(ctx context.Context, _ *model.AdmissionReview, obj metav1.Object) (*kwhvalidating.ValidatorResult, error) {
+func (v *Validator) BucketPolicyValidate(ctx context.Context, _ *model.AdmissionReview, obj metav1.Object) (*kwhvalidating.ValidatorResult, error) {
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok {
 		return &kwhvalidating.ValidatorResult{Valid: true}, nil
@@ -49,12 +49,12 @@ func (v *Validator) ObjectStorageBucketPolicyValidate(ctx context.Context, _ *mo
 	}
 
 	if bucketRef != "" {
-		if _, err := v.dyn.Resource(objectStorageBucketGVR).Get(ctx, bucketRef, metav1.GetOptions{}); err != nil {
+		if _, err := v.dyn.Resource(bucketGVR).Get(ctx, bucketRef, metav1.GetOptions{}); err != nil {
 			warnings = append(warnings, fmt.Sprintf(
-				"referenced ObjectStorageBucket %q not found (%v); the policy takes effect once it exists", bucketRef, err))
+				"referenced Bucket %q not found (%v); the policy takes effect once it exists", bucketRef, err))
 		}
 	}
 
-	klog.Infof("ObjectStorageBucketPolicy %s admitted (warnings: %d)", name, len(warnings))
+	klog.Infof("BucketPolicy %s admitted (warnings: %d)", name, len(warnings))
 	return &kwhvalidating.ValidatorResult{Valid: true, Warnings: warnings}, nil
 }

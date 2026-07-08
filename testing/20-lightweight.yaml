@@ -2,7 +2,7 @@
 # Set spec.storage.class to a StorageClass that exists in your cluster.
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectStorageCluster
+kind: ObjectStore
 metadata:
   name: lightweight
 spec:
@@ -14,15 +14,15 @@ spec:
     class: localpath   # <-- replace with your StorageClass (kubectl get sc)
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectStorageBucket
+kind: Bucket
 metadata:
   name: light-bucket
 spec:
-  clusterRef: lightweight
+  objectStoreRef: lightweight
   reclaimPolicy: Delete
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectStorageBucketPolicy
+kind: BucketPolicy
 metadata:
   name: light-bucket-obj-test
 spec:
@@ -32,12 +32,20 @@ spec:
       - obj-test
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectStorageBucketAccess
+kind: BucketClaim
+metadata:
+  name: light-claim
+  namespace: obj-test
+spec:
+  existingBucketName: light-bucket
+---
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: BucketAccess
 metadata:
   name: light-access
   namespace: obj-test
 spec:
-  bucketRef: light-bucket
+  bucketClaimName: light-claim
   permission: ReadWrite
 ---
 apiVersion: batch/v1

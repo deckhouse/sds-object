@@ -34,7 +34,7 @@ import (
 	objectv1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 )
 
-// accessSpecs exercises the ObjectStorageBucketAccess / ObjectStorageBucketPolicy
+// accessSpecs exercises the BucketAccess / BucketPolicy
 // behaviours on top of the shared cluster + bucket from create_test.go:
 //   - deny-by-default: an access with no matching policy stays Pending and gets
 //     no Secret; adding a policy flips it to Ready; deleting the policy revokes
@@ -57,39 +57,43 @@ func accessSpecs() {
 			policy := policyName(bucket)
 			secret := credsSecretName(access)
 
+			claim := claimName(bucket)
+
 			DeferCleanup(func() {
 				bg := context.Background()
-				_ = suiteDyn.Resource(objectStorageBucketAccessGVR).Namespace(suiteCfg.namespace).Delete(bg, access, metav1.DeleteOptions{})
-				_ = suiteDyn.Resource(objectStorageBucketPolicyGVR).Delete(bg, policy, metav1.DeleteOptions{})
-				_ = suiteDyn.Resource(objectStorageBucketGVR).Delete(bg, bucket, metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketAccessGVR).Namespace(suiteCfg.namespace).Delete(bg, access, metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketClaimGVR).Namespace(suiteCfg.namespace).Delete(bg, claim, metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketPolicyGVR).Delete(bg, policy, metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketGVR).Delete(bg, bucket, metav1.DeleteOptions{})
 			})
 
-			By("creating a bucket with NO policy: " + bucket)
+			By("creating a Shared bucket with NO policy: " + bucket)
 			Expect(createOSB(ctx, buildOSB(bucket, suiteCfg.oscName, objectv1alpha1.BucketReclaimDelete))).To(Succeed())
 			Expect(waitOSBReady(ctx, bucket)).To(Succeed())
 
-			By("creating an access in " + suiteCfg.namespace + " with no matching policy")
-			Expect(createOSBAccess(ctx, buildOSBAccess(access, suiteCfg.namespace, bucket, objectv1alpha1.AccessReadWrite))).To(Succeed())
+			By("creating a brownfield claim + access in " + suiteCfg.namespace + " with no matching policy")
+			Expect(createBucketClaim(ctx, buildBucketClaim(claim, suiteCfg.namespace, bucket))).To(Succeed())
+			Expect(createOSBAccess(ctx, buildOSBAccess(access, suiteCfg.namespace, claim, objectv1alpha1.AccessReadWrite))).To(Succeed())
 
-			By("asserting the access is denied by policy and no Secret is written")
+			By("asserting the claim is denied by policy, the access stays pending, and no Secret is written")
 			Eventually(func() string {
-				_, reason, _, _ := getCondition(ctx, objectStorageBucketAccessGVR, suiteCfg.namespace, access, objectv1alpha1.OSBAConditionAccessGranted)
+				_, reason, _, _ := getCondition(ctx, bucketClaimGVR, suiteCfg.namespace, claim, objectv1alpha1.BucketClaimConditionBound)
 				return reason
 			}).WithTimeout(2 * time.Minute).WithPolling(pollInterval).Should(Equal("DeniedByPolicy"))
 			Consistently(func() bool {
 				_, err := suiteClientset.CoreV1().Secrets(suiteCfg.namespace).Get(ctx, secret, metav1.GetOptions{})
 				return apierrors.IsNotFound(err)
-			}).WithTimeout(15*time.Second).WithPolling(pollInterval).Should(BeTrue(), "no credentials Secret must exist while access is denied")
+			}).WithTimeout(15*time.Second).WithPolling(pollInterval).Should(BeTrue(), "no credentials Secret must exist while the claim is denied")
 
-			By("creating a policy that allows the namespace: access must reach Ready")
+			By("creating a policy that allows the namespace: the claim binds and the access reaches Ready")
 			Expect(createOSBPolicy(ctx, buildOSBPolicy(policy, bucket, []string{suiteCfg.namespace}))).To(Succeed())
 			Expect(waitAccessReady(ctx, suiteCfg.namespace, access)).To(Succeed())
 			Expect(secretExists(ctx, suiteCfg.namespace, secret)).To(BeTrue(), "credentials Secret must exist once allowed")
 
-			By("deleting the policy: the access must be revoked and its Secret garbage-collected")
-			Expect(suiteDyn.Resource(objectStorageBucketPolicyGVR).Delete(ctx, policy, metav1.DeleteOptions{})).To(Succeed())
+			By("deleting the policy: the claim unbinds, the access is revoked and its Secret garbage-collected")
+			Expect(suiteDyn.Resource(bucketPolicyGVR).Delete(ctx, policy, metav1.DeleteOptions{})).To(Succeed())
 			Eventually(func() string {
-				_, reason, _, _ := getCondition(ctx, objectStorageBucketAccessGVR, suiteCfg.namespace, access, objectv1alpha1.OSBAConditionAccessGranted)
+				_, reason, _, _ := getCondition(ctx, bucketClaimGVR, suiteCfg.namespace, claim, objectv1alpha1.BucketClaimConditionBound)
 				return reason
 			}).WithTimeout(2 * time.Minute).WithPolling(pollInterval).Should(Equal("DeniedByPolicy"))
 			Expect(waitSecretGone(ctx, suiteCfg.namespace, secret, 2*time.Minute)).To(Succeed())
@@ -105,9 +109,9 @@ func accessSpecs() {
 
 			DeferCleanup(func() {
 				bg := context.Background()
-				_ = suiteDyn.Resource(objectStorageBucketAccessGVR).Namespace(suiteCfg.namespace).Delete(bg, access, metav1.DeleteOptions{})
-				_ = suiteDyn.Resource(objectStorageBucketPolicyGVR).Delete(bg, policy, metav1.DeleteOptions{})
-				_ = suiteDyn.Resource(objectStorageBucketGVR).Delete(bg, bucket, metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketAccessGVR).Namespace(suiteCfg.namespace).Delete(bg, access, metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketPolicyGVR).Delete(bg, policy, metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketGVR).Delete(bg, bucket, metav1.DeleteOptions{})
 			})
 
 			By("creating bucket " + bucket)
@@ -122,7 +126,8 @@ func accessSpecs() {
 			Expect(createOSBPolicy(ctx, pol)).To(Succeed())
 
 			By("creating the access: it must reach Ready via the pattern match")
-			Expect(createOSBAccess(ctx, buildOSBAccess(access, suiteCfg.namespace, bucket, objectv1alpha1.AccessReadWrite))).To(Succeed())
+			Expect(createBucketClaim(ctx, buildBucketClaim(claimName(bucket), suiteCfg.namespace, bucket))).To(Succeed())
+			Expect(createOSBAccess(ctx, buildOSBAccess(access, suiteCfg.namespace, claimName(bucket), objectv1alpha1.AccessReadWrite))).To(Succeed())
 			Expect(waitAccessReady(ctx, suiteCfg.namespace, access)).To(Succeed())
 		})
 
@@ -133,11 +138,11 @@ func accessSpecs() {
 			access := accessName(suiteCfg.bucketName)
 
 			By("reading the current access key id and secret")
-			oldKeyID, err := getStringField(ctx, objectStorageBucketAccessGVR, suiteCfg.namespace, access, "status", "accessKeyID")
+			oldKeyID, err := getStringField(ctx, bucketAccessGVR, suiteCfg.namespace, access, "status", "accessKeyID")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(oldKeyID).NotTo(BeEmpty(), "shared access must already have an issued key")
 
-			secretName, err := getStringField(ctx, objectStorageBucketAccessGVR, suiteCfg.namespace, access, "status", "secretRef", "name")
+			secretName, err := getStringField(ctx, bucketAccessGVR, suiteCfg.namespace, access, "status", "secretRef", "name")
 			Expect(err).NotTo(HaveOccurred())
 			oldSecretKey, err := getSecretValue(ctx, suiteCfg.namespace, secretName, objectv1alpha1.SecretKeySecretAccessID)
 			Expect(err).NotTo(HaveOccurred())
@@ -148,13 +153,13 @@ func accessSpecs() {
 
 			By("waiting for status.accessKeyID to change to a fresh key")
 			Eventually(func() string {
-				v, _ := getStringField(ctx, objectStorageBucketAccessGVR, suiteCfg.namespace, access, "status", "accessKeyID")
+				v, _ := getStringField(ctx, bucketAccessGVR, suiteCfg.namespace, access, "status", "accessKeyID")
 				return v
 			}).WithTimeout(3 * time.Minute).WithPolling(pollInterval).ShouldNot(Or(Equal(oldKeyID), BeEmpty()))
 			Expect(waitAccessReady(ctx, suiteCfg.namespace, access)).To(Succeed())
 
 			By("asserting the credentials Secret carries the new key pair")
-			newKeyID, err := getStringField(ctx, objectStorageBucketAccessGVR, suiteCfg.namespace, access, "status", "accessKeyID")
+			newKeyID, err := getStringField(ctx, bucketAccessGVR, suiteCfg.namespace, access, "status", "accessKeyID")
 			Expect(err).NotTo(HaveOccurred())
 			secretKeyID, err := getSecretValue(ctx, suiteCfg.namespace, secretName, objectv1alpha1.SecretKeyAccessKeyID)
 			Expect(err).NotTo(HaveOccurred())
@@ -175,14 +180,15 @@ func accessSpecs() {
 			secret := credsSecretName(access)
 
 			DeferCleanup(func() {
-				_ = suiteDyn.Resource(objectStorageBucketAccessGVR).Namespace(suiteCfg.namespace).Delete(context.Background(), access, metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketAccessGVR).Namespace(suiteCfg.namespace).Delete(context.Background(), access, metav1.DeleteOptions{})
 			})
 
 			By("ensuring an object exists (written earlier by the ReadWrite round-trip)")
 			// The shared ReadWrite access already wrote hello.txt in create_test.go.
 
 			By("creating a ReadOnly access to the shared bucket (allowed by the shared policy)")
-			Expect(createOSBAccess(ctx, buildOSBAccess(access, suiteCfg.namespace, suiteCfg.bucketName, objectv1alpha1.AccessReadOnly))).To(Succeed())
+			Expect(createBucketClaim(ctx, buildBucketClaim(claimName(suiteCfg.bucketName), suiteCfg.namespace, suiteCfg.bucketName))).To(Succeed())
+			Expect(createOSBAccess(ctx, buildOSBAccess(access, suiteCfg.namespace, claimName(suiteCfg.bucketName), objectv1alpha1.AccessReadOnly))).To(Succeed())
 			Expect(waitAccessReady(ctx, suiteCfg.namespace, access)).To(Succeed())
 
 			By("running a probe that reads an object and asserts writes are denied")
@@ -202,10 +208,10 @@ func accessSpecs() {
 
 			DeferCleanup(func() {
 				bg := context.Background()
-				_ = suiteDyn.Resource(objectStorageBucketAccessGVR).Namespace(ns1).Delete(bg, access, metav1.DeleteOptions{})
-				_ = suiteDyn.Resource(objectStorageBucketAccessGVR).Namespace(ns2).Delete(bg, access, metav1.DeleteOptions{})
-				_ = suiteDyn.Resource(objectStorageBucketPolicyGVR).Delete(bg, policy, metav1.DeleteOptions{})
-				_ = suiteDyn.Resource(objectStorageBucketGVR).Delete(bg, bucket, metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketAccessGVR).Namespace(ns1).Delete(bg, access, metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketAccessGVR).Namespace(ns2).Delete(bg, access, metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketPolicyGVR).Delete(bg, policy, metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketGVR).Delete(bg, bucket, metav1.DeleteOptions{})
 				_ = suiteClientset.CoreV1().Namespaces().Delete(bg, ns2, metav1.DeleteOptions{})
 			})
 
@@ -220,8 +226,10 @@ func accessSpecs() {
 			Expect(createOSBPolicy(ctx, buildOSBPolicy(policy, bucket, []string{ns1, ns2}))).To(Succeed())
 
 			By("creating an access in each namespace")
-			Expect(createOSBAccess(ctx, buildOSBAccess(access, ns1, bucket, objectv1alpha1.AccessReadWrite))).To(Succeed())
-			Expect(createOSBAccess(ctx, buildOSBAccess(access, ns2, bucket, objectv1alpha1.AccessReadWrite))).To(Succeed())
+			Expect(createBucketClaim(ctx, buildBucketClaim(claimName(bucket), ns1, bucket))).To(Succeed())
+			Expect(createOSBAccess(ctx, buildOSBAccess(access, ns1, claimName(bucket), objectv1alpha1.AccessReadWrite))).To(Succeed())
+			Expect(createBucketClaim(ctx, buildBucketClaim(claimName(bucket), ns2, bucket))).To(Succeed())
+			Expect(createOSBAccess(ctx, buildOSBAccess(access, ns2, claimName(bucket), objectv1alpha1.AccessReadWrite))).To(Succeed())
 			Expect(waitAccessReady(ctx, ns1, access)).To(Succeed())
 			Expect(waitAccessReady(ctx, ns2, access)).To(Succeed())
 
@@ -232,11 +240,11 @@ func accessSpecs() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(keyA).NotTo(BeEmpty())
 			Expect(keyB).NotTo(BeEmpty())
-			Expect(keyA).NotTo(Equal(keyB), "each ObjectStorageBucketAccess must get an independent key")
+			Expect(keyA).NotTo(Equal(keyB), "each BucketAccess must get an independent key")
 
 			By("revoking one namespace's access must not affect the other")
-			Expect(suiteDyn.Resource(objectStorageBucketAccessGVR).Namespace(ns1).Delete(ctx, access, metav1.DeleteOptions{})).To(Succeed())
-			Expect(waitResourceGone(ctx, objectStorageBucketAccessGVR, ns1, access, resourceGoneTimeout)).To(Succeed())
+			Expect(suiteDyn.Resource(bucketAccessGVR).Namespace(ns1).Delete(ctx, access, metav1.DeleteOptions{})).To(Succeed())
+			Expect(waitResourceGone(ctx, bucketAccessGVR, ns1, access, resourceGoneTimeout)).To(Succeed())
 			Expect(waitSecretGone(ctx, ns1, secret, 2*time.Minute)).To(Succeed())
 
 			By("the surviving namespace's access still works")
@@ -258,11 +266,11 @@ func namespacePattern(ns string) string {
 	return prefix + ".*"
 }
 
-// annotateAccess sets a single annotation on an ObjectStorageBucketAccess via a
+// annotateAccess sets a single annotation on an BucketAccess via a
 // merge patch.
 func annotateAccess(ctx context.Context, ns, name, key, value string) error {
 	patch := []byte(fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, key, value))
-	_, err := suiteDyn.Resource(objectStorageBucketAccessGVR).Namespace(ns).
+	_, err := suiteDyn.Resource(bucketAccessGVR).Namespace(ns).
 		Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{})
 	return err
 }

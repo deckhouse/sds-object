@@ -3,7 +3,7 @@
 # below in elasticClusterRef.
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectStorageCluster
+kind: ObjectStore
 metadata:
   name: heavy
 spec:
@@ -13,15 +13,15 @@ spec:
   reclaimPolicy: Delete
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectStorageBucket
+kind: Bucket
 metadata:
   name: heavy-bucket
 spec:
-  clusterRef: heavy
+  objectStoreRef: heavy
   reclaimPolicy: Delete
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectStorageBucketPolicy
+kind: BucketPolicy
 metadata:
   name: heavy-bucket-obj-test
 spec:
@@ -31,12 +31,20 @@ spec:
       - obj-test
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectStorageBucketAccess
+kind: BucketClaim
+metadata:
+  name: heavy-claim
+  namespace: obj-test
+spec:
+  existingBucketName: heavy-bucket
+---
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: BucketAccess
 metadata:
   name: heavy-access
   namespace: obj-test
 spec:
-  bucketRef: heavy-bucket
+  bucketClaimName: heavy-claim
   permission: ReadWrite
 ---
 apiVersion: batch/v1

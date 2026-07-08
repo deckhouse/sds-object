@@ -33,7 +33,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -45,18 +44,21 @@ import (
 	"github.com/deckhouse/sds-object/images/controller/pkg/logger"
 )
 
-// ObjectStorageBucketAccessReconciler drives every ObjectStorageBucketAccess
-// through a short FSM:
+// BucketAccessReconciler drives every BucketAccess through a short FSM:
 //
 //		AccessGranted -> CredentialsReady -> Ready
 //
-//	  - AccessGranted gates on the referenced ObjectStorageBucket (must exist and
-//	    be Ready), an ObjectStorageBucketPolicy allowing this namespace
-//	    (deny-by-default), and the backend.Driver issuing an access key.
+//	  - AccessGranted gates on the referenced BucketClaim (same namespace) being
+//	    Bound to a Ready Bucket, and the backend.Driver issuing an access key.
+//	    Whether the claim is allowed to bind (and therefore whether access is
+//	    possible) is decided upstream by the BucketClaim controller (greenfield
+//	    ownership or a BucketPolicy grant); this controller only reacts to the
+//	    claim's Bound state. When a claim leaves Bound, any key issued for the
+//	    access is revoked and its Secret removed (continuous enforcement).
 //	  - CredentialsReady (re)writes the S3 credentials Secret in the access's
 //	    namespace. A change to the storage.deckhouse.io/rotate annotation triggers
 //	    a fresh key pair.
-type ObjectStorageBucketAccessReconciler struct {
+type BucketAccessReconciler struct {
 	Client   client.Client
 	Scheme   *runtime.Scheme
 	Log      *logger.Logger
@@ -64,9 +66,9 @@ type ObjectStorageBucketAccessReconciler struct {
 	Registry *backend.Registry
 }
 
-var osbaStageOrder = []string{
-	v1alpha1.OSBAConditionAccessGranted,
-	v1alpha1.OSBAConditionCredentialsReady,
+var bucketAccessStageOrder = []string{
+	v1alpha1.BucketAccessConditionAccessGranted,
+	v1alpha1.BucketAccessConditionCredentialsReady,
 }
 
 // accessObserved accumulates the status fields written back onto the access.
@@ -77,17 +79,16 @@ type accessObserved struct {
 	secretName       string
 	observedRotation string
 	rotated          bool
-	// revoked clears the credential status fields (the access lost its policy
-	// grant and its key/Secret were removed).
+	// revoked clears the credential status fields (the access's claim is no
+	// longer Bound and its key/Secret were removed).
 	revoked bool
 }
 
-// AddObjectStorageBucketAccessReconcilerToManager wires the OSBA reconciler.
-// It watches ObjectStorageBucket (a bucket becoming Ready re-reconciles its
-// accesses) and ObjectStorageBucketPolicy (a policy change re-evaluates the
-// accesses for its bucket).
-func AddObjectStorageBucketAccessReconcilerToManager(mgr manager.Manager, cfg *config.Options, log *logger.Logger, reg *backend.Registry) error {
-	r := &ObjectStorageBucketAccessReconciler{
+// AddBucketAccessReconcilerToManager wires the BucketAccess reconciler. It
+// watches BucketClaim so that a claim becoming (or ceasing to be) Bound
+// re-reconciles every access that references it in the same namespace.
+func AddBucketAccessReconcilerToManager(mgr manager.Manager, cfg *config.Options, log *logger.Logger, reg *backend.Registry) error {
+	r := &BucketAccessReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Log:      log,
@@ -102,45 +103,25 @@ func AddObjectStorageBucketAccessReconcilerToManager(mgr manager.Manager, cfg *c
 	)
 
 	return ctrl.NewControllerManagedBy(mgr).
-		Named("object-storage-bucket-access").
-		For(&v1alpha1.ObjectStorageBucketAccess{}, builder.WithPredicates(accessPredicate)).
-		Watches(&v1alpha1.ObjectStorageBucket{},
-			handler.EnqueueRequestsFromMapFunc(r.enqueueByBucket),
-			builder.WithPredicates(predicate.Funcs{
-				CreateFunc:  func(_ event.CreateEvent) bool { return true },
-				DeleteFunc:  func(_ event.DeleteEvent) bool { return true },
-				GenericFunc: func(_ event.GenericEvent) bool { return true },
-				UpdateFunc:  func(_ event.UpdateEvent) bool { return true },
-			})).
-		Watches(&v1alpha1.ObjectStorageBucketPolicy{},
-			handler.EnqueueRequestsFromMapFunc(r.enqueueByPolicy)).
+		Named("bucket-access").
+		For(&v1alpha1.BucketAccess{}, builder.WithPredicates(accessPredicate)).
+		Watches(&v1alpha1.BucketClaim{},
+			handler.EnqueueRequestsFromMapFunc(r.enqueueByClaim)).
 		WithOptions(controller.Options{MaxConcurrentReconciles: cfg.MaxConcurrentReconciles}).
 		Complete(r)
 }
 
-// enqueueByBucket maps a bucket event to every access that references it.
-func (r *ObjectStorageBucketAccessReconciler) enqueueByBucket(ctx context.Context, o client.Object) []reconcile.Request {
-	return r.enqueueByBucketRef(ctx, o.GetName())
-}
-
-// enqueueByPolicy maps a policy event to every access for the policy's bucket.
-func (r *ObjectStorageBucketAccessReconciler) enqueueByPolicy(ctx context.Context, o client.Object) []reconcile.Request {
-	policy, ok := o.(*v1alpha1.ObjectStorageBucketPolicy)
-	if !ok {
-		return nil
-	}
-	return r.enqueueByBucketRef(ctx, policy.Spec.BucketRef)
-}
-
-func (r *ObjectStorageBucketAccessReconciler) enqueueByBucketRef(ctx context.Context, bucketRef string) []reconcile.Request {
-	list := &v1alpha1.ObjectStorageBucketAccessList{}
-	if err := r.Client.List(ctx, list); err != nil {
-		r.Log.Error(err, "[enqueueByBucketRef] list failed")
+// enqueueByClaim maps a BucketClaim event to every access in the claim's
+// namespace that references it by name.
+func (r *BucketAccessReconciler) enqueueByClaim(ctx context.Context, o client.Object) []reconcile.Request {
+	list := &v1alpha1.BucketAccessList{}
+	if err := r.Client.List(ctx, list, client.InNamespace(o.GetNamespace())); err != nil {
+		r.Log.Error(err, "[enqueueByClaim] list failed")
 		return nil
 	}
 	out := make([]reconcile.Request, 0, len(list.Items))
 	for i := range list.Items {
-		if list.Items[i].Spec.BucketRef != bucketRef {
+		if list.Items[i].Spec.BucketClaimName != o.GetName() {
 			continue
 		}
 		out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{
@@ -151,10 +132,10 @@ func (r *ObjectStorageBucketAccessReconciler) enqueueByBucketRef(ctx context.Con
 	return out
 }
 
-func (r *ObjectStorageBucketAccessReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	r.Log.Info(fmt.Sprintf("[Reconcile] start for ObjectStorageBucketAccess %s", req.NamespacedName))
+func (r *BucketAccessReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	r.Log.Info(fmt.Sprintf("[Reconcile] start for BucketAccess %s", req.NamespacedName))
 
-	access := &v1alpha1.ObjectStorageBucketAccess{}
+	access := &v1alpha1.BucketAccess{}
 	if err := r.Client.Get(ctx, req.NamespacedName, access); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
@@ -176,7 +157,7 @@ func (r *ObjectStorageBucketAccessReconciler) Reconcile(ctx context.Context, req
 	return r.reconcileNormal(ctx, access)
 }
 
-func (r *ObjectStorageBucketAccessReconciler) reconcileDelete(ctx context.Context, access *v1alpha1.ObjectStorageBucketAccess) (ctrl.Result, error) {
+func (r *BucketAccessReconciler) reconcileDelete(ctx context.Context, access *v1alpha1.BucketAccess) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(access, Finalizer) {
 		return ctrl.Result{}, nil
 	}
@@ -197,55 +178,54 @@ func (r *ObjectStorageBucketAccessReconciler) reconcileDelete(ctx context.Contex
 	return ctrl.Result{}, nil
 }
 
-func (r *ObjectStorageBucketAccessReconciler) reconcileNormal(ctx context.Context, access *v1alpha1.ObjectStorageBucketAccess) (ctrl.Result, error) {
+func (r *BucketAccessReconciler) reconcileNormal(ctx context.Context, access *v1alpha1.BucketAccess) (ctrl.Result, error) {
 	status := newStatusBuilder(access.Generation)
 	observed := &accessObserved{}
 
-	// Resolve bucket + cluster.
-	bucket := &v1alpha1.ObjectStorageBucket{}
-	if err := r.Client.Get(ctx, client.ObjectKey{Name: access.Spec.BucketRef}, bucket); err != nil {
-		status.setCondition(v1alpha1.OSBAConditionAccessGranted, metav1.ConditionFalse, "WaitingForBucket",
-			fmt.Sprintf("ObjectStorageBucket %q is not available: %v", access.Spec.BucketRef, err))
-		gateAfter(status, osbaStageOrder, v1alpha1.OSBAConditionAccessGranted)
+	// Resolve the BucketClaim in this access's namespace.
+	claim := &v1alpha1.BucketClaim{}
+	claimKey := client.ObjectKey{Namespace: access.Namespace, Name: access.Spec.BucketClaimName}
+	if err := r.Client.Get(ctx, claimKey, claim); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return r.finish(ctx, access, status, observed, err)
+		}
+		// Claim is gone entirely: revoke best-effort and drop the Secret.
+		r.revokeIfIssued(ctx, access, observed)
+		status.setCondition(v1alpha1.BucketAccessConditionAccessGranted, metav1.ConditionFalse, "WaitingForClaim",
+			fmt.Sprintf("BucketClaim %q not found", access.Spec.BucketClaimName))
+		gateAfter(status, bucketAccessStageOrder, v1alpha1.BucketAccessConditionAccessGranted)
 		return r.finish(ctx, access, status, observed, nil)
-	}
-	if bucketReadyState(bucket) != string(metav1.ConditionTrue) {
-		status.setCondition(v1alpha1.OSBAConditionAccessGranted, metav1.ConditionFalse, "WaitingForBucket",
-			fmt.Sprintf("ObjectStorageBucket %q is not Ready", access.Spec.BucketRef))
-		gateAfter(status, osbaStageOrder, v1alpha1.OSBAConditionAccessGranted)
-		return r.finish(ctx, access, status, observed, nil)
-	}
-	observed.bucketName = bucket.Status.BucketName
-
-	cluster := &v1alpha1.ObjectStorageCluster{}
-	if err := r.Client.Get(ctx, client.ObjectKey{Name: bucket.Spec.ClusterRef}, cluster); err != nil {
-		status.setCondition(v1alpha1.OSBAConditionAccessGranted, metav1.ConditionFalse, "WaitingForCluster",
-			fmt.Sprintf("ObjectStorageCluster %q is not available: %v", bucket.Spec.ClusterRef, err))
-		gateAfter(status, osbaStageOrder, v1alpha1.OSBAConditionAccessGranted)
-		return r.finish(ctx, access, status, observed, nil)
-	}
-	if cluster.Status != nil && cluster.Status.Endpoint != nil {
-		observed.endpoint = cluster.Status.Endpoint.Internal
 	}
 
-	// Deny-by-default policy check.
-	allowed, reason, err := namespaceAllowedForBucket(ctx, r.Client, access.Spec.BucketRef, access.Namespace)
-	if err != nil {
-		status.setCondition(v1alpha1.OSBAConditionAccessGranted, metav1.ConditionFalse, reasonError, err.Error())
-		gateAfter(status, osbaStageOrder, v1alpha1.OSBAConditionAccessGranted)
-		return r.finish(ctx, access, status, observed, err)
+	// A claim exposes the bucket it is (or was) bound to via
+	// status.boundBucketName; it stays populated even when the claim leaves
+	// Bound, so a revocation can still resolve the backend.
+	boundName := ""
+	if claim.Status != nil {
+		boundName = claim.Status.BoundBucketName
+		observed.endpoint = claim.Status.Endpoint
 	}
-	if !allowed {
-		// Deny-by-default is enforced continuously: if this access had been
-		// granted before (its key/Secret exist) and the policy no longer allows
-		// the namespace, revoke the key and drop the credentials Secret.
+
+	// Resolve the bound Bucket + ObjectStore when known (used by both the
+	// issue and the revoke paths).
+	var bucket *v1alpha1.Bucket
+	var cluster *v1alpha1.ObjectStore
+	if boundName != "" {
+		bucket, cluster = r.resolveBound(ctx, boundName)
+	}
+
+	// Gate on the claim being Bound to a Ready bucket.
+	if !claimBound(claim) || bucket == nil || cluster == nil || bucketReadyState(bucket) != string(metav1.ConditionTrue) {
+		// The claim is not usable: enforce revocation of any prior grant.
 		if access.Status != nil && access.Status.AccessKeyID != "" {
-			if driver, derr := r.Registry.For(cluster); derr == nil {
-				if derr := driver.DeleteAccess(ctx, cluster, bucket, access); derr != nil {
-					status.setCondition(v1alpha1.OSBAConditionAccessGranted, metav1.ConditionFalse, reasonError,
-						fmt.Sprintf("revoking access after policy change: %v", derr))
-					gateAfter(status, osbaStageOrder, v1alpha1.OSBAConditionAccessGranted)
-					return r.finish(ctx, access, status, observed, derr)
+			if bucket != nil && cluster != nil {
+				if driver, derr := r.Registry.For(cluster); derr == nil {
+					if derr := driver.DeleteAccess(ctx, cluster, bucket, access); derr != nil {
+						status.setCondition(v1alpha1.BucketAccessConditionAccessGranted, metav1.ConditionFalse, reasonError,
+							fmt.Sprintf("revoking access after claim became unbound: %v", derr))
+						gateAfter(status, bucketAccessStageOrder, v1alpha1.BucketAccessConditionAccessGranted)
+						return r.finish(ctx, access, status, observed, derr)
+					}
 				}
 			}
 			if err := r.deleteCredentialsSecret(ctx, access); err != nil {
@@ -253,15 +233,17 @@ func (r *ObjectStorageBucketAccessReconciler) reconcileNormal(ctx context.Contex
 			}
 			observed.revoked = true
 		}
-		status.setCondition(v1alpha1.OSBAConditionAccessGranted, metav1.ConditionFalse, "DeniedByPolicy", reason)
-		gateAfter(status, osbaStageOrder, v1alpha1.OSBAConditionAccessGranted)
+		status.setCondition(v1alpha1.BucketAccessConditionAccessGranted, metav1.ConditionFalse, "WaitingForClaim",
+			fmt.Sprintf("BucketClaim %q is not Bound to a Ready bucket", access.Spec.BucketClaimName))
+		gateAfter(status, bucketAccessStageOrder, v1alpha1.BucketAccessConditionAccessGranted)
 		return r.finish(ctx, access, status, observed, nil)
 	}
+	observed.bucketName = bucket.Status.BucketName
 
 	driver, err := r.Registry.For(cluster)
 	if err != nil {
-		status.setCondition(v1alpha1.OSBAConditionAccessGranted, metav1.ConditionFalse, reasonError, err.Error())
-		gateAfter(status, osbaStageOrder, v1alpha1.OSBAConditionAccessGranted)
+		status.setCondition(v1alpha1.BucketAccessConditionAccessGranted, metav1.ConditionFalse, reasonError, err.Error())
+		gateAfter(status, bucketAccessStageOrder, v1alpha1.BucketAccessConditionAccessGranted)
 		return r.finish(ctx, access, status, observed, err)
 	}
 
@@ -286,47 +268,81 @@ func (r *ObjectStorageBucketAccessReconciler) reconcileNormal(ctx context.Contex
 	} else {
 		observed.accessKeyID = recordedKey
 	}
-	if !advance(status, osbaStageOrder, v1alpha1.OSBAConditionAccessGranted, state.Ready, state.Message, err) {
+	if !advance(status, bucketAccessStageOrder, v1alpha1.BucketAccessConditionAccessGranted, state.Ready, state.Message, err) {
 		return r.finish(ctx, access, status, observed, err)
 	}
 
 	// Write the credentials Secret. A fresh key comes with its secret key; a
 	// reused key keeps the secret key already stored in the Secret.
 	secretName, err := r.ensureCredentialsSecret(ctx, cluster, bucket, access, &state, existing)
-	if !advance(status, osbaStageOrder, v1alpha1.OSBAConditionCredentialsReady, err == nil, "credentials Secret written", err) {
+	if !advance(status, bucketAccessStageOrder, v1alpha1.BucketAccessConditionCredentialsReady, err == nil, "credentials Secret written", err) {
 		return r.finish(ctx, access, status, observed, err)
 	}
 	observed.secretName = secretName
 	observed.observedRotation = rotationValue
 	observed.rotated = state.SecretAccessKey != ""
 
-	status.setCondition(v1alpha1.OSBAConditionReady, metav1.ConditionTrue, reasonReady, "All stages reconciled")
+	status.setCondition(v1alpha1.BucketAccessConditionReady, metav1.ConditionTrue, reasonReady, "All stages reconciled")
 	return r.finish(ctx, access, status, observed, nil)
 }
 
-// resolve returns the bucket and cluster referenced by the access.
-func (r *ObjectStorageBucketAccessReconciler) resolve(ctx context.Context, access *v1alpha1.ObjectStorageBucketAccess) (*v1alpha1.ObjectStorageBucket, *v1alpha1.ObjectStorageCluster, error) {
-	bucket := &v1alpha1.ObjectStorageBucket{}
-	if err := r.Client.Get(ctx, client.ObjectKey{Name: access.Spec.BucketRef}, bucket); err != nil {
-		return nil, nil, fmt.Errorf("bucket %q: %w", access.Spec.BucketRef, err)
+// revokeIfIssued best-effort deletes the credentials Secret when the referenced
+// claim has vanished and the access had previously been granted. The backend
+// key cannot be revoked here (the bucket/store are no longer resolvable), so
+// this only drops the in-cluster Secret and marks the status for clearing.
+func (r *BucketAccessReconciler) revokeIfIssued(ctx context.Context, access *v1alpha1.BucketAccess, observed *accessObserved) {
+	if access.Status == nil || access.Status.AccessKeyID == "" {
+		return
 	}
-	cluster := &v1alpha1.ObjectStorageCluster{}
-	if err := r.Client.Get(ctx, client.ObjectKey{Name: bucket.Spec.ClusterRef}, cluster); err != nil {
-		return nil, nil, fmt.Errorf("cluster %q: %w", bucket.Spec.ClusterRef, err)
+	if err := r.deleteCredentialsSecret(ctx, access); err != nil {
+		r.Log.Error(err, "[revokeIfIssued] deleting credentials Secret")
+		return
+	}
+	observed.revoked = true
+}
+
+// resolve returns the bound Bucket and its ObjectStore for the access, going
+// through the referenced BucketClaim.
+func (r *BucketAccessReconciler) resolve(ctx context.Context, access *v1alpha1.BucketAccess) (*v1alpha1.Bucket, *v1alpha1.ObjectStore, error) {
+	claim := &v1alpha1.BucketClaim{}
+	if err := r.Client.Get(ctx, client.ObjectKey{Namespace: access.Namespace, Name: access.Spec.BucketClaimName}, claim); err != nil {
+		return nil, nil, fmt.Errorf("bucketclaim %q: %w", access.Spec.BucketClaimName, err)
+	}
+	if claim.Status == nil || claim.Status.BoundBucketName == "" {
+		return nil, nil, fmt.Errorf("bucketclaim %q is not bound", access.Spec.BucketClaimName)
+	}
+	bucket, cluster := r.resolveBound(ctx, claim.Status.BoundBucketName)
+	if bucket == nil || cluster == nil {
+		return nil, nil, fmt.Errorf("bound bucket %q or its object store is unavailable", claim.Status.BoundBucketName)
 	}
 	return bucket, cluster, nil
 }
 
-// credentialsSecretName is spec.secretName or <access>-s3-credentials.
-func credentialsSecretName(access *v1alpha1.ObjectStorageBucketAccess) string {
-	if access.Spec.SecretName != "" {
-		return access.Spec.SecretName
+// resolveBound loads a cluster-scoped Bucket by name and its ObjectStore. It
+// returns nil pointers (not an error) when either is missing, so callers can
+// gate rather than fail.
+func (r *BucketAccessReconciler) resolveBound(ctx context.Context, bucketName string) (*v1alpha1.Bucket, *v1alpha1.ObjectStore) {
+	bucket := &v1alpha1.Bucket{}
+	if err := r.Client.Get(ctx, client.ObjectKey{Name: bucketName}, bucket); err != nil {
+		return nil, nil
+	}
+	cluster := &v1alpha1.ObjectStore{}
+	if err := r.Client.Get(ctx, client.ObjectKey{Name: bucket.Spec.ObjectStoreRef}, cluster); err != nil {
+		return bucket, nil
+	}
+	return bucket, cluster
+}
+
+// credentialsSecretName is spec.credentialsSecretName or <access>-s3-credentials.
+func credentialsSecretName(access *v1alpha1.BucketAccess) string {
+	if access.Spec.CredentialsSecretName != "" {
+		return access.Spec.CredentialsSecretName
 	}
 	return access.Name + "-s3-credentials"
 }
 
 // deleteCredentialsSecret removes the access's credentials Secret (idempotent).
-func (r *ObjectStorageBucketAccessReconciler) deleteCredentialsSecret(ctx context.Context, access *v1alpha1.ObjectStorageBucketAccess) error {
+func (r *BucketAccessReconciler) deleteCredentialsSecret(ctx context.Context, access *v1alpha1.BucketAccess) error {
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: credentialsSecretName(access), Namespace: access.Namespace},
 	}
@@ -337,7 +353,7 @@ func (r *ObjectStorageBucketAccessReconciler) deleteCredentialsSecret(ctx contex
 }
 
 // getSecret reads the credentials Secret (nil, false when it does not exist).
-func (r *ObjectStorageBucketAccessReconciler) getSecret(ctx context.Context, access *v1alpha1.ObjectStorageBucketAccess) (*corev1.Secret, bool, error) {
+func (r *BucketAccessReconciler) getSecret(ctx context.Context, access *v1alpha1.BucketAccess) (*corev1.Secret, bool, error) {
 	secret := &corev1.Secret{}
 	key := client.ObjectKey{Namespace: access.Namespace, Name: credentialsSecretName(access)}
 	if err := r.Client.Get(ctx, key, secret); err != nil {
@@ -351,11 +367,11 @@ func (r *ObjectStorageBucketAccessReconciler) getSecret(ctx context.Context, acc
 
 // ensureCredentialsSecret creates or updates the credentials Secret owned by the
 // access and returns its name.
-func (r *ObjectStorageBucketAccessReconciler) ensureCredentialsSecret(
+func (r *BucketAccessReconciler) ensureCredentialsSecret(
 	ctx context.Context,
-	cluster *v1alpha1.ObjectStorageCluster,
-	bucket *v1alpha1.ObjectStorageBucket,
-	access *v1alpha1.ObjectStorageBucketAccess,
+	cluster *v1alpha1.ObjectStore,
+	bucket *v1alpha1.Bucket,
+	access *v1alpha1.BucketAccess,
 	state *backend.AccessState,
 	existing *corev1.Secret,
 ) (string, error) {
@@ -389,7 +405,7 @@ func (r *ObjectStorageBucketAccessReconciler) ensureCredentialsSecret(
 		if secret.Labels == nil {
 			secret.Labels = map[string]string{}
 		}
-		secret.Labels["storage.deckhouse.io/object-storage-bucket-access"] = access.Name
+		secret.Labels["storage.deckhouse.io/bucket-access"] = access.Name
 		secret.Type = corev1.SecretTypeOpaque
 		secret.StringData = map[string]string{
 			v1alpha1.SecretKeyS3Endpoint:     endpoint,
@@ -406,21 +422,30 @@ func (r *ObjectStorageBucketAccessReconciler) ensureCredentialsSecret(
 	return secret.Name, nil
 }
 
+// claimBound reports whether the claim's Bound condition is True.
+func claimBound(c *v1alpha1.BucketClaim) bool {
+	if c == nil || c.Status == nil {
+		return false
+	}
+	cond := apimeta.FindStatusCondition(c.Status.Conditions, v1alpha1.BucketClaimConditionBound)
+	return cond != nil && cond.Status == metav1.ConditionTrue
+}
+
 // bucketReadyState returns the bucket's Ready condition status (or "").
-func bucketReadyState(b *v1alpha1.ObjectStorageBucket) string {
+func bucketReadyState(b *v1alpha1.Bucket) string {
 	if b == nil || b.Status == nil {
 		return ""
 	}
-	cond := apimeta.FindStatusCondition(b.Status.Conditions, v1alpha1.OSBConditionReady)
+	cond := apimeta.FindStatusCondition(b.Status.Conditions, v1alpha1.BucketConditionReady)
 	if cond == nil {
 		return ""
 	}
 	return string(cond.Status)
 }
 
-func (r *ObjectStorageBucketAccessReconciler) finish(
+func (r *BucketAccessReconciler) finish(
 	ctx context.Context,
-	access *v1alpha1.ObjectStorageBucketAccess,
+	access *v1alpha1.BucketAccess,
 	status *statusBuilder,
 	observed *accessObserved,
 	reconcileErr error,
@@ -440,19 +465,19 @@ func (r *ObjectStorageBucketAccessReconciler) finish(
 	return ctrl.Result{RequeueAfter: r.Cfg.RequeueInterval}, nil
 }
 
-func (r *ObjectStorageBucketAccessReconciler) updateStatus(
+func (r *BucketAccessReconciler) updateStatus(
 	ctx context.Context,
-	access *v1alpha1.ObjectStorageBucketAccess,
+	access *v1alpha1.BucketAccess,
 	sb *statusBuilder,
 	observed *accessObserved,
 ) error {
 	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		latest := &v1alpha1.ObjectStorageBucketAccess{}
+		latest := &v1alpha1.BucketAccess{}
 		if err := r.Client.Get(ctx, client.ObjectKey{Namespace: access.Namespace, Name: access.Name}, latest); err != nil {
 			return err
 		}
 		if latest.Status == nil {
-			latest.Status = &v1alpha1.ObjectStorageBucketAccessStatus{}
+			latest.Status = &v1alpha1.BucketAccessStatus{}
 		}
 		before := latest.Status.DeepCopy()
 
@@ -460,7 +485,7 @@ func (r *ObjectStorageBucketAccessReconciler) updateStatus(
 			apimeta.SetStatusCondition(&latest.Status.Conditions, cond)
 		}
 		latest.Status.ObservedGeneration = access.Generation
-		latest.Status.Phase = derivePhase(latest.Status.Conditions, osbaStageOrder)
+		latest.Status.Phase = derivePhase(latest.Status.Conditions, bucketAccessStageOrder)
 
 		if observed.endpoint != "" {
 			latest.Status.Endpoint = observed.endpoint
@@ -469,7 +494,7 @@ func (r *ObjectStorageBucketAccessReconciler) updateStatus(
 			latest.Status.BucketName = observed.bucketName
 		}
 		if observed.revoked {
-			// Access lost its policy grant: clear the credential status.
+			// Access lost its claim binding: clear the credential status.
 			latest.Status.AccessKeyID = ""
 			latest.Status.SecretRef = nil
 			latest.Status.ObservedRotation = ""

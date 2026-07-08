@@ -20,32 +20,40 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// ObjectStorageBucket is a cluster-scoped CR that declares a single S3 bucket
-// in an ObjectStorageCluster. The controller creates the bucket in the backend.
-// Credentials are NOT issued here: consuming namespaces request scoped access
-// (and receive a credentials Secret) via namespaced ObjectStorageBucketAccess
-// resources, gated by ObjectStorageBucketPolicy.
+// Bucket is a cluster-scoped CR that represents a single S3 bucket in an
+// ObjectStore. The controller creates the bucket in the backend. Credentials
+// are NOT issued here: consuming namespaces request scoped access (and receive
+// a credentials Secret) via namespaced BucketAccess resources.
 //
-// +kubebuilder:resource:scope=Cluster,shortName=osb
+// A Bucket has one of two origins (recorded in the label
+// storage.deckhouse.io/bucket-origin):
+//   - Shared: declared directly by an administrator; consumed cross-namespace
+//     via a BucketClaim whose spec.existingBucketName points at it, gated by
+//     BucketPolicy (deny-by-default).
+//   - BucketClaim: provisioned by the controller for a greenfield BucketClaim
+//     and owned by it (see the owned-by-claim labels). Such buckets are private
+//     to the owning claim's namespace and cannot be bound by other claims.
+//
+// +kubebuilder:resource:scope=Cluster,shortName=bkt
 // +kubebuilder:subresource:status
 // +kubebuilder:object:root=true
 // +k8s:deepcopy-gen=true
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-type ObjectStorageBucket struct {
+type Bucket struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   ObjectStorageBucketSpec    `json:"spec"`
-	Status *ObjectStorageBucketStatus `json:"status,omitempty"`
+	Spec   BucketSpec    `json:"spec"`
+	Status *BucketStatus `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +k8s:deepcopy-gen=true
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-type ObjectStorageBucketList struct {
+type BucketList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata"`
-	Items           []ObjectStorageBucket `json:"items"`
+	Items           []Bucket `json:"items"`
 }
 
 // AccessPolicy controls anonymous access to the bucket.
@@ -75,12 +83,12 @@ const (
 )
 
 // +k8s:deepcopy-gen=true
-type ObjectStorageBucketSpec struct {
-	// ClusterRef is the name of the ObjectStorageCluster this bucket belongs
-	// to. The referenced cluster must exist and be in Ready phase before the
-	// bucket is provisioned. Immutable after creation.
+type BucketSpec struct {
+	// ObjectStoreRef is the name of the ObjectStore this bucket belongs to. The
+	// referenced ObjectStore must exist and be in Ready phase before the bucket
+	// is provisioned. Immutable after creation.
 	// +kubebuilder:validation:Required
-	ClusterRef string `json:"clusterRef"`
+	ObjectStoreRef string `json:"objectStoreRef"`
 
 	// BucketName is the name of the bucket in S3. Defaults to metadata.name
 	// when omitted. Immutable after creation.
@@ -114,7 +122,7 @@ type BucketQuota struct {
 }
 
 // +k8s:deepcopy-gen=true
-type ObjectStorageBucketStatus struct {
+type BucketStatus struct {
 	// ObservedGeneration is the most recent .metadata.generation reconciled
 	// by the controller.
 	// +optional
@@ -143,12 +151,35 @@ type ObjectStorageBucketStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 }
 
-// Well-known condition types for ObjectStorageBucket.
+// Well-known condition types for Bucket.
 const (
-	OSBConditionBucketReady = "BucketReady"
-	OSBConditionReady       = "Ready"
+	BucketConditionBucketReady = "BucketReady"
+	BucketConditionReady       = "Ready"
 )
 
-// ObjectStorageBucketKind is the kind constant used for OwnerReferences and
+// BucketKind is the kind constant used for OwnerReferences and
 // dynamic GVK lookups.
-const ObjectStorageBucketKind = "ObjectStorageBucket"
+const BucketKind = "Bucket"
+
+// Bucket origin labels and values. LabelBucketOrigin records how a Bucket came
+// to exist; the owned-by-claim labels back-reference the greenfield BucketClaim
+// that provisioned it (a cluster-scoped Bucket cannot carry a namespaced
+// ownerReference, so the binding is expressed with labels + a finalizer on the
+// claim).
+const (
+	LabelBucketOrigin          = "storage.deckhouse.io/bucket-origin"
+	LabelOwnedByClaimNamespace = "storage.deckhouse.io/owned-by-claim-namespace"
+	LabelOwnedByClaimName      = "storage.deckhouse.io/owned-by-claim-name"
+
+	// BucketOriginShared marks an administrator-declared shared Bucket.
+	BucketOriginShared = "Shared"
+	// BucketOriginBucketClaim marks a Bucket provisioned for a greenfield
+	// BucketClaim and owned by it.
+	BucketOriginBucketClaim = "BucketClaim"
+)
+
+// ReservedBucketNamePrefix is the metadata.name prefix reserved for
+// controller-provisioned greenfield Buckets. Administrator-declared Bucket and
+// BucketClaim resources must not use this prefix (enforced by the admission
+// webhook), which keeps greenfield names from colliding with shared buckets.
+const ReservedBucketNamePrefix = "claim-"

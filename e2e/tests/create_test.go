@@ -28,27 +28,27 @@ import (
 	objectv1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 )
 
-// createSpecs brings up the shared ObjectStorageCluster, a bucket on it, asserts
+// createSpecs brings up the shared ObjectStore, a bucket on it, asserts
 // the standardised credentials Secret contract, and proves a real S3 round-trip
 // through the generated credentials. These are the foundation specs; the
 // validation and delete specs run on top of the cluster and bucket created here.
 func createSpecs() {
 	Describe("create", func() {
-		It("brings up the ObjectStorageCluster and reaches Ready", func() {
+		It("brings up the ObjectStore and reaches Ready", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), suiteCfg.oscReadyTimeout+2*time.Minute)
 			defer cancel()
 
 			// The System profile has no self-created cluster: the module ships a
-			// `system` ObjectStorageCluster automatically (a second System is
+			// `system` ObjectStore automatically (a second System is
 			// denied by the webhook). Adopt it when present; otherwise create the
 			// cluster for the configured profile.
 			exists, err := oscExists(ctx, suiteCfg.oscName)
-			Expect(err).NotTo(HaveOccurred(), "check ObjectStorageCluster %q", suiteCfg.oscName)
+			Expect(err).NotTo(HaveOccurred(), "check ObjectStore %q", suiteCfg.oscName)
 			if exists {
-				By("adopting the module-managed ObjectStorageCluster " + suiteCfg.oscName)
+				By("adopting the module-managed ObjectStore " + suiteCfg.oscName)
 				oscCreatedBySuite = false
 			} else {
-				By("creating ObjectStorageCluster " + suiteCfg.oscName)
+				By("creating ObjectStore " + suiteCfg.oscName)
 				Expect(createOSC(ctx, buildOSC(suiteCfg.oscName))).To(Succeed())
 				oscCreatedBySuite = true
 			}
@@ -57,24 +57,24 @@ func createSpecs() {
 			Expect(waitOSCReady(ctx, suiteCfg.oscName)).To(Succeed())
 
 			By("asserting the resolved status (phase, backend, endpoint)")
-			phase, err := getStringField(ctx, objectStorageClusterGVR, "", suiteCfg.oscName, "status", "phase")
+			phase, err := getStringField(ctx, objectStoreGVR, "", suiteCfg.oscName, "status", "phase")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(phase).To(Equal(objectv1alpha1.PhaseReady))
 
-			backend, err := getStringField(ctx, objectStorageClusterGVR, "", suiteCfg.oscName, "status", "backend", "type")
+			backend, err := getStringField(ctx, objectStoreGVR, "", suiteCfg.oscName, "status", "backend", "type")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(backend).To(Equal(expectedBackend()), "backend type for profile %s", suiteCfg.oscType)
 
-			endpoint, err := getStringField(ctx, objectStorageClusterGVR, "", suiteCfg.oscName, "status", "endpoint", "internal")
+			endpoint, err := getStringField(ctx, objectStoreGVR, "", suiteCfg.oscName, "status", "endpoint", "internal")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(endpoint).NotTo(BeEmpty(), "status.endpoint.internal must be published")
 		})
 
-		It("creates a cluster-scoped ObjectStorageBucket and reaches Ready", func() {
+		It("creates a cluster-scoped Bucket and reaches Ready", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), suiteCfg.obReadyTimeout+2*time.Minute)
 			defer cancel()
 
-			By("creating ObjectStorageBucket " + suiteCfg.bucketName)
+			By("creating Bucket " + suiteCfg.bucketName)
 			osb := buildOSB(suiteCfg.bucketName, suiteCfg.oscName, objectv1alpha1.BucketReclaimDelete)
 			Expect(createOSB(ctx, osb)).To(Succeed())
 
@@ -82,28 +82,32 @@ func createSpecs() {
 			Expect(waitOSBReady(ctx, suiteCfg.bucketName)).To(Succeed())
 
 			By("asserting status.bucketName is populated")
-			bucketName, err := getStringField(ctx, objectStorageBucketGVR, "", suiteCfg.bucketName, "status", "bucketName")
+			bucketName, err := getStringField(ctx, bucketGVR, "", suiteCfg.bucketName, "status", "bucketName")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(bucketName).To(Equal(suiteCfg.bucketName), "effective bucket name defaults to metadata.name")
 		})
 
-		It("grants namespace access via policy + ObjectStorageBucketAccess and reaches Ready", func() {
+		It("grants namespace access via policy + BucketAccess and reaches Ready", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), suiteCfg.obReadyTimeout+2*time.Minute)
 			defer cancel()
 
-			By("creating ObjectStorageBucketPolicy allowing namespace " + suiteCfg.namespace)
+			By("creating BucketPolicy allowing namespace " + suiteCfg.namespace)
 			policy := buildOSBPolicy(policyName(suiteCfg.bucketName), suiteCfg.bucketName, []string{suiteCfg.namespace})
 			Expect(createOSBPolicy(ctx, policy)).To(Succeed())
 
-			By("creating ObjectStorageBucketAccess " + accessName(suiteCfg.bucketName))
-			access := buildOSBAccess(accessName(suiteCfg.bucketName), suiteCfg.namespace, suiteCfg.bucketName, objectv1alpha1.AccessReadWrite)
+			By("creating a brownfield BucketClaim " + claimName(suiteCfg.bucketName))
+			claim := buildBucketClaim(claimName(suiteCfg.bucketName), suiteCfg.namespace, suiteCfg.bucketName)
+			Expect(createBucketClaim(ctx, claim)).To(Succeed())
+
+			By("creating BucketAccess " + accessName(suiteCfg.bucketName))
+			access := buildOSBAccess(accessName(suiteCfg.bucketName), suiteCfg.namespace, claimName(suiteCfg.bucketName), objectv1alpha1.AccessReadWrite)
 			Expect(createOSBAccess(ctx, access)).To(Succeed())
 
 			By("waiting for the access Ready condition (policy must match the namespace)")
 			Expect(waitAccessReady(ctx, suiteCfg.namespace, accessName(suiteCfg.bucketName))).To(Succeed())
 
 			By("asserting status.secretRef.name is published on the access")
-			secretName, err := getStringField(ctx, objectStorageBucketAccessGVR, suiteCfg.namespace, accessName(suiteCfg.bucketName), "status", "secretRef", "name")
+			secretName, err := getStringField(ctx, bucketAccessGVR, suiteCfg.namespace, accessName(suiteCfg.bucketName), "status", "secretRef", "name")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(secretName).NotTo(BeEmpty(), "status.secretRef.name must be published")
 		})
@@ -112,7 +116,7 @@ func createSpecs() {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
 
-			secretName, err := getStringField(ctx, objectStorageBucketAccessGVR, suiteCfg.namespace, accessName(suiteCfg.bucketName), "status", "secretRef", "name")
+			secretName, err := getStringField(ctx, bucketAccessGVR, suiteCfg.namespace, accessName(suiteCfg.bucketName), "status", "secretRef", "name")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(secretName).NotTo(BeEmpty())
 
@@ -125,9 +129,9 @@ func createSpecs() {
 				Expect(secret.Data[key]).NotTo(BeEmpty(), "credentials Secret %s must be non-empty", key)
 			}
 
-			By("asserting the Secret is owned by the ObjectStorageBucketAccess (cleaned up on delete)")
-			Expect(secret.OwnerReferences).NotTo(BeEmpty(), "credentials Secret must be owned by the ObjectStorageBucketAccess")
-			Expect(secret.OwnerReferences[0].Kind).To(Equal(objectv1alpha1.ObjectStorageBucketAccessKind))
+			By("asserting the Secret is owned by the BucketAccess (cleaned up on delete)")
+			Expect(secret.OwnerReferences).NotTo(BeEmpty(), "credentials Secret must be owned by the BucketAccess")
+			Expect(secret.OwnerReferences[0].Kind).To(Equal(objectv1alpha1.BucketAccessKind))
 			Expect(secret.OwnerReferences[0].Name).To(Equal(accessName(suiteCfg.bucketName)))
 		})
 
@@ -135,7 +139,7 @@ func createSpecs() {
 			ctx, cancel := context.WithTimeout(context.Background(), suiteCfg.probeJobTimeout+2*time.Minute)
 			defer cancel()
 
-			secretName, err := getStringField(ctx, objectStorageBucketAccessGVR, suiteCfg.namespace, accessName(suiteCfg.bucketName), "status", "secretRef", "name")
+			secretName, err := getStringField(ctx, bucketAccessGVR, suiteCfg.namespace, accessName(suiteCfg.bucketName), "status", "secretRef", "name")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(secretName).NotTo(BeEmpty())
 

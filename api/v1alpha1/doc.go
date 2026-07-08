@@ -17,13 +17,18 @@ limitations under the License.
 // Package v1alpha1 contains API Schema definitions for the storage.deckhouse.io
 // resources managed by the sds-object module.
 //
-//   - ObjectStorageCluster — cluster-scoped CR describing an S3-compatible
-//     object storage cluster (one of four turnkey profiles).
-//   - ObjectStorageBucket — cluster-scoped CR declaring a single bucket.
-//   - ObjectStorageBucketAccess — namespaced CR requesting scoped credentials
-//     for a bucket (writes an S3 credentials Secret).
-//   - ObjectStorageBucketPolicy — cluster-scoped CR gating which namespaces may
-//     request access to a bucket.
+//   - ObjectStore — cluster-scoped CR describing an S3-compatible
+//     object storage instance (one of four turnkey profiles); deploys the
+//     data plane (outside the COSI model).
+//   - Bucket — cluster-scoped CR representing a single backing bucket,
+//     either administrator-declared (Shared) or provisioned for a BucketClaim.
+//   - BucketClaim — namespaced CR requesting a bucket: greenfield
+//     (provisions its own private bucket) or brownfield (binds a Shared
+//     bucket, gated by BucketPolicy).
+//   - BucketAccess — namespaced CR requesting scoped credentials for a
+//     BucketClaim (writes an S3 credentials Secret).
+//   - BucketPolicy — cluster-scoped CR gating which namespaces may bind a
+//     Shared bucket via a brownfield BucketClaim.
 //
 // +groupName=storage.deckhouse.io
 // +k8s:deepcopy-gen=package

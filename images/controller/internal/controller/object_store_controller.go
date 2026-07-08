@@ -39,7 +39,7 @@ import (
 	"github.com/deckhouse/sds-object/images/controller/pkg/logger"
 )
 
-// ObjectStorageClusterReconciler drives every ObjectStorageCluster through a
+// ObjectStoreReconciler drives every ObjectStore through a
 // short FSM:
 //
 //		BackendReady -> EndpointReady -> Ready
@@ -51,7 +51,7 @@ import (
 //
 // The backend-specific work lives in backend.Driver; this reconciler owns the
 // Kubernetes-facing status machine and the finalizer.
-type ObjectStorageClusterReconciler struct {
+type ObjectStoreReconciler struct {
 	Client   client.Client
 	Log      *logger.Logger
 	Cfg      *config.Options
@@ -60,15 +60,15 @@ type ObjectStorageClusterReconciler struct {
 
 // oscStageOrder lists the FSM stage condition types in execution order.
 var oscStageOrder = []string{
-	v1alpha1.OSCConditionBackendReady,
-	v1alpha1.OSCConditionEndpointReady,
+	v1alpha1.ObjectStoreConditionBackendReady,
+	v1alpha1.ObjectStoreConditionEndpointReady,
 }
 
-// AddObjectStorageClusterReconcilerToManager wires the OSC reconciler into the
+// AddObjectStoreReconcilerToManager wires the OSC reconciler into the
 // manager. It reconciles on spec (generation) changes only; backend-driven
 // status refresh happens on the requeue interval.
-func AddObjectStorageClusterReconcilerToManager(mgr manager.Manager, cfg *config.Options, log *logger.Logger, reg *backend.Registry) error {
-	r := &ObjectStorageClusterReconciler{
+func AddObjectStoreReconcilerToManager(mgr manager.Manager, cfg *config.Options, log *logger.Logger, reg *backend.Registry) error {
+	r := &ObjectStoreReconciler{
 		Client:   mgr.GetClient(),
 		Log:      log,
 		Cfg:      cfg,
@@ -76,16 +76,16 @@ func AddObjectStorageClusterReconcilerToManager(mgr manager.Manager, cfg *config
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		Named("object-storage-cluster").
-		For(&v1alpha1.ObjectStorageCluster{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		Named("object-store").
+		For(&v1alpha1.ObjectStore{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		WithOptions(controller.Options{MaxConcurrentReconciles: cfg.MaxConcurrentReconciles}).
 		Complete(r)
 }
 
-func (r *ObjectStorageClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	r.Log.Info(fmt.Sprintf("[Reconcile] start for ObjectStorageCluster %q", req.Name))
+func (r *ObjectStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	r.Log.Info(fmt.Sprintf("[Reconcile] start for ObjectStore %q", req.Name))
 
-	cluster := &v1alpha1.ObjectStorageCluster{}
+	cluster := &v1alpha1.ObjectStore{}
 	if err := r.Client.Get(ctx, req.NamespacedName, cluster); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
@@ -107,7 +107,7 @@ func (r *ObjectStorageClusterReconciler) Reconcile(ctx context.Context, req ctrl
 	return r.reconcileNormal(ctx, cluster)
 }
 
-func (r *ObjectStorageClusterReconciler) reconcileDelete(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) (ctrl.Result, error) {
+func (r *ObjectStoreReconciler) reconcileDelete(ctx context.Context, cluster *v1alpha1.ObjectStore) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(cluster, Finalizer) {
 		return ctrl.Result{}, nil
 	}
@@ -128,19 +128,19 @@ func (r *ObjectStorageClusterReconciler) reconcileDelete(ctx context.Context, cl
 	return ctrl.Result{}, nil
 }
 
-func (r *ObjectStorageClusterReconciler) reconcileNormal(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) (ctrl.Result, error) {
+func (r *ObjectStoreReconciler) reconcileNormal(ctx context.Context, cluster *v1alpha1.ObjectStore) (ctrl.Result, error) {
 	status := newStatusBuilder(cluster.Generation)
 
 	driver, err := r.Registry.For(cluster)
 	if err != nil {
 		// No driver for this profile is a terminal configuration error.
-		status.setCondition(v1alpha1.OSCConditionBackendReady, metav1.ConditionFalse, reasonError, err.Error())
-		gateAfter(status, oscStageOrder, v1alpha1.OSCConditionBackendReady)
+		status.setCondition(v1alpha1.ObjectStoreConditionBackendReady, metav1.ConditionFalse, reasonError, err.Error())
+		gateAfter(status, oscStageOrder, v1alpha1.ObjectStoreConditionBackendReady)
 		return r.finish(ctx, cluster, status, nil, err)
 	}
 
 	state, err := driver.EnsureCluster(ctx, cluster)
-	if !advance(status, oscStageOrder, v1alpha1.OSCConditionBackendReady, state.Ready, state.Message, err) {
+	if !advance(status, oscStageOrder, v1alpha1.ObjectStoreConditionBackendReady, state.Ready, state.Message, err) {
 		return r.finish(ctx, cluster, status, &state, err)
 	}
 
@@ -149,19 +149,19 @@ func (r *ObjectStorageClusterReconciler) reconcileNormal(ctx context.Context, cl
 	if !endpointReady {
 		endpointMsg = "waiting for the backend to publish an S3 endpoint"
 	}
-	if !advance(status, oscStageOrder, v1alpha1.OSCConditionEndpointReady, endpointReady, endpointMsg, nil) {
+	if !advance(status, oscStageOrder, v1alpha1.ObjectStoreConditionEndpointReady, endpointReady, endpointMsg, nil) {
 		return r.finish(ctx, cluster, status, &state, nil)
 	}
 
-	status.setCondition(v1alpha1.OSCConditionReady, metav1.ConditionTrue, reasonReady, "All stages reconciled")
+	status.setCondition(v1alpha1.ObjectStoreConditionReady, metav1.ConditionTrue, reasonReady, "All stages reconciled")
 	return r.finish(ctx, cluster, status, &state, nil)
 }
 
 // finish writes the observed backend state and the accumulated conditions onto
 // the CR status, then decides whether to requeue.
-func (r *ObjectStorageClusterReconciler) finish(
+func (r *ObjectStoreReconciler) finish(
 	ctx context.Context,
-	cluster *v1alpha1.ObjectStorageCluster,
+	cluster *v1alpha1.ObjectStore,
 	status *statusBuilder,
 	state *backend.ClusterState,
 	reconcileErr error,
@@ -181,19 +181,19 @@ func (r *ObjectStorageClusterReconciler) finish(
 	return ctrl.Result{RequeueAfter: r.Cfg.RequeueInterval}, nil
 }
 
-func (r *ObjectStorageClusterReconciler) updateStatus(
+func (r *ObjectStoreReconciler) updateStatus(
 	ctx context.Context,
-	cluster *v1alpha1.ObjectStorageCluster,
+	cluster *v1alpha1.ObjectStore,
 	sb *statusBuilder,
 	state *backend.ClusterState,
 ) error {
 	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		latest := &v1alpha1.ObjectStorageCluster{}
+		latest := &v1alpha1.ObjectStore{}
 		if err := r.Client.Get(ctx, client.ObjectKey{Name: cluster.Name}, latest); err != nil {
 			return err
 		}
 		if latest.Status == nil {
-			latest.Status = &v1alpha1.ObjectStorageClusterStatus{}
+			latest.Status = &v1alpha1.ObjectStoreStatus{}
 		}
 		before := latest.Status.DeepCopy()
 

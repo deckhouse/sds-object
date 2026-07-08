@@ -64,7 +64,7 @@ const (
 
 const (
 	defaultOSCName = "e2e-osc"
-	// systemOSCName is the name of the System ObjectStorageCluster the module
+	// systemOSCName is the name of the System ObjectStore the module
 	// ships automatically (templates/system-object-storage.yaml). When the
 	// primary profile is System the suite adopts this cluster instead of
 	// creating a second one (a second System is denied by the webhook).
@@ -95,24 +95,28 @@ const (
 )
 
 var (
-	objectStorageClusterGVR = schema.GroupVersionResource{
-		Group: apiGroup, Version: apiVersion, Resource: "objectstorageclusters",
+	objectStoreGVR = schema.GroupVersionResource{
+		Group: apiGroup, Version: apiVersion, Resource: "objectstores",
 	}
-	// objectStorageBucketGVR is cluster-scoped (used without .Namespace()).
-	objectStorageBucketGVR = schema.GroupVersionResource{
-		Group: apiGroup, Version: apiVersion, Resource: "objectstoragebuckets",
+	// bucketGVR is cluster-scoped (used without .Namespace()).
+	bucketGVR = schema.GroupVersionResource{
+		Group: apiGroup, Version: apiVersion, Resource: "buckets",
 	}
-	// objectStorageBucketAccessGVR is namespaced (used with .Namespace()).
-	objectStorageBucketAccessGVR = schema.GroupVersionResource{
-		Group: apiGroup, Version: apiVersion, Resource: "objectstoragebucketaccesses",
+	// bucketClaimGVR is namespaced (used with .Namespace()).
+	bucketClaimGVR = schema.GroupVersionResource{
+		Group: apiGroup, Version: apiVersion, Resource: "bucketclaims",
 	}
-	// objectStorageBucketPolicyGVR is cluster-scoped (used without .Namespace()).
-	objectStorageBucketPolicyGVR = schema.GroupVersionResource{
-		Group: apiGroup, Version: apiVersion, Resource: "objectstoragebucketpolicies",
+	// bucketAccessGVR is namespaced (used with .Namespace()).
+	bucketAccessGVR = schema.GroupVersionResource{
+		Group: apiGroup, Version: apiVersion, Resource: "bucketaccesses",
+	}
+	// bucketPolicyGVR is cluster-scoped (used without .Namespace()).
+	bucketPolicyGVR = schema.GroupVersionResource{
+		Group: apiGroup, Version: apiVersion, Resource: "bucketpolicies",
 	}
 
 	// credsSecretKeys are the standardised keys the access reconciler writes into
-	// the credentials Secret (ObjectStorageBucketAccess.status.secretRef). The
+	// the credentials Secret (BucketAccess.status.secretRef). The
 	// suite asserts all are present and non-empty, and the probe Job envFroms the
 	// Secret directly.
 	credsSecretKeys = []string{
@@ -125,8 +129,8 @@ var (
 )
 
 type e2eConfig struct {
-	// namespace is the in-cluster namespace for ObjectStorageBucketAccesses /
-	// credentials Secrets / probe Pods (ObjectStorageBuckets are cluster-scoped).
+	// namespace is the in-cluster namespace for BucketAccesses /
+	// credentials Secrets / probe Pods (Buckets are cluster-scoped).
 	// Single source of truth: TEST_CLUSTER_NAMESPACE (also the base VM namespace).
 	namespace string
 
@@ -159,7 +163,7 @@ var (
 	suiteClusterResources *cluster.TestClusterResources
 
 	// oscCreatedBySuite records whether createSpecs actually created the primary
-	// ObjectStorageCluster (true) or adopted a module-managed one such as the
+	// ObjectStore (true) or adopted a module-managed one such as the
 	// shipped `system` cluster (false). deleteSpecs must not delete an adopted
 	// cluster.
 	oscCreatedBySuite bool
@@ -335,7 +339,7 @@ const controllerDeploymentName = "controller"
 // waitControllerReady blocks until the sds-object controller Deployment has a
 // Ready replica. The Deckhouse Module going Ready does not guarantee the
 // controller Pod passed its readiness probe, so without this the first
-// ObjectStorageCluster create can race the validating webhook and fail with
+// ObjectStore create can race the validating webhook and fail with
 // "failed calling webhook ... connect: operation not permitted" (no ready
 // endpoint behind the webhook Service yet).
 func waitControllerReady(ctx context.Context, timeout time.Duration) error {
@@ -362,19 +366,22 @@ func waitControllerReady(ctx context.Context, timeout time.Duration) error {
 
 // --- naming helpers ---------------------------------------------------------
 
-// accessName is the ObjectStorageBucketAccess name derived from a bucket name.
+// accessName is the BucketAccess name derived from a bucket name.
 func accessName(bucket string) string { return bucket + "-access" }
 
-// policyName is the ObjectStorageBucketPolicy name derived from a bucket name.
+// policyName is the BucketPolicy name derived from a bucket name.
 func policyName(bucket string) string { return bucket + "-policy" }
+
+// claimName is the BucketClaim name derived from a bucket name.
+func claimName(bucket string) string { return bucket + "-claim" }
 
 // credsSecretName is the credentials Secret the access reconciler writes,
 // defaulting to <access-name>-s3-credentials (unless spec.secretName overrides).
 func credsSecretName(access string) string { return access + "-s3-credentials" }
 
-// --- ObjectStorageCluster / ObjectStorageBucket / *Access / *Policy builders --
+// --- ObjectStore / Bucket / *Access / *Policy builders --
 
-// buildOSC renders an ObjectStorageCluster from the suite config. storage and
+// buildOSC renders an ObjectStore from the suite config. storage and
 // elasticClusterRef are only set for the profiles that accept them so the CRD's
 // CEL "only allowed when ..." rules are satisfied.
 func buildOSC(name string) *unstructured.Unstructured {
@@ -392,36 +399,55 @@ func buildOSC(name string) *unstructured.Unstructured {
 		spec["elasticClusterRef"] = suiteCfg.elasticRef
 	}
 	u := &unstructured.Unstructured{}
-	u.SetGroupVersionKind(schema.GroupVersionKind{Group: apiGroup, Version: apiVersion, Kind: objectv1alpha1.ObjectStorageClusterKind})
+	u.SetGroupVersionKind(schema.GroupVersionKind{Group: apiGroup, Version: apiVersion, Kind: objectv1alpha1.ObjectStoreKind})
 	u.SetName(name)
 	u.Object["spec"] = spec
 	return u
 }
 
-// buildOSB renders a cluster-scoped ObjectStorageBucket. The effective bucket
+// buildOSB renders a cluster-scoped Bucket. The effective bucket
 // name defaults to metadata.name (spec.bucketName is left unset here).
-func buildOSB(name, clusterRef string, reclaim objectv1alpha1.BucketReclaimPolicy) *unstructured.Unstructured {
+func buildOSB(name, objectStoreRef string, reclaim objectv1alpha1.BucketReclaimPolicy) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
-	u.SetGroupVersionKind(schema.GroupVersionKind{Group: apiGroup, Version: apiVersion, Kind: objectv1alpha1.ObjectStorageBucketKind})
+	u.SetGroupVersionKind(schema.GroupVersionKind{Group: apiGroup, Version: apiVersion, Kind: objectv1alpha1.BucketKind})
 	u.SetName(name)
 	u.Object["spec"] = map[string]interface{}{
-		"clusterRef":    clusterRef,
-		"reclaimPolicy": string(reclaim),
+		"objectStoreRef": objectStoreRef,
+		"reclaimPolicy":  string(reclaim),
 	}
 	return u
 }
 
-// buildOSBPolicy renders a cluster-scoped ObjectStorageBucketPolicy that allows
+// buildBucketClaim renders a namespaced brownfield BucketClaim that binds the
+// existing Shared Bucket named existingBucketName. Binding is deny-by-default:
+// a matching BucketPolicy must allow ns before the claim reaches Bound.
+func buildBucketClaim(name, ns, existingBucketName string) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(schema.GroupVersionKind{Group: apiGroup, Version: apiVersion, Kind: objectv1alpha1.BucketClaimKind})
+	u.SetName(name)
+	u.SetNamespace(ns)
+	u.Object["spec"] = map[string]interface{}{
+		"existingBucketName": existingBucketName,
+	}
+	return u
+}
+
+func createBucketClaim(ctx context.Context, u *unstructured.Unstructured) error {
+	_, err := suiteDyn.Resource(bucketClaimGVR).Namespace(u.GetNamespace()).Create(ctx, u, metav1.CreateOptions{})
+	return err
+}
+
+// buildOSBPolicy renders a cluster-scoped BucketPolicy that allows
 // the given namespaces (by exact name) to request access to bucketRef. Access is
 // deny-by-default, so a matching policy must exist before an
-// ObjectStorageBucketAccess in one of these namespaces can reach Ready.
+// BucketAccess in one of these namespaces can reach Ready.
 func buildOSBPolicy(name, bucketRef string, namespaces []string) *unstructured.Unstructured {
 	names := make([]interface{}, 0, len(namespaces))
 	for _, n := range namespaces {
 		names = append(names, n)
 	}
 	u := &unstructured.Unstructured{}
-	u.SetGroupVersionKind(schema.GroupVersionKind{Group: apiGroup, Version: apiVersion, Kind: objectv1alpha1.ObjectStorageBucketPolicyKind})
+	u.SetGroupVersionKind(schema.GroupVersionKind{Group: apiGroup, Version: apiVersion, Kind: objectv1alpha1.BucketPolicyKind})
 	u.SetName(name)
 	u.Object["spec"] = map[string]interface{}{
 		"bucketRef": bucketRef,
@@ -432,18 +458,18 @@ func buildOSBPolicy(name, bucketRef string, namespaces []string) *unstructured.U
 	return u
 }
 
-// buildOSBAccess renders a namespaced ObjectStorageBucketAccess targeting the
-// cluster-scoped bucketRef. The controller writes the credentials Secret in ns
-// (named <name>-s3-credentials) owned by this access.
-func buildOSBAccess(name, ns, bucketRef string, permission objectv1alpha1.AccessPermission) *unstructured.Unstructured {
+// buildOSBAccess renders a namespaced BucketAccess referencing the BucketClaim
+// bucketClaimName in the same namespace. The controller writes the credentials
+// Secret in ns (named <name>-s3-credentials) owned by this access.
+func buildOSBAccess(name, ns, bucketClaimName string, permission objectv1alpha1.AccessPermission) *unstructured.Unstructured {
 	spec := map[string]interface{}{
-		"bucketRef": bucketRef,
+		"bucketClaimName": bucketClaimName,
 	}
 	if permission != "" {
 		spec["permission"] = string(permission)
 	}
 	u := &unstructured.Unstructured{}
-	u.SetGroupVersionKind(schema.GroupVersionKind{Group: apiGroup, Version: apiVersion, Kind: objectv1alpha1.ObjectStorageBucketAccessKind})
+	u.SetGroupVersionKind(schema.GroupVersionKind{Group: apiGroup, Version: apiVersion, Kind: objectv1alpha1.BucketAccessKind})
 	u.SetName(name)
 	u.SetNamespace(ns)
 	u.Object["spec"] = spec
@@ -451,15 +477,15 @@ func buildOSBAccess(name, ns, bucketRef string, permission objectv1alpha1.Access
 }
 
 func createOSC(ctx context.Context, u *unstructured.Unstructured) error {
-	_, err := suiteDyn.Resource(objectStorageClusterGVR).Create(ctx, u, metav1.CreateOptions{})
+	_, err := suiteDyn.Resource(objectStoreGVR).Create(ctx, u, metav1.CreateOptions{})
 	return err
 }
 
-// oscExists reports whether the named (cluster-scoped) ObjectStorageCluster
+// oscExists reports whether the named (cluster-scoped) ObjectStore
 // already exists — used to adopt the module-shipped `system` cluster instead of
 // creating a second one.
 func oscExists(ctx context.Context, name string) (bool, error) {
-	_, err := suiteDyn.Resource(objectStorageClusterGVR).Get(ctx, name, metav1.GetOptions{})
+	_, err := suiteDyn.Resource(objectStoreGVR).Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return false, nil
 	}
@@ -470,17 +496,17 @@ func oscExists(ctx context.Context, name string) (bool, error) {
 }
 
 func createOSB(ctx context.Context, u *unstructured.Unstructured) error {
-	_, err := suiteDyn.Resource(objectStorageBucketGVR).Create(ctx, u, metav1.CreateOptions{})
+	_, err := suiteDyn.Resource(bucketGVR).Create(ctx, u, metav1.CreateOptions{})
 	return err
 }
 
 func createOSBPolicy(ctx context.Context, u *unstructured.Unstructured) error {
-	_, err := suiteDyn.Resource(objectStorageBucketPolicyGVR).Create(ctx, u, metav1.CreateOptions{})
+	_, err := suiteDyn.Resource(bucketPolicyGVR).Create(ctx, u, metav1.CreateOptions{})
 	return err
 }
 
 func createOSBAccess(ctx context.Context, u *unstructured.Unstructured) error {
-	_, err := suiteDyn.Resource(objectStorageBucketAccessGVR).Namespace(u.GetNamespace()).Create(ctx, u, metav1.CreateOptions{})
+	_, err := suiteDyn.Resource(bucketAccessGVR).Namespace(u.GetNamespace()).Create(ctx, u, metav1.CreateOptions{})
 	return err
 }
 
@@ -532,18 +558,18 @@ func waitCondition(ctx context.Context, gvr schema.GroupVersionResource, ns, nam
 }
 
 func waitOSCReady(ctx context.Context, name string) error {
-	return waitCondition(ctx, objectStorageClusterGVR, "", name, objectv1alpha1.OSCConditionReady, "True", suiteCfg.oscReadyTimeout)
+	return waitCondition(ctx, objectStoreGVR, "", name, objectv1alpha1.ObjectStoreConditionReady, "True", suiteCfg.oscReadyTimeout)
 }
 
-// waitOSBReady blocks until the cluster-scoped ObjectStorageBucket is Ready.
+// waitOSBReady blocks until the cluster-scoped Bucket is Ready.
 func waitOSBReady(ctx context.Context, name string) error {
-	return waitCondition(ctx, objectStorageBucketGVR, "", name, objectv1alpha1.OSBConditionReady, "True", suiteCfg.obReadyTimeout)
+	return waitCondition(ctx, bucketGVR, "", name, objectv1alpha1.BucketConditionReady, "True", suiteCfg.obReadyTimeout)
 }
 
-// waitAccessReady blocks until the namespaced ObjectStorageBucketAccess is Ready
-// (which requires a matching ObjectStorageBucketPolicy for its bucket).
+// waitAccessReady blocks until the namespaced BucketAccess is Ready
+// (which requires a matching BucketPolicy for its bucket).
 func waitAccessReady(ctx context.Context, ns, name string) error {
-	return waitCondition(ctx, objectStorageBucketAccessGVR, ns, name, objectv1alpha1.OSBAConditionReady, "True", suiteCfg.obReadyTimeout)
+	return waitCondition(ctx, bucketAccessGVR, ns, name, objectv1alpha1.BucketAccessConditionReady, "True", suiteCfg.obReadyTimeout)
 }
 
 // getStringField fetches a nested string field from a dynamic object.

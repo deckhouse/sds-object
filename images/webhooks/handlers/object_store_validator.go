@@ -27,7 +27,7 @@ import (
 	"k8s.io/klog/v2"
 )
 
-// ObjectStorageClusterValidate admits ObjectStorageCluster resources. The
+// ObjectStoreValidate admits ObjectStore resources. The
 // schema/immutability contract is enforced by the CRD CEL rules; this validator
 // adds the cross-resource checks:
 //
@@ -35,7 +35,7 @@ import (
 //   - for type Heavy, the referenced ElasticCluster should already exist
 //     (soft warning — the cluster reconciles to Pending until it does, so we do
 //     not block create-before-dependency ordering).
-func (v *Validator) ObjectStorageClusterValidate(ctx context.Context, _ *model.AdmissionReview, obj metav1.Object) (*kwhvalidating.ValidatorResult, error) {
+func (v *Validator) ObjectStoreValidate(ctx context.Context, _ *model.AdmissionReview, obj metav1.Object) (*kwhvalidating.ValidatorResult, error) {
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok {
 		return &kwhvalidating.ValidatorResult{Valid: true}, nil
@@ -46,7 +46,7 @@ func (v *Validator) ObjectStorageClusterValidate(ctx context.Context, _ *model.A
 	var warnings []string
 
 	if clusterType == "System" {
-		list, err := v.dyn.Resource(objectStorageClusterGVR).List(ctx, metav1.ListOptions{})
+		list, err := v.dyn.Resource(objectStoreGVR).List(ctx, metav1.ListOptions{})
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("could not verify System cluster uniqueness: %v", err))
 		} else {
@@ -57,7 +57,7 @@ func (v *Validator) ObjectStorageClusterValidate(ctx context.Context, _ *model.A
 				}
 				if t, _, _ := unstructured.NestedString(other.Object, "spec", "type"); t == "System" {
 					return reject(fmt.Sprintf(
-						"only one System ObjectStorageCluster is allowed; %q already exists", other.GetName())), nil
+						"only one System ObjectStore is allowed; %q already exists", other.GetName())), nil
 				}
 			}
 		}
@@ -72,6 +72,6 @@ func (v *Validator) ObjectStorageClusterValidate(ctx context.Context, _ *model.A
 		}
 	}
 
-	klog.Infof("ObjectStorageCluster %s admitted (warnings: %d)", name, len(warnings))
+	klog.Infof("ObjectStore %s admitted (warnings: %d)", name, len(warnings))
 	return &kwhvalidating.ValidatorResult{Valid: true, Warnings: warnings}, nil
 }

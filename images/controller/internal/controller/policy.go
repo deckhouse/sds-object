@@ -28,13 +28,13 @@ import (
 
 // namespaceAllowedForBucket reports whether the given namespace is permitted to
 // request access to the bucket. Access is deny-by-default: it returns true only
-// when at least one ObjectStorageBucketPolicy for the bucket matches the
+// when at least one BucketPolicy for the bucket matches the
 // namespace (by exact name or by a regexp pattern). The returned string
 // explains the decision for surfacing in the access status.
 func namespaceAllowedForBucket(ctx context.Context, c client.Client, bucketName, namespace string) (bool, string, error) {
-	list := &v1alpha1.ObjectStorageBucketPolicyList{}
+	list := &v1alpha1.BucketPolicyList{}
 	if err := c.List(ctx, list); err != nil {
-		return false, "", fmt.Errorf("list ObjectStorageBucketPolicies: %w", err)
+		return false, "", fmt.Errorf("list BucketPolicies: %w", err)
 	}
 
 	policies := 0
@@ -47,14 +47,14 @@ func namespaceAllowedForBucket(ctx context.Context, c client.Client, bucketName,
 		if match, err := namespaceMatches(p.Spec.AllowedNamespaces, namespace); err != nil {
 			return false, "", err
 		} else if match {
-			return true, fmt.Sprintf("allowed by ObjectStorageBucketPolicy %q", p.Name), nil
+			return true, fmt.Sprintf("allowed by BucketPolicy %q", p.Name), nil
 		}
 	}
 
 	if policies == 0 {
-		return false, fmt.Sprintf("no ObjectStorageBucketPolicy grants namespace %q access to bucket %q (access is deny-by-default)", namespace, bucketName), nil
+		return false, fmt.Sprintf("no BucketPolicy grants namespace %q access to bucket %q (access is deny-by-default)", namespace, bucketName), nil
 	}
-	return false, fmt.Sprintf("namespace %q does not match any ObjectStorageBucketPolicy for bucket %q", namespace, bucketName), nil
+	return false, fmt.Sprintf("namespace %q does not match any BucketPolicy for bucket %q", namespace, bucketName), nil
 }
 
 // namespaceMatches reports whether the namespace is selected by the match: it

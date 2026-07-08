@@ -1,7 +1,7 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: objectstorageclusters.storage.deckhouse.io
+  name: objectstores.storage.deckhouse.io
   labels:
     heritage: deckhouse
     module: sds-object
@@ -10,11 +10,11 @@ spec:
   group: storage.deckhouse.io
   scope: Cluster
   names:
-    plural: objectstorageclusters
-    singular: objectstoragecluster
-    kind: ObjectStorageCluster
+    plural: objectstores
+    singular: objectstore
+    kind: ObjectStore
     shortNames:
-      - osc
+      - ostore
   preserveUnknownFields: false
   versions:
     - name: v1alpha1
@@ -24,22 +24,22 @@ spec:
         openAPIV3Schema:
           type: object
           description: |
-            ObjectStorageCluster describes the desired state of an S3-compatible
+            ObjectStore describes the desired state of an S3-compatible
             object storage cluster managed by the sds-object module. A single
             `spec.type` selects one of four turnkey profiles; the backend
             (Garage / SeaweedFS / Ceph RGW) and its low-level settings are hidden
             from the user (noops).
 
-            Buckets are declared separately in cluster-scoped ObjectStorageBucket
+            Buckets are declared separately in cluster-scoped Bucket
             resources that reference this cluster by name; per-namespace
-            credentials are requested via ObjectStorageBucketAccess.
+            credentials are requested via BucketAccess.
           required:
             - spec
           x-kubernetes-validations:
             - rule: "size(self.metadata.name) <= 30"
-              message: "ObjectStorageCluster metadata.name must not exceed 30 characters (used as a prefix in derived resource names)."
+              message: "ObjectStore metadata.name must not exceed 30 characters (used as a prefix in derived resource names)."
             - rule: "self.metadata.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')"
-              message: "ObjectStorageCluster metadata.name must be a valid DNS-1123 label."
+              message: "ObjectStore metadata.name must be a valid DNS-1123 label."
           properties:
             spec:
               type: object
@@ -171,7 +171,7 @@ spec:
                   type: string
                   description: |
                     What happens to the backend data plane and its persisted
-                    data when the ObjectStorageCluster is deleted.
+                    data when the ObjectStore is deleted.
 
                     - `Retain` (default) — persisted data is preserved. For
                       `Heavy` the Ceph RGW pools are kept

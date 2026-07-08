@@ -4,13 +4,13 @@ spec:
       schema:
         openAPIV3Schema:
           description: |
-            Запрашивает доступ к cluster-scoped бакету ObjectStorageBucket из
+            Запрашивает доступ к cluster-scoped бакету Bucket из
             потребляющего namespace. Контроллер генерирует отдельную пару
             access key / secret key для этого доступа, кладёт в тот же namespace
             Secret (см. `status.secretRef`) со стандартными переменными
             подключения к S3 и отзывает ключ при удалении ресурса.
 
-            Разрешён ли доступ, определяется ресурсами ObjectStorageBucketPolicy
+            Разрешён ли доступ, определяется ресурсами BucketPolicy
             (deny-by-default): доступ, namespace которого не совпал ни с одной
             политикой для указанного бакета, остаётся в фазе `Pending`.
 
@@ -22,17 +22,18 @@ spec:
               description: |
                 Желаемое состояние доступа.
               properties:
-                bucketRef:
+                bucketClaimName:
                   description: |
-                    Имя cluster-scoped бакета ObjectStorageBucket, к которому
-                    запрашивается доступ. Неизменяемо после создания.
+                    Имя BucketClaim (в том же namespace), к привязанному бакету
+                    которого выдаются учётные данные. Claim должен быть в
+                    состоянии Bound. Неизменяемо после создания.
                 permission:
                   description: |
                     Уровень доступа для выданных учётных данных.
 
                     - `ReadWrite` (по умолчанию) — чтение и запись объектов.
                     - `ReadOnly` — только чтение объектов.
-                secretName:
+                credentialsSecretName:
                   description: |
                     Переопределяет имя Secret с учётными данными в namespace
                     доступа. По умолчанию `<metadata.name>-s3-credentials`.

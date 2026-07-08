@@ -40,7 +40,7 @@ const (
 // Rook issues its keys in a Secret) and creates the bucket via the S3 API with
 // that key. Per-access credentials are issued separately (see access.go);
 // cross-user access is granted through the bucket policy.
-func (d *Driver) EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectStorageBucket) (backend.BucketState, error) {
+func (d *Driver) EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStore, bucket *v1alpha1.Bucket) (backend.BucketState, error) {
 	if err := d.ensureUser(ctx, cluster, ownerUID(bucket)); err != nil {
 		if isNoMatch(err) {
 			return backend.BucketState{Message: "CephObjectStoreUser CRD not found; is the sds-elastic module installed?"}, nil
@@ -70,7 +70,7 @@ func (d *Driver) EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStora
 
 // DeleteBucket removes the bucket (when reclaimPolicy=Delete) and the owner
 // CephObjectStoreUser. Idempotent.
-func (d *Driver) DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectStorageBucket) error {
+func (d *Driver) DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStore, bucket *v1alpha1.Bucket) error {
 	if bucket.Spec.ReclaimPolicy == v1alpha1.BucketReclaimDelete {
 		accessKey, secretKey, err := d.userKeys(ctx, cluster, ownerUID(bucket))
 		if err != nil {
@@ -91,7 +91,7 @@ func (d *Driver) DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStora
 }
 
 // ensureUser creates or updates the CephObjectStoreUser with the given uid.
-func (d *Driver) ensureUser(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, uid string) error {
+func (d *Driver) ensureUser(ctx context.Context, cluster *v1alpha1.ObjectStore, uid string) error {
 	desired := buildCephObjectStoreUser(cluster, uid)
 	if err := controllerutil.SetControllerReference(cluster, desired, d.client.Scheme()); err != nil {
 		return err
@@ -123,7 +123,7 @@ func (d *Driver) deleteUser(ctx context.Context, uid string) error {
 
 // userKeys reads the access/secret key from the Rook-generated user Secret for
 // the given uid (empty strings when it does not exist yet).
-func (d *Driver) userKeys(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, uid string) (string, string, error) {
+func (d *Driver) userKeys(ctx context.Context, cluster *v1alpha1.ObjectStore, uid string) (string, string, error) {
 	secret := &corev1.Secret{}
 	key := client.ObjectKey{Namespace: elasticNamespace, Name: rgwUserSecretName(cluster, uid)}
 	if err := d.apiReader.Get(ctx, key, secret); err != nil {

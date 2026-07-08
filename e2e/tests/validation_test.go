@@ -38,7 +38,7 @@ import (
 // run on top of the shared cluster/bucket from create_test.go.
 func validationSpecs() {
 	Describe("validation", func() {
-		It("denies a second System ObjectStorageCluster", func() {
+		It("denies a second System ObjectStore", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 
@@ -51,9 +51,9 @@ func validationSpecs() {
 			err := createOSC(ctx, second)
 			// Best-effort cleanup in case the guard ever regresses and admits it.
 			defer func() {
-				_ = suiteDyn.Resource(objectStorageClusterGVR).Delete(context.Background(), "e2e-extra-system", metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(objectStoreGVR).Delete(context.Background(), "e2e-extra-system", metav1.DeleteOptions{})
 			}()
-			expectDenied(err, "only one System ObjectStorageCluster is allowed")
+			expectDenied(err, "only one System ObjectStore is allowed")
 		})
 
 		It("denies a duplicate effective bucket name on the same cluster", func() {
@@ -69,7 +69,7 @@ func validationSpecs() {
 
 			err := createOSB(ctx, dup)
 			defer func() {
-				_ = suiteDyn.Resource(objectStorageBucketGVR).Delete(context.Background(), "e2e-bucket-dup", metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketGVR).Delete(context.Background(), "e2e-bucket-dup", metav1.DeleteOptions{})
 			}()
 			expectDenied(err, "already claimed by")
 		})
@@ -84,7 +84,7 @@ func validationSpecs() {
 				newType = string(objectv1alpha1.ClusterTypeSystem)
 			}
 			patch := []byte(`{"spec":{"type":"` + newType + `"}}`)
-			_, err := suiteDyn.Resource(objectStorageClusterGVR).Patch(ctx, suiteCfg.oscName, types.MergePatchType, patch, metav1.PatchOptions{})
+			_, err := suiteDyn.Resource(objectStoreGVR).Patch(ctx, suiteCfg.oscName, types.MergePatchType, patch, metav1.PatchOptions{})
 			expectDenied(err, "spec.type is immutable")
 		})
 
@@ -98,7 +98,7 @@ func validationSpecs() {
 			})
 			err := createOSC(ctx, bad)
 			defer func() {
-				_ = suiteDyn.Resource(objectStorageClusterGVR).Delete(context.Background(), "e2e-heavy-noref", metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(objectStoreGVR).Delete(context.Background(), "e2e-heavy-noref", metav1.DeleteOptions{})
 			}()
 			expectDenied(err, "elasticClusterRef is required")
 		})
@@ -114,7 +114,7 @@ func validationSpecs() {
 			})
 			err := createOSC(ctx, bad)
 			defer func() {
-				_ = suiteDyn.Resource(objectStorageClusterGVR).Delete(context.Background(), "e2e-sys-ref", metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(objectStoreGVR).Delete(context.Background(), "e2e-sys-ref", metav1.DeleteOptions{})
 			}()
 			expectDenied(err, "elasticClusterRef is only allowed")
 		})
@@ -129,12 +129,12 @@ func validationSpecs() {
 			})
 			err := createOSC(ctx, bad)
 			defer func() {
-				_ = suiteDyn.Resource(objectStorageClusterGVR).Delete(context.Background(), "e2e-light-noclass", metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(objectStoreGVR).Delete(context.Background(), "e2e-light-noclass", metav1.DeleteOptions{})
 			}()
 			expectDenied(err, "storage.class is required")
 		})
 
-		It("denies an ObjectStorageBucketPolicy with an invalid regex pattern", func() {
+		It("denies an BucketPolicy with an invalid regex pattern", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 
@@ -147,18 +147,18 @@ func validationSpecs() {
 			}
 			err := createOSBPolicy(ctx, bad)
 			defer func() {
-				_ = suiteDyn.Resource(objectStorageBucketPolicyGVR).Delete(context.Background(), "e2e-bad-pattern", metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketPolicyGVR).Delete(context.Background(), "e2e-bad-pattern", metav1.DeleteOptions{})
 			}()
 			expectDenied(err, "pattern")
 		})
 	})
 }
 
-// newOSC builds an ObjectStorageCluster with an explicit spec map (for negative
+// newOSC builds an ObjectStore with an explicit spec map (for negative
 // cases where buildOSC's profile-aware defaults would mask the rule under test).
 func newOSC(name string, spec map[string]interface{}) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
-	u.SetGroupVersionKind(schema.GroupVersionKind{Group: apiGroup, Version: apiVersion, Kind: objectv1alpha1.ObjectStorageClusterKind})
+	u.SetGroupVersionKind(schema.GroupVersionKind{Group: apiGroup, Version: apiVersion, Kind: objectv1alpha1.ObjectStoreKind})
 	u.SetName(name)
 	u.Object["spec"] = spec
 	return u

@@ -25,10 +25,10 @@ import (
 	"github.com/deckhouse/sds-object/images/controller/internal/backend"
 )
 
-func heavy(name string, r v1alpha1.RedundancyMode) *v1alpha1.ObjectStorageCluster {
-	return &v1alpha1.ObjectStorageCluster{
+func heavy(name string, r v1alpha1.RedundancyMode) *v1alpha1.ObjectStore {
+	return &v1alpha1.ObjectStore{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec:       v1alpha1.ObjectStorageClusterSpec{Type: v1alpha1.ClusterTypeHeavy, Redundancy: r},
+		Spec:       v1alpha1.ObjectStoreSpec{Type: v1alpha1.ClusterTypeHeavy, Redundancy: r},
 	}
 }
 
@@ -67,8 +67,8 @@ func TestRGWEndpointAndStore(t *testing.T) {
 
 func TestUserAndSecretNames(t *testing.T) {
 	c := heavy("main", "")
-	b := &v1alpha1.ObjectStorageBucket{ObjectMeta: metav1.ObjectMeta{Name: "data"}}
-	access := &v1alpha1.ObjectStorageBucketAccess{ObjectMeta: metav1.ObjectMeta{Namespace: "app", Name: "reader"}}
+	b := &v1alpha1.Bucket{ObjectMeta: metav1.ObjectMeta{Name: "data"}}
+	access := &v1alpha1.BucketAccess{ObjectMeta: metav1.ObjectMeta{Namespace: "app", Name: "reader"}}
 
 	if got := ownerUID(b); got != "data-owner" {
 		t.Errorf("ownerUID=%q, want data-owner", got)

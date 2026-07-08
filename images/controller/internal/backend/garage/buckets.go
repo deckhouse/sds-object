@@ -28,9 +28,9 @@ import (
 )
 
 // EnsureBucket creates the bucket in Garage (no credentials — access keys are
-// issued per ObjectStorageBucketAccess). Idempotent: an existing bucket with
+// issued per BucketAccess). Idempotent: an existing bucket with
 // the same alias is reused.
-func (d *Driver) EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectStorageBucket) (backend.BucketState, error) {
+func (d *Driver) EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStore, bucket *v1alpha1.Bucket) (backend.BucketState, error) {
 	svc, ready, err := d.adminClientFor(ctx, cluster)
 	if err != nil {
 		return backend.BucketState{}, err
@@ -54,7 +54,7 @@ func (d *Driver) EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStora
 // DeleteBucket removes the bucket when the reclaim policy is Delete. It is
 // idempotent and tolerates an already-deleted cluster. Access keys are removed
 // separately by DeleteAccess.
-func (d *Driver) DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectStorageBucket) error {
+func (d *Driver) DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStore, bucket *v1alpha1.Bucket) error {
 	if bucket.Spec.ReclaimPolicy != v1alpha1.BucketReclaimDelete {
 		return nil
 	}
@@ -95,7 +95,7 @@ func (d *Driver) DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStora
 // that is revoked afterwards. The bucket has no long-lived credentials of its
 // own (those belong to per-access keys, which may already be gone by the time
 // the bucket is reclaimed).
-func (d *Driver) emptyBucket(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, svc *adminClient, bucketID, name string) error {
+func (d *Driver) emptyBucket(ctx context.Context, cluster *v1alpha1.ObjectStore, svc *adminClient, bucketID, name string) error {
 	key, err := svc.createKey(ctx, "sds-object-reclaim-"+name)
 	if err != nil {
 		return fmt.Errorf("create temporary key to empty bucket %q: %w", name, err)
@@ -117,7 +117,7 @@ func (d *Driver) emptyBucket(ctx context.Context, cluster *v1alpha1.ObjectStorag
 
 // adminClientFor resolves the admin token and returns a client. ready is false
 // when the admin token has not been provisioned yet.
-func (d *Driver) adminClientFor(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) (*adminClient, bool, error) {
+func (d *Driver) adminClientFor(ctx context.Context, cluster *v1alpha1.ObjectStore) (*adminClient, bool, error) {
 	token, err := d.adminToken(ctx, cluster)
 	if err != nil {
 		return nil, false, err

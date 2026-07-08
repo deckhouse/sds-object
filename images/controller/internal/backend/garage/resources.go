@@ -54,41 +54,41 @@ const (
 )
 
 // resourceName is the common name/prefix for every object backing a cluster.
-func resourceName(cluster *v1alpha1.ObjectStorageCluster) string {
+func resourceName(cluster *v1alpha1.ObjectStore) string {
 	return cluster.Name + "-garage"
 }
 
-func secretName(cluster *v1alpha1.ObjectStorageCluster) string {
+func secretName(cluster *v1alpha1.ObjectStore) string {
 	return resourceName(cluster) + "-secrets"
 }
-func configName(cluster *v1alpha1.ObjectStorageCluster) string {
+func configName(cluster *v1alpha1.ObjectStore) string {
 	return resourceName(cluster) + "-config"
 }
-func rpcSvcName(cluster *v1alpha1.ObjectStorageCluster) string { return resourceName(cluster) + "-rpc" }
-func s3SvcName(cluster *v1alpha1.ObjectStorageCluster) string  { return resourceName(cluster) }
+func rpcSvcName(cluster *v1alpha1.ObjectStore) string { return resourceName(cluster) + "-rpc" }
+func s3SvcName(cluster *v1alpha1.ObjectStore) string  { return resourceName(cluster) }
 
 // commonLabels are placed on every object owned by a cluster.
-func commonLabels(cluster *v1alpha1.ObjectStorageCluster) map[string]string {
+func commonLabels(cluster *v1alpha1.ObjectStore) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/managed-by":                "sds-object",
-		"app.kubernetes.io/name":                      "garage",
-		"storage.deckhouse.io/object-storage-cluster": cluster.Name,
+		"app.kubernetes.io/managed-by":      "sds-object",
+		"app.kubernetes.io/name":            "garage",
+		"storage.deckhouse.io/object-store": cluster.Name,
 	}
 }
 
 // s3Endpoint is the in-cluster S3 URL of the cluster's Service.
-func s3Endpoint(cluster *v1alpha1.ObjectStorageCluster, namespace, clusterDomain string) string {
+func s3Endpoint(cluster *v1alpha1.ObjectStore, namespace, clusterDomain string) string {
 	return fmt.Sprintf("http://%s.%s.svc.%s:%d", s3SvcName(cluster), namespace, clusterDomain, s3Port)
 }
 
 // s3HostPort is the in-cluster S3 endpoint as host:port (no scheme), for the
 // minio/S3 client used to empty buckets before deletion.
-func s3HostPort(cluster *v1alpha1.ObjectStorageCluster, namespace, clusterDomain string) string {
+func s3HostPort(cluster *v1alpha1.ObjectStore, namespace, clusterDomain string) string {
 	return fmt.Sprintf("%s.%s.svc.%s:%d", s3SvcName(cluster), namespace, clusterDomain, s3Port)
 }
 
 // adminEndpoint is the in-cluster admin API URL of the cluster's Service.
-func adminEndpoint(cluster *v1alpha1.ObjectStorageCluster, namespace, clusterDomain string) string {
+func adminEndpoint(cluster *v1alpha1.ObjectStore, namespace, clusterDomain string) string {
 	return fmt.Sprintf("http://%s.%s.svc.%s:%d", s3SvcName(cluster), namespace, clusterDomain, adminPort)
 }
 
@@ -97,7 +97,7 @@ func adminEndpoint(cluster *v1alpha1.ObjectStorageCluster, namespace, clusterDom
 // intent only; for System it must be clamped to the number of control-plane
 // nodes (see Driver.effectiveReplicationFactor) — Garage stays degraded if the
 // factor exceeds the node count.
-func replicationFactor(cluster *v1alpha1.ObjectStorageCluster) int32 {
+func replicationFactor(cluster *v1alpha1.ObjectStore) int32 {
 	switch cluster.Spec.Redundancy {
 	case v1alpha1.RedundancySingle:
 		return 1
@@ -127,13 +127,13 @@ func clampOdd(desired, nodes int32) int32 {
 
 // lightweightReplicas is the StatefulSet replica count for the Lightweight
 // profile, derived from the redundancy intent.
-func lightweightReplicas(cluster *v1alpha1.ObjectStorageCluster) int32 {
+func lightweightReplicas(cluster *v1alpha1.ObjectStore) int32 {
 	return replicationFactor(cluster)
 }
 
 // storageSize returns the per-node PVC size for PVC-backed profiles, defaulting
 // to 10Gi when spec.storage.size is unset/invalid.
-func storageSize(cluster *v1alpha1.ObjectStorageCluster) resource.Quantity {
+func storageSize(cluster *v1alpha1.ObjectStore) resource.Quantity {
 	if cluster.Spec.Storage != nil && cluster.Spec.Storage.Size != "" {
 		if q, err := resource.ParseQuantity(cluster.Spec.Storage.Size); err == nil {
 			return q
@@ -166,7 +166,7 @@ api_bind_addr = "[::]:%d"
 
 // buildConfigMap returns the ConfigMap holding garage.toml with the given
 // replication factor.
-func buildConfigMap(cluster *v1alpha1.ObjectStorageCluster, namespace string, rf int32) *corev1.ConfigMap {
+func buildConfigMap(cluster *v1alpha1.ObjectStore, namespace string, rf int32) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      configName(cluster),
@@ -178,7 +178,7 @@ func buildConfigMap(cluster *v1alpha1.ObjectStorageCluster, namespace string, rf
 }
 
 // buildServiceAccount returns the ServiceAccount the Garage pods run as.
-func buildServiceAccount(cluster *v1alpha1.ObjectStorageCluster, namespace string) *corev1.ServiceAccount {
+func buildServiceAccount(cluster *v1alpha1.ObjectStore, namespace string) *corev1.ServiceAccount {
 	automount := false
 	return &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
@@ -191,7 +191,7 @@ func buildServiceAccount(cluster *v1alpha1.ObjectStorageCluster, namespace strin
 }
 
 // buildS3Service returns the ClusterIP Service exposing the S3 and admin APIs.
-func buildS3Service(cluster *v1alpha1.ObjectStorageCluster, namespace string) *corev1.Service {
+func buildS3Service(cluster *v1alpha1.ObjectStore, namespace string) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      s3SvcName(cluster),
@@ -210,7 +210,7 @@ func buildS3Service(cluster *v1alpha1.ObjectStorageCluster, namespace string) *c
 
 // buildRPCService returns the headless Service used for stable per-pod DNS
 // (RPC mesh, consumed by the meshing step in a later milestone).
-func buildRPCService(cluster *v1alpha1.ObjectStorageCluster, namespace string) *corev1.Service {
+func buildRPCService(cluster *v1alpha1.ObjectStore, namespace string) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      rpcSvcName(cluster),
@@ -278,7 +278,7 @@ func secretKeyRef(key string) *corev1.EnvVarSource {
 
 // podSpec assembles the shared PodSpec (the data volume is provided by the
 // caller: hostPath for System, PVC template for Lightweight).
-func podSpec(cluster *v1alpha1.ObjectStorageCluster, image string, dataVolume *corev1.Volume) corev1.PodSpec {
+func podSpec(cluster *v1alpha1.ObjectStore, image string, dataVolume *corev1.Volume) corev1.PodSpec {
 	c := garageContainer(image)
 	// Patch the secret name into the env sources now that we know the cluster.
 	for i := range c.Env {
@@ -325,7 +325,7 @@ func ptrInt64(v int64) *int64 { return &v }
 // buildStatefulSet returns the StatefulSet for the Lightweight/Full profiles
 // (PVC-backed). Full currently reuses the Garage layout until the SeaweedFS
 // driver lands.
-func buildStatefulSet(cluster *v1alpha1.ObjectStorageCluster, namespace, image string) *appsv1.StatefulSet {
+func buildStatefulSet(cluster *v1alpha1.ObjectStore, namespace, image string) *appsv1.StatefulSet {
 	replicas := lightweightReplicas(cluster)
 	spec := podSpec(cluster, image, nil) // data comes from volumeClaimTemplates
 
@@ -371,7 +371,7 @@ func buildStatefulSet(cluster *v1alpha1.ObjectStorageCluster, namespace, image s
 
 // buildDaemonSet returns the DaemonSet for the System profile (hostPath on
 // control-plane nodes).
-func buildDaemonSet(cluster *v1alpha1.ObjectStorageCluster, namespace, image string) *appsv1.DaemonSet {
+func buildDaemonSet(cluster *v1alpha1.ObjectStore, namespace, image string) *appsv1.DaemonSet {
 	hostPathType := corev1.HostPathDirectoryOrCreate
 	dataVolume := &corev1.Volume{
 		Name: "data",

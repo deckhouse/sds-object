@@ -28,10 +28,10 @@ import (
 	v1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 )
 
-func cluster(name string, r v1alpha1.RedundancyMode) *v1alpha1.ObjectStorageCluster {
-	return &v1alpha1.ObjectStorageCluster{
+func cluster(name string, r v1alpha1.RedundancyMode) *v1alpha1.ObjectStore {
+	return &v1alpha1.ObjectStore{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec:       v1alpha1.ObjectStorageClusterSpec{Type: v1alpha1.ClusterTypeFull, Redundancy: r},
+		Spec:       v1alpha1.ObjectStoreSpec{Type: v1alpha1.ClusterTypeFull, Redundancy: r},
 	}
 }
 
@@ -85,7 +85,7 @@ func TestMasterServers(t *testing.T) {
 
 func TestBuildStatefulSets(t *testing.T) {
 	c := cluster("media", v1alpha1.RedundancyHighRedundancy)
-	c.Spec.Storage = &v1alpha1.ObjectStorageClusterStorageSpec{Size: "100Gi", Class: "fast"}
+	c.Spec.Storage = &v1alpha1.ObjectStoreStorageSpec{Size: "100Gi", Class: "fast"}
 
 	master := buildMasterStatefulSet(c, "d8-sds-object", "img")
 	if master.Spec.Replicas == nil || *master.Spec.Replicas != 3 {
@@ -169,7 +169,7 @@ func TestUsesPostgres(t *testing.T) {
 
 func TestBuildPostgres(t *testing.T) {
 	c := cluster("media", v1alpha1.RedundancyHighRedundancy)
-	c.Spec.Storage = &v1alpha1.ObjectStorageClusterStorageSpec{Class: "fast"}
+	c.Spec.Storage = &v1alpha1.ObjectStoreStorageSpec{Class: "fast"}
 
 	pg := buildPostgres(c, "d8-sds-object")
 	if pg.GetName() != "media-seaweedfs-pg" {

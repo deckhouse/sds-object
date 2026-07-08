@@ -29,7 +29,7 @@ kubectl apply -f testing/00-namespace.yaml
 
 # System
 kubectl apply -f testing/10-system.yaml          # creates the cluster
-kubectl get objectstoragecluster system -w        # wait for Ready
+kubectl get objectstore system -w        # wait for Ready
 kubectl apply -f testing/10-system.yaml          # re-apply: bucket + job now provision
 kubectl -n obj-test logs job/s3-test-system
 
@@ -52,5 +52,5 @@ A test `Job` succeeds when its log ends with `S3 OK`.
 
 ```shell
 kubectl delete ns obj-test    # buckets use reclaimPolicy: Delete (data removed)
-kubectl delete objectstoragecluster system lightweight full
+kubectl delete objectstore system lightweight full
 ```

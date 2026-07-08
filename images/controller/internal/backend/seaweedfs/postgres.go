@@ -52,7 +52,7 @@ var postgresGVK = schema.GroupVersionKind{
 }
 
 // pgName is the Postgres CR name for a cluster.
-func pgName(cluster *v1alpha1.ObjectStorageCluster) string {
+func pgName(cluster *v1alpha1.ObjectStore) string {
 	return componentName(cluster, "pg")
 }
 
@@ -62,14 +62,14 @@ func pgName(cluster *v1alpha1.ObjectStorageCluster) string {
 // when the credentials Secret momentarily drops the "host" key — which
 // managed-postgres does whenever the Postgres instance is briefly not serving
 // (startup, failover), keeping only the stable username/password.
-func pgHost(cluster *v1alpha1.ObjectStorageCluster) string {
+func pgHost(cluster *v1alpha1.ObjectStore) string {
 	return "d8ms-pg-" + pgName(cluster) + "-rw"
 }
 
 // pgCredsSecretName is the Secret managed-postgres writes the filer user's
 // credentials into (keys: host, username, password). The driver sets it via the
 // user's storeCredsToSecret.
-func pgCredsSecretName(cluster *v1alpha1.ObjectStorageCluster) string {
+func pgCredsSecretName(cluster *v1alpha1.ObjectStore) string {
 	return componentName(cluster, "pg") + "-creds"
 }
 
@@ -77,7 +77,7 @@ func pgCredsSecretName(cluster *v1alpha1.ObjectStorageCluster) string {
 // managed-postgres database. Only HighRedundancy uses it (to run a multi-replica
 // filer HA set); Single and Replicated use SeaweedFS's built-in leveldb store on
 // a local PVC, which avoids the managed-postgres dependency but is single-filer.
-func usesPostgres(cluster *v1alpha1.ObjectStorageCluster) bool {
+func usesPostgres(cluster *v1alpha1.ObjectStore) bool {
 	return cluster.Spec.Redundancy == v1alpha1.RedundancyHighRedundancy
 }
 
@@ -85,7 +85,7 @@ func usesPostgres(cluster *v1alpha1.ObjectStorageCluster) bool {
 // redundancy intent. Only HighRedundancy runs more than one, backed by the
 // shared Postgres store; Single/Replicated run a single filer on a local
 // leveldb store (a node-local store cannot be shared across replicas).
-func filerReplicas(cluster *v1alpha1.ObjectStorageCluster) int32 {
+func filerReplicas(cluster *v1alpha1.ObjectStore) int32 {
 	if usesPostgres(cluster) {
 		return 3
 	}
@@ -94,7 +94,7 @@ func filerReplicas(cluster *v1alpha1.ObjectStorageCluster) int32 {
 
 // buildPostgres returns the managed-postgres Postgres CR backing the filer
 // metadata store. The DB topology scales with the redundancy intent.
-func buildPostgres(cluster *v1alpha1.ObjectStorageCluster, namespace string) *unstructured.Unstructured {
+func buildPostgres(cluster *v1alpha1.ObjectStore, namespace string) *unstructured.Unstructured {
 	instance := map[string]interface{}{
 		"cpu":    map[string]interface{}{"cores": int64(1), "coreFraction": int64(100)},
 		"memory": map[string]interface{}{"size": "512Mi"},
@@ -210,7 +210,7 @@ dir = "%s"
 
 // buildFilerConfigSecret holds filer.toml (with the DB password), mounted by
 // every filer replica. A Secret (not a ConfigMap) since it carries the password.
-func buildFilerConfigSecret(cluster *v1alpha1.ObjectStorageCluster, namespace, filerToml string) *corev1.Secret {
+func buildFilerConfigSecret(cluster *v1alpha1.ObjectStore, namespace, filerToml string) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      filerConfigName(cluster),
@@ -222,7 +222,7 @@ func buildFilerConfigSecret(cluster *v1alpha1.ObjectStorageCluster, namespace, f
 	}
 }
 
-func filerConfigName(cluster *v1alpha1.ObjectStorageCluster) string {
+func filerConfigName(cluster *v1alpha1.ObjectStore) string {
 	return componentName(cluster, compFiler) + "-config"
 }
 
@@ -230,7 +230,7 @@ func filerConfigName(cluster *v1alpha1.ObjectStorageCluster) string {
 // the filer metadata store. Reads use the non-cached apiReader so a missing
 // Postgres CRD (managed-postgres not installed) surfaces as a NoMatch error;
 // writes go straight to the API server.
-func (d *Driver) ensurePostgres(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) error {
+func (d *Driver) ensurePostgres(ctx context.Context, cluster *v1alpha1.ObjectStore) error {
 	desired := buildPostgres(cluster, d.namespace)
 	if err := controllerutil.SetControllerReference(cluster, desired, d.client.Scheme()); err != nil {
 		return err
@@ -332,7 +332,7 @@ func preservePgUserSecrets(desired, existing *unstructured.Unstructured) {
 // pgCreds reads the filer DB credentials managed-postgres writes into the
 // storeCredsToSecret Secret. Returns ok=false (not an error) while the Secret
 // or its keys are not yet populated, so the caller can requeue.
-func (d *Driver) pgCreds(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) (host, user, password string, ok bool, err error) {
+func (d *Driver) pgCreds(ctx context.Context, cluster *v1alpha1.ObjectStore) (host, user, password string, ok bool, err error) {
 	secret := &corev1.Secret{}
 	key := client.ObjectKey{Namespace: d.namespace, Name: pgCredsSecretName(cluster)}
 	if err := d.apiReader.Get(ctx, key, secret); err != nil {

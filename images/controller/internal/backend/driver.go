@@ -29,7 +29,7 @@ import (
 )
 
 // ClusterState is the observed data-plane state a Driver reports for an
-// ObjectStorageCluster. The reconciler copies it into the CR status and uses
+// ObjectStore. The reconciler copies it into the CR status and uses
 // Ready to advance the FSM. When Ready is false, Message explains why (surfaced
 // as the BackendReady condition message).
 type ClusterState struct {
@@ -50,9 +50,9 @@ type ClusterState struct {
 	Capacity *v1alpha1.ObjectCapacityStatus
 }
 
-// BucketState is the observed state a Driver reports for an ObjectStorageBucket.
+// BucketState is the observed state a Driver reports for an Bucket.
 // Buckets no longer carry credentials: access keys are issued per
-// ObjectStorageBucketAccess (see AccessState).
+// BucketAccess (see AccessState).
 type BucketState struct {
 	// Ready is true once the bucket exists in the backend.
 	Ready bool
@@ -65,7 +65,7 @@ type BucketState struct {
 }
 
 // AccessState is the observed state a Driver reports for an
-// ObjectStorageBucketAccess. When SecretAccessKey is non-empty a fresh key was
+// BucketAccess. When SecretAccessKey is non-empty a fresh key was
 // issued and the reconciler (re)writes the credentials Secret with it; when it
 // is empty the access already had a live key and the existing Secret is
 // preserved (backends other than Ceph RGW cannot recover a secret key after
@@ -93,41 +93,41 @@ type Driver interface {
 
 	// EnsureCluster brings the data plane for the given cluster to its
 	// desired state and reports the observed state.
-	EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) (ClusterState, error)
+	EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStore) (ClusterState, error)
 
 	// DeleteCluster tears down the data plane for the given cluster. It must
 	// honour cluster.Spec.ReclaimPolicy: Retain preserves persisted data,
 	// Delete may destroy it.
-	DeleteCluster(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) error
+	DeleteCluster(ctx context.Context, cluster *v1alpha1.ObjectStore) error
 
 	// EnsureBucket creates/updates the bucket in the backend (no credentials)
 	// and reports the observed state.
-	EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectStorageBucket) (BucketState, error)
+	EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStore, bucket *v1alpha1.Bucket) (BucketState, error)
 
 	// DeleteBucket removes the bucket when the bucket's reclaim policy is
 	// Delete (otherwise a no-op on the bucket data).
-	DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectStorageBucket) error
+	DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStore, bucket *v1alpha1.Bucket) error
 
 	// EnsureAccess provisions an S3 access key scoped to the bucket for the
 	// given access and reports the observed state. When mintFresh is true it
 	// issues a brand-new key pair (rotating/replacing any previous key for the
 	// access, revoking the old one) and returns it; when false it ensures a
 	// key exists without minting a duplicate.
-	EnsureAccess(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectStorageBucket, access *v1alpha1.ObjectStorageBucketAccess, mintFresh bool) (AccessState, error)
+	EnsureAccess(ctx context.Context, cluster *v1alpha1.ObjectStore, bucket *v1alpha1.Bucket, access *v1alpha1.BucketAccess, mintFresh bool) (AccessState, error)
 
 	// DeleteAccess revokes the access key issued for the given access.
-	DeleteAccess(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectStorageBucket, access *v1alpha1.ObjectStorageBucketAccess) error
+	DeleteAccess(ctx context.Context, cluster *v1alpha1.ObjectStore, bucket *v1alpha1.Bucket, access *v1alpha1.BucketAccess) error
 }
 
 // AccessResourceName is the backend-facing identifier (access key display name /
 // IAM identity / RGW user) for an access, unique per (namespace, name).
-func AccessResourceName(access *v1alpha1.ObjectStorageBucketAccess) string {
+func AccessResourceName(access *v1alpha1.BucketAccess) string {
 	return fmt.Sprintf("%s.%s", access.Namespace, access.Name)
 }
 
 // BucketDisplayName is the S3 bucket name for a bucket: spec.bucketName, or
 // metadata.name when unset.
-func BucketDisplayName(bucket *v1alpha1.ObjectStorageBucket) string {
+func BucketDisplayName(bucket *v1alpha1.Bucket) string {
 	if bucket.Spec.BucketName != "" {
 		return bucket.Spec.BucketName
 	}
@@ -165,7 +165,7 @@ func NewRegistry(drivers ...Driver) *Registry {
 }
 
 // For returns the Driver implementing the given cluster's profile.
-func (r *Registry) For(cluster *v1alpha1.ObjectStorageCluster) (Driver, error) {
+func (r *Registry) For(cluster *v1alpha1.ObjectStore) (Driver, error) {
 	bt, err := ResolveBackendType(cluster.Spec.Type)
 	if err != nil {
 		return nil, err

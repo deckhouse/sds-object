@@ -1,0 +1,94 @@
+spec:
+  versions:
+    - name: v1alpha1
+      schema:
+        openAPIV3Schema:
+          description: |
+            BucketClaim — namespaced-запрос («заявка») на бакет.
+
+            - Greenfield (`spec.existingBucketName` не задан): контроллер создаёт
+              новый cluster-scoped Bucket, принадлежащий этой заявке и приватный
+              для данного namespace, в `spec.objectStoreRef`.
+            - Brownfield (`spec.existingBucketName` задан): заявка привязывается к
+              существующему Shared-бакету, что разрешено только при наличии
+              `BucketPolicy`, дающего доступ этому namespace (deny-by-default).
+
+            Учётные данные запрашиваются отдельно ресурсом `BucketAccess`,
+            ссылающимся на эту заявку по имени в том же namespace.
+          properties:
+            spec:
+              description: |
+                Желаемое состояние заявки.
+              properties:
+                objectStoreRef:
+                  description: |
+                    Имя ObjectStore, в котором создаётся greenfield-бакет.
+                    Обязательно для greenfield; игнорируется для brownfield.
+                    Неизменяемо после создания.
+                existingBucketName:
+                  description: |
+                    Имя существующего Shared-бакета (объявленного администратором)
+                    для привязки (brownfield). Разрешено только при наличии
+                    `BucketPolicy`, дающего доступ этому namespace. Неизменяемо
+                    после создания.
+                accessPolicy:
+                  description: |
+                    Политика доступа для greenfield-бакета. Игнорируется для
+                    brownfield.
+
+                    - `Private` (по умолчанию) — доступ только с выданными
+                      учётными данными.
+                    - `PublicRead` — объекты доступны на чтение анонимно; запись
+                      по-прежнему требует учётных данных.
+                reclaimPolicy:
+                  description: |
+                    Что происходит с данными greenfield-бакета при удалении заявки
+                    (и принадлежащего ей Bucket). Игнорируется для brownfield.
+
+                    - `Retain` (по умолчанию) — бакет и его объекты сохраняются.
+                    - `Delete` — бакет и все его объекты удаляются.
+                quota:
+                  description: |
+                    Необязательные лимиты использования greenfield-бакета.
+                    Применение зависит от возможностей бэкенда.
+                  properties:
+                    maxSize:
+                      description: |
+                        Максимальный суммарный размер в формате Kubernetes
+                        Quantity (BinarySI), например `10Gi`. Без значения — без лимита.
+                    maxObjects:
+                      description: |
+                        Максимальное число объектов. `0` (по умолчанию) — без лимита.
+            status:
+              description: |
+                Наблюдаемое состояние заявки.
+              properties:
+                observedGeneration:
+                  description: |
+                    Последнее значение `metadata.generation`, обработанное контроллером.
+                phase:
+                  description: |
+                    Агрегатная фаза: `Pending`, `InProgress`, `Ready`, `Error`.
+                boundBucketName:
+                  description: |
+                    Имя cluster-scoped Bucket, к которому привязана заявка.
+                endpoint:
+                  description: |
+                    Внутрикластерный URL S3-эндпойнта бэкенда ObjectStore.
+                conditions:
+                  description: |
+                    Постадийные condition: `Bound`, `BucketReady` и агрегатное `Ready`.
+                  items:
+                    properties:
+                      type:
+                        description: Тип condition.
+                      status:
+                        description: Текущий статус condition.
+                      observedGeneration:
+                        description: Значение `metadata.generation`, для которого выставлен condition.
+                      lastTransitionTime:
+                        description: Время последнего перехода condition.
+                      reason:
+                        description: Машинно-читаемая причина текущего статуса.
+                      message:
+                        description: Человекочитаемое описание текущего статуса.

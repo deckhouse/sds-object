@@ -22,33 +22,33 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// ObjectStorageCluster is a cluster-scoped CR that describes the desired state
-// of an S3-compatible object storage cluster managed by the sds-object module.
-// A single spec.type selects one of four turnkey profiles; the backend
-// (Garage / SeaweedFS / Ceph RGW) and its low-level settings are hidden from the
-// user. Buckets are declared separately in cluster-scoped ObjectStorageBucket
-// resources that reference this cluster by name.
+// ObjectStore is a cluster-scoped CR that describes the desired state of an
+// S3-compatible object storage instance managed by the sds-object module. A
+// single spec.type selects one of four turnkey profiles; the backend
+// (Garage / SeaweedFS / Ceph RGW) and its low-level settings are hidden from
+// the user. It deploys the data plane and is outside the COSI model; Buckets
+// reference it by name via spec.objectStoreRef.
 //
-// +kubebuilder:resource:scope=Cluster,shortName=osc
+// +kubebuilder:resource:scope=Cluster,shortName=ostore
 // +kubebuilder:subresource:status
 // +kubebuilder:object:root=true
 // +k8s:deepcopy-gen=true
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-type ObjectStorageCluster struct {
+type ObjectStore struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   ObjectStorageClusterSpec    `json:"spec"`
-	Status *ObjectStorageClusterStatus `json:"status,omitempty"`
+	Spec   ObjectStoreSpec    `json:"spec"`
+	Status *ObjectStoreStatus `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +k8s:deepcopy-gen=true
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-type ObjectStorageClusterList struct {
+type ObjectStoreList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata"`
-	Items           []ObjectStorageCluster `json:"items"`
+	Items           []ObjectStore `json:"items"`
 }
 
 // ClusterType selects the cluster profile (backend + placement model).
@@ -91,7 +91,7 @@ const (
 )
 
 // ClusterReclaimPolicy controls what happens to the backend data plane and its
-// persisted data when the ObjectStorageCluster is deleted.
+// persisted data when the ObjectStore is deleted.
 // +kubebuilder:validation:Enum=Retain;Delete
 type ClusterReclaimPolicy string
 
@@ -107,7 +107,7 @@ const (
 )
 
 // +k8s:deepcopy-gen=true
-type ObjectStorageClusterSpec struct {
+type ObjectStoreSpec struct {
 	// Type selects the cluster profile. Immutable after creation.
 	// +kubebuilder:validation:Required
 	Type ClusterType `json:"type"`
@@ -115,7 +115,7 @@ type ObjectStorageClusterSpec struct {
 	// Storage configures capacity and backing storage. Ignored for
 	// type=Heavy (capacity comes from the referenced Ceph cluster).
 	// +optional
-	Storage *ObjectStorageClusterStorageSpec `json:"storage,omitempty"`
+	Storage *ObjectStoreStorageSpec `json:"storage,omitempty"`
 
 	// Redundancy picks the high-level fault-tolerance intent. When omitted,
 	// a sensible default is derived from Type. Immutable after creation
@@ -130,7 +130,7 @@ type ObjectStorageClusterSpec struct {
 	Placement *PlacementSpec `json:"placement,omitempty"`
 
 	// ReclaimPolicy controls what happens to the backend data plane and its
-	// stored data when the ObjectStorageCluster is deleted. Defaults to
+	// stored data when the ObjectStore is deleted. Defaults to
 	// Retain, which preserves persisted data (for Heavy this keeps the Ceph
 	// RGW pools intact). Immutable after creation.
 	// +kubebuilder:default=Retain
@@ -144,7 +144,7 @@ type ObjectStorageClusterSpec struct {
 }
 
 // +k8s:deepcopy-gen=true
-type ObjectStorageClusterStorageSpec struct {
+type ObjectStoreStorageSpec struct {
 	// Size is the total usable capacity as a Kubernetes Quantity (BinarySI),
 	// e.g. "50Gi" or "2Ti". For type=System it is the capacity contributed
 	// per control-plane node.
@@ -169,7 +169,7 @@ type PlacementSpec struct {
 }
 
 // +k8s:deepcopy-gen=true
-type ObjectStorageClusterStatus struct {
+type ObjectStoreStatus struct {
 	// ObservedGeneration is the most recent .metadata.generation reconciled
 	// by the controller.
 	// +optional
@@ -270,16 +270,16 @@ type LocalSecretReference struct {
 	Name string `json:"name"`
 }
 
-// Well-known condition types for ObjectStorageCluster.
+// Well-known condition types for ObjectStore.
 const (
-	OSCConditionBackendReady  = "BackendReady"
-	OSCConditionEndpointReady = "EndpointReady"
-	OSCConditionReady         = "Ready"
+	ObjectStoreConditionBackendReady  = "BackendReady"
+	ObjectStoreConditionEndpointReady = "EndpointReady"
+	ObjectStoreConditionReady         = "Ready"
 )
 
-// ObjectStorageClusterKind is the kind constant used for OwnerReferences and
+// ObjectStoreKind is the kind constant used for OwnerReferences and
 // dynamic GVK lookups.
-const ObjectStorageClusterKind = "ObjectStorageCluster"
+const ObjectStoreKind = "ObjectStore"
 
 // Status.phase values shared across the module's CRs.
 const (

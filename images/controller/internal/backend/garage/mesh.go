@@ -44,7 +44,7 @@ type nodePeer struct {
 // layout via the admin API, returning whether the cluster is healthy and
 // serving. It is idempotent: connect is a no-op for already-connected peers and
 // layout is only staged for nodes not yet present in it.
-func (d *Driver) ensureMeshAndLayout(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) (meshResult, error) {
+func (d *Driver) ensureMeshAndLayout(ctx context.Context, cluster *v1alpha1.ObjectStore) (meshResult, error) {
 	token, err := d.adminToken(ctx, cluster)
 	if err != nil {
 		return meshResult{}, err
@@ -119,7 +119,7 @@ func (d *Driver) ensureMeshAndLayout(ctx context.Context, cluster *v1alpha1.Obje
 }
 
 // adminToken reads the admin token from the per-cluster secret.
-func (d *Driver) adminToken(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) (string, error) {
+func (d *Driver) adminToken(ctx context.Context, cluster *v1alpha1.ObjectStore) (string, error) {
 	secret := &corev1.Secret{}
 	if err := d.client.Get(ctx, client.ObjectKey{Namespace: d.namespace, Name: secretName(cluster)}, secret); err != nil {
 		return "", err
@@ -129,7 +129,7 @@ func (d *Driver) adminToken(ctx context.Context, cluster *v1alpha1.ObjectStorage
 
 // discoverPeers lists the Garage pods and queries each pod's admin API for its
 // node identity. Pods without an IP or not yet answering are skipped.
-func (d *Driver) discoverPeers(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, token string) ([]nodePeer, error) {
+func (d *Driver) discoverPeers(ctx context.Context, cluster *v1alpha1.ObjectStore, token string) ([]nodePeer, error) {
 	pods := &corev1.PodList{}
 	if err := d.apiReader.List(ctx, pods,
 		client.InNamespace(d.namespace),

@@ -32,8 +32,8 @@ import (
 	v1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 )
 
-// Finalizer is placed on every ObjectStorageCluster, ObjectStorageBucket and
-// ObjectStorageBucketAccess the controller reconciles, so backend teardown runs
+// Finalizer is placed on every ObjectStore, Bucket and
+// BucketAccess the controller reconciles, so backend teardown runs
 // before the CR disappears.
 const Finalizer = "storage.deckhouse.io/sds-object-controller"
 
@@ -46,7 +46,7 @@ const (
 )
 
 // conditionReady is the aggregate readiness condition type. All reconciled CRs
-// use it (OSCConditionReady, OSBConditionReady and OSBAConditionReady all equal
+// use it (ObjectStoreConditionReady, BucketConditionReady and BucketAccessConditionReady all equal
 // "Ready"), so the shared FSM helpers gate it by this single invariant.
 const conditionReady = "Ready"
 

@@ -30,7 +30,7 @@ import (
 // EnsureAccess provisions a dedicated RGW user for the access and grants it
 // access to the (owner-owned) bucket via the bucket policy. Rook owns the
 // user's keys; mintFresh rotates them by recreating the CephObjectStoreUser.
-func (d *Driver) EnsureAccess(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectStorageBucket, access *v1alpha1.ObjectStorageBucketAccess, mintFresh bool) (backend.AccessState, error) {
+func (d *Driver) EnsureAccess(ctx context.Context, cluster *v1alpha1.ObjectStore, bucket *v1alpha1.Bucket, access *v1alpha1.BucketAccess, mintFresh bool) (backend.AccessState, error) {
 	uid := accessUID(access)
 
 	accessKey, secretKey, err := d.userKeys(ctx, cluster, uid)
@@ -89,7 +89,7 @@ func (d *Driver) EnsureAccess(ctx context.Context, cluster *v1alpha1.ObjectStora
 
 // DeleteAccess revokes the access: drops the bucket policy statement and deletes
 // the CephObjectStoreUser. Idempotent.
-func (d *Driver) DeleteAccess(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectStorageBucket, access *v1alpha1.ObjectStorageBucketAccess) error {
+func (d *Driver) DeleteAccess(ctx context.Context, cluster *v1alpha1.ObjectStore, bucket *v1alpha1.Bucket, access *v1alpha1.BucketAccess) error {
 	uid := accessUID(access)
 
 	if owner, err := d.ownerClient(ctx, cluster, bucket); err == nil && owner != nil {
@@ -104,7 +104,7 @@ func (d *Driver) DeleteAccess(ctx context.Context, cluster *v1alpha1.ObjectStora
 
 // grantBucketAccess adds (or refreshes) the bucket-policy statement allowing the
 // access user's actions on the bucket, using the bucket owner's credentials.
-func (d *Driver) grantBucketAccess(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectStorageBucket, uid string, perm v1alpha1.AccessPermission) error {
+func (d *Driver) grantBucketAccess(ctx context.Context, cluster *v1alpha1.ObjectStore, bucket *v1alpha1.Bucket, uid string, perm v1alpha1.AccessPermission) error {
 	owner, err := d.ownerClient(ctx, cluster, bucket)
 	if err != nil {
 		return err
@@ -118,7 +118,7 @@ func (d *Driver) grantBucketAccess(ctx context.Context, cluster *v1alpha1.Object
 
 // ownerClient builds an S3 client with the per-bucket owner credentials (nil
 // when they are not provisioned yet).
-func (d *Driver) ownerClient(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectStorageBucket) (*minio.Client, error) {
+func (d *Driver) ownerClient(ctx context.Context, cluster *v1alpha1.ObjectStore, bucket *v1alpha1.Bucket) (*minio.Client, error) {
 	ak, sk, err := d.userKeys(ctx, cluster, ownerUID(bucket))
 	if err != nil {
 		return nil, err
