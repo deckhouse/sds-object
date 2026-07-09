@@ -34,7 +34,7 @@ import (
 	objectv1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 )
 
-// accessSpecs exercises the BucketAccess / BucketPolicy
+// accessSpecs exercises the BucketAccess / BucketClaimPolicy
 // behaviours on top of the shared cluster + bucket from create_test.go:
 //   - deny-by-default: an access with no matching policy stays Pending and gets
 //     no Secret; adding a policy flips it to Ready; deleting the policy revokes
@@ -63,7 +63,7 @@ func accessSpecs() {
 				bg := context.Background()
 				_ = suiteDyn.Resource(bucketAccessGVR).Namespace(suiteCfg.namespace).Delete(bg, access, metav1.DeleteOptions{})
 				_ = suiteDyn.Resource(bucketClaimGVR).Namespace(suiteCfg.namespace).Delete(bg, claim, metav1.DeleteOptions{})
-				_ = suiteDyn.Resource(bucketPolicyGVR).Delete(bg, policy, metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketClaimPolicyGVR).Delete(bg, policy, metav1.DeleteOptions{})
 				_ = suiteDyn.Resource(bucketGVR).Delete(bg, bucket, metav1.DeleteOptions{})
 			})
 
@@ -91,7 +91,7 @@ func accessSpecs() {
 			Expect(secretExists(ctx, suiteCfg.namespace, secret)).To(BeTrue(), "credentials Secret must exist once allowed")
 
 			By("deleting the policy: the claim unbinds, the access is revoked and its Secret garbage-collected")
-			Expect(suiteDyn.Resource(bucketPolicyGVR).Delete(ctx, policy, metav1.DeleteOptions{})).To(Succeed())
+			Expect(suiteDyn.Resource(bucketClaimPolicyGVR).Delete(ctx, policy, metav1.DeleteOptions{})).To(Succeed())
 			Eventually(func() string {
 				_, reason, _, _ := getCondition(ctx, bucketClaimGVR, suiteCfg.namespace, claim, objectv1alpha1.BucketClaimConditionBound)
 				return reason
@@ -110,7 +110,7 @@ func accessSpecs() {
 			DeferCleanup(func() {
 				bg := context.Background()
 				_ = suiteDyn.Resource(bucketAccessGVR).Namespace(suiteCfg.namespace).Delete(bg, access, metav1.DeleteOptions{})
-				_ = suiteDyn.Resource(bucketPolicyGVR).Delete(bg, policy, metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketClaimPolicyGVR).Delete(bg, policy, metav1.DeleteOptions{})
 				_ = suiteDyn.Resource(bucketGVR).Delete(bg, bucket, metav1.DeleteOptions{})
 			})
 
@@ -211,7 +211,7 @@ func accessSpecs() {
 				bg := context.Background()
 				_ = suiteDyn.Resource(bucketAccessGVR).Namespace(ns1).Delete(bg, access, metav1.DeleteOptions{})
 				_ = suiteDyn.Resource(bucketAccessGVR).Namespace(ns2).Delete(bg, access, metav1.DeleteOptions{})
-				_ = suiteDyn.Resource(bucketPolicyGVR).Delete(bg, policy, metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketClaimPolicyGVR).Delete(bg, policy, metav1.DeleteOptions{})
 				_ = suiteDyn.Resource(bucketGVR).Delete(bg, bucket, metav1.DeleteOptions{})
 				_ = suiteClientset.CoreV1().Namespaces().Delete(bg, ns2, metav1.DeleteOptions{})
 			})

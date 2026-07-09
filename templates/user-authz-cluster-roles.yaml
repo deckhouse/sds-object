@@ -14,7 +14,7 @@ rules:
   - buckets
   - bucketclaims
   - bucketaccesses
-  - bucketpolicies
+  - bucketclaimpolicies
   verbs:
   - get
   - list
@@ -35,7 +35,7 @@ rules:
   - buckets
   - bucketclaims
   - bucketaccesses
-  - bucketpolicies
+  - bucketclaimpolicies
   verbs:
   - create
   - delete

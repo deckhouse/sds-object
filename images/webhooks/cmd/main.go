@@ -57,11 +57,11 @@ func initFlags() (config, error) {
 const (
 	port = ":8443"
 
-	ObjectStoreValidatorID  = "ObjectStoreValidator"
-	BucketValidatorID       = "BucketValidator"
-	BucketClaimValidatorID  = "BucketClaimValidator"
-	BucketAccessValidatorID = "BucketAccessValidator"
-	BucketPolicyValidatorID = "BucketPolicyValidator"
+	ObjectStoreValidatorID       = "ObjectStoreValidator"
+	BucketValidatorID            = "BucketValidator"
+	BucketClaimValidatorID       = "BucketClaimValidator"
+	BucketAccessValidatorID      = "BucketAccessValidator"
+	BucketClaimPolicyValidatorID = "BucketClaimPolicyValidator"
 )
 
 func main() {
@@ -132,8 +132,8 @@ func main() {
 	}
 
 	osbpValidatingWebhookHandler, err := handlers.GetValidatingWebhookHandler(
-		validator.BucketPolicyValidate,
-		BucketPolicyValidatorID,
+		validator.BucketClaimPolicyValidate,
+		BucketClaimPolicyValidatorID,
 		&unstructured.Unstructured{},
 		logger,
 	)
@@ -147,7 +147,7 @@ func main() {
 	mux.Handle("/bucket-validate", osbValidatingWebhookHandler)
 	mux.Handle("/bucketclaim-validate", bucketClaimValidatingWebhookHandler)
 	mux.Handle("/bucketaccess-validate", osbaValidatingWebhookHandler)
-	mux.Handle("/bucketpolicy-validate", osbpValidatingWebhookHandler)
+	mux.Handle("/bucketclaimpolicy-validate", osbpValidatingWebhookHandler)
 	mux.HandleFunc("/healthz", httpHandlerHealthz)
 
 	logger.Infof("Listening on %s", port)

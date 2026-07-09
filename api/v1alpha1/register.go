@@ -46,8 +46,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&BucketClaimList{},
 		&BucketAccess{},
 		&BucketAccessList{},
-		&BucketPolicy{},
-		&BucketPolicyList{},
+		&BucketClaimPolicy{},
+		&BucketClaimPolicyList{},
 	)
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil

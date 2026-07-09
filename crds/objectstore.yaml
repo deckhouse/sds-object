@@ -40,6 +40,8 @@ spec:
               message: "ObjectStore metadata.name must not exceed 30 characters (used as a prefix in derived resource names)."
             - rule: "self.metadata.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')"
               message: "ObjectStore metadata.name must be a valid DNS-1123 label."
+            - rule: "self.spec.type != 'System' || self.metadata.name == 'system'"
+              message: "an ObjectStore with spec.type System must be named 'system'."
           properties:
             spec:
               type: object
@@ -91,13 +93,24 @@ spec:
                     Capacity and backing storage. Ignored for `type: Heavy`
                     (capacity comes from the referenced Ceph cluster).
                   properties:
-                    size:
+                    sizePerNode:
                       type: string
                       description: |
-                        Total usable capacity as a Kubernetes Quantity (BinarySI),
-                        e.g. `50Gi` or `2Ti`. For `type: System` it is the capacity
-                        contributed per control-plane node.
+                        Usable capacity provisioned per data-plane node as a
+                        Kubernetes Quantity (BinarySI), e.g. `50Gi` or `2Ti`. The
+                        cluster-wide capacity is roughly `sizePerNode` times the
+                        node count. Defaults to `10Gi` when unset.
                       pattern: '^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$'
+                    nodes:
+                      type: integer
+                      format: int32
+                      minimum: 1
+                      description: |
+                        Number of data-plane nodes (StatefulSet replicas for
+                        `Lightweight`, SeaweedFS volume servers for `Full`). When
+                        unset, the count is derived from `redundancy`. Ignored for
+                        `System` (one pod per control-plane node) and `Heavy`
+                        (topology comes from the referenced Ceph cluster).
                     class:
                       type: string
                       description: |
@@ -111,21 +124,21 @@ spec:
                   description: |
                     High-level fault-tolerance intent. The controller maps it to
                     backend-specific settings (replication factor / erasure coding).
-                    When omitted, a sensible default is derived from `spec.type`.
+                    When omitted, defaults to `Standard`.
 
-                    - `Single` — no redundancy (single copy). Lowest overhead.
-                    - `Replicated` — replicated copies across nodes/zones
+                    - `None` — no redundancy (single copy). Lowest overhead.
+                    - `Standard` — replicated copies across nodes/zones
                       (typical default).
-                    - `HighRedundancy` — maximum durability (extra replicas or
-                      erasure coding), requires more nodes.
+                    - `High` — maximum durability (extra replicas or erasure
+                      coding), requires more nodes.
 
                     Immutable after creation: changing the replication factor on
                     a live cluster is not supported. For `System` the effective
                     factor is capped by the number of control-plane nodes.
                   enum:
-                    - Single
-                    - Replicated
-                    - HighRedundancy
+                    - None
+                    - Standard
+                    - High
                 placement:
                   type: object
                   description: |

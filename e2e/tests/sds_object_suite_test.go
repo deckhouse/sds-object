@@ -85,8 +85,8 @@ var _ = Describe("sds-object e2e", Ordered, ContinueOnFailure, func() {
 	accessSpecs()             // access_test.go: deny-by-default + revocation, regexp policy, key rotation, ReadOnly, cross-namespace
 	systemBucketSpecs()       // system_test.go: built-in system OSCluster+OSB+policy shipped by templates
 	lightweightSpecs()        // lightweight_test.go: Lightweight (Garage on PVC) create -> bucket -> round-trip -> delete
-	fullSpecs()               // full_test.go: Full (SeaweedFS, Single/leveldb) create -> bucket -> round-trip -> delete
-	fullHighRedundancySpecs() // full_test.go: Full HighRedundancy (SeaweedFS multi-filer HA + managed-postgres)
+	fullSpecs()               // full_test.go: Full (SeaweedFS, None/leveldb) create -> bucket -> round-trip -> delete
+	fullHighRedundancySpecs() // full_test.go: Full High (SeaweedFS multi-filer HA + managed-postgres)
 	heavySpecs()              // heavy_test.go: Heavy (Ceph RGW on sds-elastic ElasticCluster) bring-up -> create -> bucket -> round-trip -> delete
 	deleteSpecs()             // delete_test.go: OB delete (+ creds Secret + reclaim), OSC delete
 })

@@ -35,10 +35,10 @@ import (
 // sdsObject.systemBucket.enabled config value (default true). It asserts the
 // three CRs exist and carry the expected shape:
 //   - a cluster-scoped `system` ObjectStore of type System, whose
-//     redundancy follows the cluster HA mode (Replicated in HA, else Single),
+//     redundancy follows the cluster HA mode (Standard in HA, else None),
 //     with reclaimPolicy Retain;
 //   - a cluster-scoped `system` Bucket referencing it;
-//   - a `system-d8-namespaces` BucketPolicy allowing the d8-*
+//   - a `system-d8-namespaces` BucketClaimPolicy allowing the d8-*
 //     namespaces via a pattern.
 //
 // It asserts both the CR shape and that the system cluster + bucket are
@@ -73,11 +73,11 @@ func systemBucketSpecs() {
 			reclaim, _, _ := unstructured.NestedString(osc.Object, "spec", "reclaimPolicy")
 			Expect(reclaim).To(Equal(string(objectv1alpha1.ClusterReclaimRetain)))
 
-			By("asserting redundancy follows the HA mode (Replicated or Single)")
+			By("asserting redundancy follows the HA mode (Standard or None)")
 			redundancy, _, _ := unstructured.NestedString(osc.Object, "spec", "redundancy")
 			Expect(redundancy).To(Or(
-				Equal(string(objectv1alpha1.RedundancyReplicated)),
-				Equal(string(objectv1alpha1.RedundancySingle)),
+				Equal(string(objectv1alpha1.RedundancyStandard)),
+				Equal(string(objectv1alpha1.RedundancyNone)),
 			), "system cluster redundancy is HA-dependent")
 
 			By("asserting the system Bucket references the system cluster")
@@ -87,8 +87,8 @@ func systemBucketSpecs() {
 			Expect(bucketObjectStoreRef).To(Equal(systemCluster))
 
 			By("asserting the system policy grants the d8-* namespaces by pattern")
-			policy, err := suiteDyn.Resource(bucketPolicyGVR).Get(ctx, systemPolicy, metav1.GetOptions{})
-			Expect(err).NotTo(HaveOccurred(), "get system BucketPolicy")
+			policy, err := suiteDyn.Resource(bucketClaimPolicyGVR).Get(ctx, systemPolicy, metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred(), "get system BucketClaimPolicy")
 			policyBucketRef, _, _ := unstructured.NestedString(policy.Object, "spec", "bucketRef")
 			Expect(policyBucketRef).To(Equal(systemBucket))
 			patterns, _, _ := unstructured.NestedStringSlice(policy.Object, "spec", "allowedNamespaces", "patterns")
@@ -101,7 +101,7 @@ func systemBucketSpecs() {
 			DeferCleanup(func() {
 				bg := context.Background()
 				_ = suiteDyn.Resource(bucketAccessGVR).Namespace(suiteCfg.namespace).Delete(bg, testAccess, metav1.DeleteOptions{})
-				_ = suiteDyn.Resource(bucketPolicyGVR).Delete(bg, testPolicy, metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketClaimPolicyGVR).Delete(bg, testPolicy, metav1.DeleteOptions{})
 			})
 
 			By("granting the test namespace access to the system bucket and running an S3 round-trip")

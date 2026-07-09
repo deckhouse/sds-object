@@ -111,8 +111,8 @@ func adminSecretName(cluster *v1alpha1.ObjectStore) string {
 
 // storageSize returns the per-volume-server PVC size, default 10Gi.
 func storageSize(cluster *v1alpha1.ObjectStore) resource.Quantity {
-	if cluster.Spec.Storage != nil && cluster.Spec.Storage.Size != "" {
-		if q, err := resource.ParseQuantity(cluster.Spec.Storage.Size); err == nil {
+	if cluster.Spec.Storage != nil && cluster.Spec.Storage.SizePerNode != "" {
+		if q, err := resource.ParseQuantity(cluster.Spec.Storage.SizePerNode); err == nil {
 			return q
 		}
 	}
@@ -131,9 +131,9 @@ func storageClass(cluster *v1alpha1.ObjectStore) string {
 // copies). Single is deployable on a one-node cluster.
 func topology(cluster *v1alpha1.ObjectStore) (masters, volumes int32, replication string) {
 	switch cluster.Spec.Redundancy {
-	case v1alpha1.RedundancySingle:
+	case v1alpha1.RedundancyNone:
 		return 1, 1, "000"
-	case v1alpha1.RedundancyHighRedundancy:
+	case v1alpha1.RedundancyHigh:
 		return 3, 4, "002"
 	default: // Replicated or unset
 		return 3, 3, "001"
@@ -297,8 +297,18 @@ func buildMasterStatefulSet(cluster *v1alpha1.ObjectStore, namespace, image stri
 	return statefulSet(cluster, namespace, compMaster, masters, c, []corev1.PersistentVolumeClaim{dataPVC(cluster, resource.MustParse("1Gi"))}, nil)
 }
 
-func buildVolumeStatefulSet(cluster *v1alpha1.ObjectStore, namespace, image string) *appsv1.StatefulSet {
+// volumeServers is the SeaweedFS volume-server replica count: spec.storage.nodes
+// when set, otherwise the redundancy-derived topology value.
+func volumeServers(cluster *v1alpha1.ObjectStore) int32 {
 	_, volumes, _ := topology(cluster)
+	if cluster.Spec.Storage != nil && cluster.Spec.Storage.Nodes != nil && *cluster.Spec.Storage.Nodes >= 1 {
+		return *cluster.Spec.Storage.Nodes
+	}
+	return volumes
+}
+
+func buildVolumeStatefulSet(cluster *v1alpha1.ObjectStore, namespace, image string) *appsv1.StatefulSet {
+	volumes := volumeServers(cluster)
 	name := componentName(cluster, compVolume)
 	c := corev1.Container{
 		Name:    "volume",

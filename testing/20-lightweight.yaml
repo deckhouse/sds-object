@@ -7,10 +7,10 @@ metadata:
   name: lightweight
 spec:
   type: Lightweight
-  redundancy: Single
+  redundancy: None
   reclaimPolicy: Delete
   storage:
-    size: 5Gi
+    sizePerNode: 5Gi
     class: localpath   # <-- replace with your StorageClass (kubectl get sc)
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
@@ -22,7 +22,7 @@ spec:
   reclaimPolicy: Delete
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: BucketPolicy
+kind: BucketClaimPolicy
 metadata:
   name: light-bucket-obj-test
 spec:

@@ -67,10 +67,10 @@ func lightweightSpecs() {
 			By("creating Lightweight ObjectStore " + oscName)
 			osc := newOSC(oscName, map[string]interface{}{
 				"type":       string(objectv1alpha1.ClusterTypeLightweight),
-				"redundancy": string(objectv1alpha1.RedundancySingle),
+				"redundancy": string(objectv1alpha1.RedundancyNone),
 				"storage": map[string]interface{}{
-					"size":  suiteCfg.oscSize,
-					"class": storageClass,
+					"sizePerNode": suiteCfg.oscSize,
+					"class":       storageClass,
 				},
 			})
 			Expect(createOSC(ctx, osc)).To(Succeed())
@@ -134,8 +134,8 @@ func lightweightSpecs() {
 				Expect(waitSecretGone(ctx, suiteCfg.namespace, secretName, 2*time.Minute)).To(Succeed())
 			}
 
-			By("deleting BucketPolicy + Bucket " + bucketName)
-			_ = suiteDyn.Resource(bucketPolicyGVR).Delete(ctx, policyName(bucketName), metav1.DeleteOptions{})
+			By("deleting BucketClaimPolicy + Bucket " + bucketName)
+			_ = suiteDyn.Resource(bucketClaimPolicyGVR).Delete(ctx, policyName(bucketName), metav1.DeleteOptions{})
 			Expect(suiteDyn.Resource(bucketGVR).
 				Delete(ctx, bucketName, metav1.DeleteOptions{})).To(Succeed())
 			Expect(waitResourceGone(ctx, bucketGVR, "", bucketName, resourceGoneTimeout)).To(Succeed())

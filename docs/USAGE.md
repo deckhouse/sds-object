@@ -1,6 +1,6 @@
 ---
 title: "Usage"
-description: "Deploying object storage with sds-object: enabling the module, declaring an ObjectStore, creating a cluster-scoped Bucket, granting namespaces access with BucketPolicy, and consuming per-namespace credentials via BucketAccess."
+description: "Deploying object storage with sds-object: enabling the module, declaring an ObjectStore, creating a cluster-scoped Bucket, granting namespaces access with BucketClaimPolicy, and consuming per-namespace credentials via BucketAccess."
 weight: 50
 ---
 
@@ -34,9 +34,9 @@ metadata:
 spec:
   type: Lightweight
   storage:
-    size: 50Gi
+    sizePerNode: 50Gi
     class: localpath
-  redundancy: Replicated
+  redundancy: Standard
 ```
 
 A `System` cluster for platform needs (Garage on control-plane nodes, `hostPath`; `storage.class` is ignored):
@@ -82,11 +82,11 @@ d8 k get bucket app-data
 
 ## Allowing namespaces to bind the bucket
 
-Binding a Shared bucket is **deny-by-default**: a namespace can claim it only when a `BucketPolicy` for the bucket matches it. Namespaces are selected by exact `names` and/or RE2 `patterns`:
+Binding a Shared bucket is **deny-by-default**: a namespace can claim it only when a `BucketClaimPolicy` for the bucket matches it. Namespaces are selected by exact `names` and/or RE2 `patterns`:
 
 ```yaml
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: BucketPolicy
+kind: BucketClaimPolicy
 metadata:
   name: app-data-teams
 spec:

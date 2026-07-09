@@ -52,7 +52,7 @@ import (
 //	    Bound to a Ready Bucket, and the backend.Driver issuing an access key.
 //	    Whether the claim is allowed to bind (and therefore whether access is
 //	    possible) is decided upstream by the BucketClaim controller (greenfield
-//	    ownership or a BucketPolicy grant); this controller only reacts to the
+//	    ownership or a BucketClaimPolicy grant); this controller only reacts to the
 //	    claim's Bound state. When a claim leaves Bound, any key issued for the
 //	    access is revoked and its Secret removed (continuous enforcement).
 //	  - CredentialsReady (re)writes the S3 credentials Secret in the access's

@@ -32,7 +32,7 @@ spec:
             revokes the key when the access is deleted.
 
             Whether the access is provisioned is governed by
-            BucketPolicy resources (deny-by-default): an access
+            BucketClaimPolicy resources (deny-by-default): an access
             whose namespace matches no policy for the referenced bucket stays
             `Pending`.
 

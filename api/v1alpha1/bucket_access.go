@@ -27,7 +27,7 @@ import (
 // with the standard S3 connection variables, and revokes the key when the
 // access is deleted. Because the access can only reference a claim in its own
 // namespace, access is namespace-local by construction; cross-namespace sharing
-// is governed upstream, when the claim binds a Shared Bucket (see BucketPolicy).
+// is governed upstream, when the claim binds a Shared Bucket (see BucketClaimPolicy).
 // If the referenced claim is not Bound, the access stays Pending and any
 // previously issued key is revoked.
 //

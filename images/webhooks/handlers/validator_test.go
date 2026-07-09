@@ -28,10 +28,10 @@ import (
 
 func listKinds() map[schema.GroupVersionResource]string {
 	return map[schema.GroupVersionResource]string{
-		objectStoreGVR:    "ObjectStoreList",
-		bucketGVR:         "BucketList",
-		bucketPolicyGVR:   "BucketPolicyList",
-		elasticClusterGVR: "ElasticClusterList",
+		objectStoreGVR:       "ObjectStoreList",
+		bucketGVR:            "BucketList",
+		bucketClaimPolicyGVR: "BucketClaimPolicyList",
+		elasticClusterGVR:    "ElasticClusterList",
 	}
 }
 

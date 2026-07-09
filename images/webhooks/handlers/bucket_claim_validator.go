@@ -33,7 +33,7 @@ import (
 // cross-resource checks and never hard-denies:
 //
 //   - brownfield (spec.existingBucketName set): the target Bucket should exist
-//     and be Shared, and a BucketPolicy should currently grant this namespace
+//     and be Shared, and a BucketClaimPolicy should currently grant this namespace
 //     (binding is deny-by-default and enforced by the controller);
 //   - greenfield: spec.objectStoreRef should reference an existing ObjectStore.
 func (v *Validator) BucketClaimValidate(ctx context.Context, _ *model.AdmissionReview, obj metav1.Object) (*kwhvalidating.ValidatorResult, error) {
@@ -60,7 +60,7 @@ func (v *Validator) BucketClaimValidate(ctx context.Context, _ *model.AdmissionR
 		}
 		if !v.namespaceAllowedForBucket(ctx, existing, ns) {
 			warnings = append(warnings, fmt.Sprintf(
-				"no BucketPolicy currently grants namespace %q the right to bind bucket %q; binding is deny-by-default and will stay pending until a matching policy exists", ns, existing))
+				"no BucketClaimPolicy currently grants namespace %q the right to bind bucket %q; binding is deny-by-default and will stay pending until a matching policy exists", ns, existing))
 		}
 	} else if objectStoreRef != "" {
 		if _, err := v.dyn.Resource(objectStoreGVR).Get(ctx, objectStoreRef, metav1.GetOptions{}); err != nil {
@@ -73,11 +73,11 @@ func (v *Validator) BucketClaimValidate(ctx context.Context, _ *model.AdmissionR
 	return &kwhvalidating.ValidatorResult{Valid: true, Warnings: warnings}, nil
 }
 
-// namespaceAllowedForBucket reports whether any BucketPolicy for the bucket
+// namespaceAllowedForBucket reports whether any BucketClaimPolicy for the bucket
 // currently allows the namespace (best-effort; returns false on lookup errors
 // so the caller only warns).
 func (v *Validator) namespaceAllowedForBucket(ctx context.Context, bucketRef, namespace string) bool {
-	list, err := v.dyn.Resource(bucketPolicyGVR).List(ctx, metav1.ListOptions{})
+	list, err := v.dyn.Resource(bucketClaimPolicyGVR).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return false
 	}

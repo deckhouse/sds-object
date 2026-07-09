@@ -38,10 +38,10 @@ func TestReplicatedPool(t *testing.T) {
 		size int64
 		safe bool
 	}{
-		{v1alpha1.RedundancySingle, 2, false},
-		{v1alpha1.RedundancyReplicated, 3, true},
+		{v1alpha1.RedundancyNone, 2, false},
+		{v1alpha1.RedundancyStandard, 3, true},
 		{v1alpha1.RedundancyMode(""), 3, true},
-		{v1alpha1.RedundancyHighRedundancy, 4, true},
+		{v1alpha1.RedundancyHigh, 4, true},
 	}
 	for _, c := range cases {
 		p := replicatedPool(heavy("h", c.r))
@@ -97,7 +97,7 @@ func TestUserAndSecretNames(t *testing.T) {
 }
 
 func TestBuildCephObjectStore(t *testing.T) {
-	c := heavy("main", v1alpha1.RedundancyHighRedundancy)
+	c := heavy("main", v1alpha1.RedundancyHigh)
 	obj := buildCephObjectStore(c)
 
 	if obj.GetNamespace() != elasticNamespace {

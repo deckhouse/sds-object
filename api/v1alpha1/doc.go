@@ -24,10 +24,10 @@ limitations under the License.
 //     either administrator-declared (Shared) or provisioned for a BucketClaim.
 //   - BucketClaim — namespaced CR requesting a bucket: greenfield
 //     (provisions its own private bucket) or brownfield (binds a Shared
-//     bucket, gated by BucketPolicy).
+//     bucket, gated by BucketClaimPolicy).
 //   - BucketAccess — namespaced CR requesting scoped credentials for a
 //     BucketClaim (writes an S3 credentials Secret).
-//   - BucketPolicy — cluster-scoped CR gating which namespaces may bind a
+//   - BucketClaimPolicy — cluster-scoped CR gating which namespaces may bind a
 //     Shared bucket via a brownfield BucketClaim.
 //
 // +groupName=storage.deckhouse.io

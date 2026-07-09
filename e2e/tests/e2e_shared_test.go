@@ -70,7 +70,7 @@ const (
 	// creating a second one (a second System is denied by the webhook).
 	systemOSCName      = "system"
 	defaultOSCType     = string(objectv1alpha1.ClusterTypeSystem)
-	defaultRedundancy  = string(objectv1alpha1.RedundancySingle)
+	defaultRedundancy  = string(objectv1alpha1.RedundancyNone)
 	defaultOSCSize     = "5Gi"
 	defaultBucketName  = "e2e-bucket"
 	defaultProbeImage  = "minio/mc:latest"
@@ -110,9 +110,9 @@ var (
 	bucketAccessGVR = schema.GroupVersionResource{
 		Group: apiGroup, Version: apiVersion, Resource: "bucketaccesses",
 	}
-	// bucketPolicyGVR is cluster-scoped (used without .Namespace()).
-	bucketPolicyGVR = schema.GroupVersionResource{
-		Group: apiGroup, Version: apiVersion, Resource: "bucketpolicies",
+	// bucketClaimPolicyGVR is cluster-scoped (used without .Namespace()).
+	bucketClaimPolicyGVR = schema.GroupVersionResource{
+		Group: apiGroup, Version: apiVersion, Resource: "bucketclaimpolicies",
 	}
 
 	// credsSecretKeys are the standardised keys the access reconciler writes into
@@ -369,7 +369,7 @@ func waitControllerReady(ctx context.Context, timeout time.Duration) error {
 // accessName is the BucketAccess name derived from a bucket name.
 func accessName(bucket string) string { return bucket + "-access" }
 
-// policyName is the BucketPolicy name derived from a bucket name.
+// policyName is the BucketClaimPolicy name derived from a bucket name.
 func policyName(bucket string) string { return bucket + "-policy" }
 
 // claimName is the BucketClaim name derived from a bucket name.
@@ -391,8 +391,8 @@ func buildOSC(name string) *unstructured.Unstructured {
 	}
 	if suiteCfg.needsStorageClass() {
 		spec["storage"] = map[string]interface{}{
-			"size":  suiteCfg.oscSize,
-			"class": suiteCfg.storageCl,
+			"sizePerNode": suiteCfg.oscSize,
+			"class":       suiteCfg.storageCl,
 		}
 	}
 	if suiteCfg.isHeavy() {
@@ -420,7 +420,7 @@ func buildOSB(name, objectStoreRef string, reclaim objectv1alpha1.BucketReclaimP
 
 // buildBucketClaim renders a namespaced brownfield BucketClaim that binds the
 // existing Shared Bucket named existingBucketName. Binding is deny-by-default:
-// a matching BucketPolicy must allow ns before the claim reaches Bound.
+// a matching BucketClaimPolicy must allow ns before the claim reaches Bound.
 func buildBucketClaim(name, ns, existingBucketName string) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(schema.GroupVersionKind{Group: apiGroup, Version: apiVersion, Kind: objectv1alpha1.BucketClaimKind})
@@ -437,7 +437,7 @@ func createBucketClaim(ctx context.Context, u *unstructured.Unstructured) error 
 	return err
 }
 
-// buildOSBPolicy renders a cluster-scoped BucketPolicy that allows
+// buildOSBPolicy renders a cluster-scoped BucketClaimPolicy that allows
 // the given namespaces (by exact name) to request access to bucketRef. Access is
 // deny-by-default, so a matching policy must exist before an
 // BucketAccess in one of these namespaces can reach Ready.
@@ -447,7 +447,7 @@ func buildOSBPolicy(name, bucketRef string, namespaces []string) *unstructured.U
 		names = append(names, n)
 	}
 	u := &unstructured.Unstructured{}
-	u.SetGroupVersionKind(schema.GroupVersionKind{Group: apiGroup, Version: apiVersion, Kind: objectv1alpha1.BucketPolicyKind})
+	u.SetGroupVersionKind(schema.GroupVersionKind{Group: apiGroup, Version: apiVersion, Kind: objectv1alpha1.BucketClaimPolicyKind})
 	u.SetName(name)
 	u.Object["spec"] = map[string]interface{}{
 		"bucketRef": bucketRef,
@@ -501,7 +501,7 @@ func createOSB(ctx context.Context, u *unstructured.Unstructured) error {
 }
 
 func createOSBPolicy(ctx context.Context, u *unstructured.Unstructured) error {
-	_, err := suiteDyn.Resource(bucketPolicyGVR).Create(ctx, u, metav1.CreateOptions{})
+	_, err := suiteDyn.Resource(bucketClaimPolicyGVR).Create(ctx, u, metav1.CreateOptions{})
 	return err
 }
 
@@ -567,7 +567,7 @@ func waitOSBReady(ctx context.Context, name string) error {
 }
 
 // waitAccessReady blocks until the namespaced BucketAccess is Ready
-// (which requires a matching BucketPolicy for its bucket).
+// (which requires a matching BucketClaimPolicy for its bucket).
 func waitAccessReady(ctx context.Context, ns, name string) error {
 	return waitCondition(ctx, bucketAccessGVR, ns, name, objectv1alpha1.BucketAccessConditionReady, "True", suiteCfg.obReadyTimeout)
 }

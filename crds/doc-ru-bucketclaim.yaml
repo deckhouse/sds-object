@@ -11,7 +11,7 @@ spec:
               для данного namespace, в `spec.objectStoreRef`.
             - Brownfield (`spec.existingBucketName` задан): заявка привязывается к
               существующему Shared-бакету, что разрешено только при наличии
-              `BucketPolicy`, дающего доступ этому namespace (deny-by-default).
+              `BucketClaimPolicy`, дающего доступ этому namespace (deny-by-default).
 
             Учётные данные запрашиваются отдельно ресурсом `BucketAccess`,
             ссылающимся на эту заявку по имени в том же namespace.
@@ -29,7 +29,7 @@ spec:
                   description: |
                     Имя существующего Shared-бакета (объявленного администратором)
                     для привязки (brownfield). Разрешено только при наличии
-                    `BucketPolicy`, дающего доступ этому namespace. Неизменяемо
+                    `BucketClaimPolicy`, дающего доступ этому namespace. Неизменяемо
                     после создания.
                 accessPolicy:
                   description: |

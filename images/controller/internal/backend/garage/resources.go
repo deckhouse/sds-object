@@ -99,11 +99,11 @@ func adminEndpoint(cluster *v1alpha1.ObjectStore, namespace, clusterDomain strin
 // factor exceeds the node count.
 func replicationFactor(cluster *v1alpha1.ObjectStore) int32 {
 	switch cluster.Spec.Redundancy {
-	case v1alpha1.RedundancySingle:
+	case v1alpha1.RedundancyNone:
 		return 1
-	case v1alpha1.RedundancyHighRedundancy:
+	case v1alpha1.RedundancyHigh:
 		return 5
-	default: // RedundancyReplicated or unset
+	default: // RedundancyStandard or unset
 		return 3
 	}
 }
@@ -126,16 +126,20 @@ func clampOdd(desired, nodes int32) int32 {
 }
 
 // lightweightReplicas is the StatefulSet replica count for the Lightweight
-// profile, derived from the redundancy intent.
+// profile: spec.storage.nodes when set, otherwise the redundancy-derived
+// replication factor.
 func lightweightReplicas(cluster *v1alpha1.ObjectStore) int32 {
+	if cluster.Spec.Storage != nil && cluster.Spec.Storage.Nodes != nil && *cluster.Spec.Storage.Nodes >= 1 {
+		return *cluster.Spec.Storage.Nodes
+	}
 	return replicationFactor(cluster)
 }
 
 // storageSize returns the per-node PVC size for PVC-backed profiles, defaulting
-// to 10Gi when spec.storage.size is unset/invalid.
+// to 10Gi when spec.storage.sizePerNode is unset/invalid.
 func storageSize(cluster *v1alpha1.ObjectStore) resource.Quantity {
-	if cluster.Spec.Storage != nil && cluster.Spec.Storage.Size != "" {
-		if q, err := resource.ParseQuantity(cluster.Spec.Storage.Size); err == nil {
+	if cluster.Spec.Storage != nil && cluster.Spec.Storage.SizePerNode != "" {
+		if q, err := resource.ParseQuantity(cluster.Spec.Storage.SizePerNode); err == nil {
 			return q
 		}
 	}

@@ -28,10 +28,10 @@ import (
 	"k8s.io/klog/v2"
 )
 
-// BucketPolicyValidate admits BucketPolicy resources.
+// BucketClaimPolicyValidate admits BucketClaimPolicy resources.
 // It hard-denies patterns that fail to compile (CEL cannot validate RE2
 // compilation) and warns when the referenced bucket does not exist yet.
-func (v *Validator) BucketPolicyValidate(ctx context.Context, _ *model.AdmissionReview, obj metav1.Object) (*kwhvalidating.ValidatorResult, error) {
+func (v *Validator) BucketClaimPolicyValidate(ctx context.Context, _ *model.AdmissionReview, obj metav1.Object) (*kwhvalidating.ValidatorResult, error) {
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok {
 		return &kwhvalidating.ValidatorResult{Valid: true}, nil
@@ -55,6 +55,6 @@ func (v *Validator) BucketPolicyValidate(ctx context.Context, _ *model.Admission
 		}
 	}
 
-	klog.Infof("BucketPolicy %s admitted (warnings: %d)", name, len(warnings))
+	klog.Infof("BucketClaimPolicy %s admitted (warnings: %d)", name, len(warnings))
 	return &kwhvalidating.ValidatorResult{Valid: true, Warnings: warnings}, nil
 }

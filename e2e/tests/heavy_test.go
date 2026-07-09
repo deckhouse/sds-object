@@ -122,7 +122,7 @@ func heavySpecs() {
 			By("creating Heavy ObjectStore " + oscName)
 			osc := newOSC(oscName, map[string]interface{}{
 				"type":              string(objectv1alpha1.ClusterTypeHeavy),
-				"redundancy":        string(objectv1alpha1.RedundancySingle),
+				"redundancy":        string(objectv1alpha1.RedundancyNone),
 				"elasticClusterRef": ecName,
 			})
 			Expect(createOSC(ctx, osc)).To(Succeed())
@@ -187,8 +187,8 @@ func heavySpecs() {
 				Expect(waitSecretGone(ctx, suiteCfg.namespace, secretName, 2*time.Minute)).To(Succeed())
 			}
 
-			By("deleting BucketPolicy + Bucket " + bucketName)
-			_ = suiteDyn.Resource(bucketPolicyGVR).Delete(ctx, policyName(bucketName), metav1.DeleteOptions{})
+			By("deleting BucketClaimPolicy + Bucket " + bucketName)
+			_ = suiteDyn.Resource(bucketClaimPolicyGVR).Delete(ctx, policyName(bucketName), metav1.DeleteOptions{})
 			Expect(suiteDyn.Resource(bucketGVR).
 				Delete(ctx, bucketName, metav1.DeleteOptions{})).To(Succeed())
 			Expect(waitResourceGone(ctx, bucketGVR, "", bucketName, resourceGoneTimeout)).To(Succeed())

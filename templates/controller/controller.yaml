@@ -114,20 +114,20 @@
 {{ include "helm_lib_module_validating_webhook_configuration" (list . $osbaWebhookConfig) }}
 
 {{- /*
-  ValidatingWebhookConfiguration for BucketPolicy (cluster-scoped).
+  ValidatingWebhookConfiguration for BucketClaimPolicy (cluster-scoped).
 */ -}}
 {{- $osbpWebhookConfig := dict
-  "name" "bucketpolicy-validation"
-  "webhookName" "bucketpolicy-validation"
+  "name" "bucketclaimpolicy-validation"
+  "webhookName" "bucketclaimpolicy-validation"
   "valuesKey" "sdsObject"
-  "path" "/bucketpolicy-validate"
+  "path" "/bucketclaimpolicy-validate"
   "failurePolicy" "Fail"
   "rules" (list
     (dict
       "apiGroups" (list "storage.deckhouse.io")
       "apiVersions" (list "v1alpha1")
       "operations" (list "CREATE" "UPDATE")
-      "resources" (list "bucketpolicies")
+      "resources" (list "bucketclaimpolicies")
       "scope" "Cluster"
     )
   )

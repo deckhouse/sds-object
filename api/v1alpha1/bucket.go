@@ -29,7 +29,7 @@ import (
 // storage.deckhouse.io/bucket-origin):
 //   - Shared: declared directly by an administrator; consumed cross-namespace
 //     via a BucketClaim whose spec.existingBucketName points at it, gated by
-//     BucketPolicy (deny-by-default).
+//     BucketClaimPolicy (deny-by-default).
 //   - BucketClaim: provisioned by the controller for a greenfield BucketClaim
 //     and owned by it (see the owned-by-claim labels). Such buckets are private
 //     to the owning claim's namespace and cannot be bound by other claims.

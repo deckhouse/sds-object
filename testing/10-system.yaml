@@ -15,7 +15,7 @@ metadata:
   name: system
 spec:
   type: System
-  redundancy: Single
+  redundancy: None
   reclaimPolicy: Delete
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
@@ -27,7 +27,7 @@ spec:
   reclaimPolicy: Delete
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: BucketPolicy
+kind: BucketClaimPolicy
 metadata:
   name: sys-bucket-obj-test
 spec:

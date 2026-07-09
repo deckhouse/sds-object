@@ -30,7 +30,7 @@ spec:
               provisions a new cluster-scoped Bucket owned by this claim and
               private to this namespace, in `spec.objectStoreRef`.
             - Brownfield (`spec.existingBucketName` set): the claim binds an
-              existing Shared Bucket, allowed only when a `BucketPolicy` grants
+              existing Shared Bucket, allowed only when a `BucketClaimPolicy` grants
               this namespace (deny-by-default).
 
             Credentials are requested separately with a `BucketAccess` that
@@ -63,7 +63,7 @@ spec:
                   type: string
                   description: |
                     Name of an existing Shared (administrator-declared) Bucket to
-                    bind (brownfield). Allowed only when a `BucketPolicy` grants
+                    bind (brownfield). Allowed only when a `BucketClaimPolicy` grants
                     this claim's namespace. Immutable after creation.
                   minLength: 3
                   maxLength: 63

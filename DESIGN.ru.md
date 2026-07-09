@@ -13,17 +13,17 @@
 >   лейбле `storage.deckhouse.io/bucket-origin`);
 > - `BucketClaim` (**namespaced**) — заявка на бакет: greenfield (создаёт
 >   собственный приватный `Bucket`) или brownfield (`spec.existingBucketName` —
->   привязка Shared-бакета, гейтится `BucketPolicy`, deny-by-default);
+>   привязка Shared-бакета, гейтится `BucketClaimPolicy`, deny-by-default);
 > - `BucketAccess` (namespaced) — запрос учётных данных к `BucketClaim` в том же
 >   namespace: контроллер выдаёт отдельную пару ключей, пишет `Secret`
 >   (owned by access) и поддерживает ротацию по аннотации
 >   `storage.deckhouse.io/rotate`;
-> - `BucketPolicy` (cluster-scoped) — из каких namespace разрешена привязка
+> - `BucketClaimPolicy` (cluster-scoped) — из каких namespace разрешена привязка
 >   Shared-бакета через brownfield-`BucketClaim` (deny-by-default; имена + RE2).
 >
 > Также: у `ObjectStore` есть `spec.reclaimPolicy` (`Retain`/`Delete`, по
 > умолчанию `Retain`); SeaweedFS использует общий PostgreSQL только в
-> `HighRedundancy`, иначе встроенный leveldb. Разделы §3–§4 ниже описывают
+> `High`, иначе встроенный leveldb. Разделы §3–§4 ниже описывают
 > исходные имена полей (`clusterRef`, `bucketRef`); **актуальный контракт полей
 > и имён — в `crds/` и `docs/`** (`objectStoreRef`, `bucketClaimName` и т. д.).
 
@@ -43,12 +43,12 @@ Deckhouse. Платформа noops: пользователь деклариру
 | `Bucket` (bkt) | Cluster | Бакет-бэкенд: Shared (объявлен админом) или созданный под `BucketClaim` |
 | `BucketClaim` (bc) | **Namespaced** | Заявка на бакет: greenfield (свой приватный бакет) или brownfield (привязка Shared-бакета, гейтится политикой) |
 | `BucketAccess` (ba) | **Namespaced** | Запросить учётные данные к `BucketClaim` — отдельная пара ключей + `Secret` рядом с приложением; ротация по аннотации |
-| `BucketPolicy` (bp) | Cluster | Задать, из каких namespace разрешена привязка Shared-бакета через brownfield-заявку (deny-by-default; имена + RE2-паттерны) |
+| `BucketClaimPolicy` (bp) | Cluster | Задать, из каких namespace разрешена привязка Shared-бакета через brownfield-заявку (deny-by-default; имена + RE2-паттерны) |
 
 Greenfield-заявка создаёт собственный приватный бакет (namespace-локальный, имя
 под зарезервированным префиксом — не может совпасть с Shared-бакетом). Shared-бакет
 — общая (cluster-scoped) платформенная сущность; привязать его из namespace можно
-только brownfield-заявкой, гейтящейся `BucketPolicy` (deny-by-default). Это
+только brownfield-заявкой, гейтящейся `BucketClaimPolicy` (deny-by-default). Это
 закрывает риск «захвата» чужого/системного бакета, который был возможен в исходной
 namespaced-`ObjectBucket`-модели (см. историческую врезку выше и ADR).
 
@@ -92,7 +92,7 @@ spec:
 
   # Ёмкость и сторадж. Игнорируется для type=Heavy (ёмкость у Ceph).
   storage:
-    size: 100Gi           # суммарная полезная ёмкость (для System — на узел)
+    sizePerNode: 100Gi    # ёмкость на узел (для System — на control-plane узел)
     class: localpath      # имя StorageClass для PVC; REQUIRED для Lightweight/Full,
                           # игнорируется для System (hostPath) и Heavy (Ceph)
 
@@ -104,7 +104,7 @@ spec:
 
   # Интент отказоустойчивости. Маппится в конкретные настройки бэкенда.
   # По умолчанию выбирается исходя из type.
-  redundancy: Replicated  # Single | Replicated | HighRedundancy   (optional)
+  redundancy: Standard    # None | Standard | High   (optional)
 
   # Только для type=Heavy: ссылка на ElasticCluster (sds-elastic),
   # поверх которого поднимается CephObjectStore.
@@ -121,13 +121,13 @@ spec:
 # 2. Lightweight (garage + PVC)
 spec:
   type: Lightweight
-  storage: { size: 50Gi, class: localpath }
+  storage: { sizePerNode: 50Gi, class: localpath }
 ---
 # 3. Full (seaweedfs)
 spec:
   type: Full
-  storage: { size: 2Ti, class: replicated }
-  redundancy: HighRedundancy
+  storage: { sizePerNode: 2Ti, class: replicated }
+  redundancy: High
 ---
 # 4. Heavy (Ceph RGW поверх sds-elastic)
 spec:
@@ -139,9 +139,9 @@ spec:
 
 | Значение | Garage | SeaweedFS | Ceph RGW |
 |----------|--------|-----------|----------|
-| `Single` | replication_factor=1 | replication=000 | пул size=1 |
-| `Replicated` (default) | replication_factor=3* | replication=010/020 | пул size=3, min_size=2 |
-| `HighRedundancy` | replication_factor=3 + зоны | EC (k+m) | пул HighRedundancy / EC |
+| `None` | replication_factor=1 | replication=000 | пул size=1 |
+| `Standard` (default) | replication_factor=3* | replication=010/020 | пул size=3, min_size=2 |
+| `High` | replication_factor=3 + зоны | EC (k+m) | пул High / EC |
 
 \* Для `System` фактор ограничен числом control-plane узлов (1 или 3).
 
@@ -195,7 +195,7 @@ Ready       .status.conditions[?(@.type=="Ready")].status
 Age         .metadata.creationTimestamp
 ```
 
-## 4. CRD `Bucket` (cluster-scoped), `BucketAccess` (namespaced), `BucketPolicy` (cluster-scoped)
+## 4. CRD `Bucket` (cluster-scoped), `BucketAccess` (namespaced), `BucketClaimPolicy` (cluster-scoped)
 
 ### 4.1 `Bucket` — объявление бакета (без учётных данных)
 
@@ -217,11 +217,11 @@ spec:
 Status: `phase`, `endpoint`, `bucketName`, `conditions` (`BucketReady`, `Ready`).
 Учётных данных бакет не содержит.
 
-### 4.2 `BucketPolicy` — кто допущен к бакету (deny-by-default)
+### 4.2 `BucketClaimPolicy` — кто допущен к бакету (deny-by-default)
 
 ```yaml
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: BucketPolicy
+kind: BucketClaimPolicy
 metadata:
   name: my-bucket-teams        # cluster-scoped
 spec:
@@ -285,7 +285,7 @@ stringData:
   (иначе `Pending`, пока не появятся / не станут Ready).
 - `spec.bucketName` (или `metadata.name`) — правила именования S3; immutable.
   Бакет уникален в рамках `(clusterRef, bucketName)`.
-- `BucketPolicy.spec.allowedNamespaces.patterns` — валидные RE2
+- `BucketClaimPolicy.spec.allowedNamespaces.patterns` — валидные RE2
   (webhook отклоняет некомпилируемые); доступ deny-by-default.
 
 ## 5. Архитектура контроллера
@@ -297,7 +297,7 @@ stringData:
 ObjectStoreReconciler       ──┐
 BucketReconciler         ─┼─→ backend.Driver (Garage | SeaweedFS | CephRGW)
 BucketAccessReconciler   ─┤
-BucketPolicyReconciler   ──┘   (валидирует политику; enforcement — в Access-реконсайлере)
+BucketClaimPolicyReconciler   ──┘   (валидирует политику; enforcement — в Access-реконсайлере)
 ```
 
 Интерфейс драйвера (бакет и доступ разделены):
@@ -324,8 +324,8 @@ type Driver interface {
   `storage.size`); число реплик = `replication_factor`, фактор достижим по построению.
 - **Full (SeaweedFS):** master(ы) (raft 1/3), volume-servers (StatefulSet+PVC),
   filer со встроенным S3-gateway; Service на S3-эндпойнт; репликация/EC из `redundancy`.
-  Метаданные filer: встроенный leveldb (Single/Replicated, один filer, без внешних
-  зависимостей) или общий PostgreSQL из `managed-postgres` (HighRedundancy, multi-filer HA).
+  Метаданные filer: встроенный leveldb (None/Standard, один filer, без внешних
+  зависимостей) или общий PostgreSQL из `managed-postgres` (High, multi-filer HA).
 - **Heavy (Ceph RGW):** контроллер создаёт `CephObjectStore` в namespace
   `sds-elastic` (`d8-sds-elastic`), привязанный к CephCluster из `elasticClusterRef`;
   RGW-поды и Service поднимает Rook; пулы метаданных/данных — из `redundancy`.
@@ -343,7 +343,7 @@ type Driver interface {
 Доступ (`BucketAccess`):
 
 1. Найти бакет по `bucketRef`, дождаться `Ready`; проверить, что namespace
-   разрешён `BucketPolicy` (deny-by-default). При отзыве политики у
+   разрешён `BucketClaimPolicy` (deny-by-default). При отзыве политики у
    уже выданного доступа ключ **отзывается**, `Secret` удаляется.
 2. Выдать отдельную пару ключей (Garage key / SeaweedFS identity / Ceph RGW user
    + bucket policy) с правами из `permission`; при смене аннотации ротации —
@@ -354,7 +354,7 @@ type Driver interface {
 Системное хранилище: модуль по умолчанию (`sdsObject.systemBucket.enabled`,
 default true) шипует системный `ObjectStore` (`System`) + `system`-бакет
 + политику на `d8-*`; `redundancy` кластера следует режиму HA
-(`helm_lib_is_ha_to_value`: HA → Replicated, иначе Single).
+(`helm_lib_is_ha_to_value`: HA → Standard, иначе None).
 
 Маппинг admin-операций по бэкендам: Garage Admin API; SeaweedFS S3/filer API;
 Ceph RGW admin ops (или `CephObjectStoreUser` + bucket через S3 от его имени).
@@ -382,7 +382,7 @@ systemBucket:
   — она нужна только для типа Heavy; проверяется в рантайме реконсайлером
   (условие `Error`/`Pending`, если sds-elastic недоступен).
 - System/Lightweight/Full самодостаточны (Garage/SeaweedFS вендорятся в образы
-  модуля). Исключение: `Full` в режиме `HighRedundancy` требует модуля
+  модуля). Исключение: `Full` в режиме `High` требует модуля
   `managed-postgres` (общий слой метаданных filer); в остальных режимах — нет.
 
 ## 8. Что меняется относительно текущего скелета

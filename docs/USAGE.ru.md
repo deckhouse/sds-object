@@ -1,6 +1,6 @@
 ---
 title: "Использование"
-description: "Развёртывание объектного хранилища через sds-object: включение модуля, создание cluster-scoped Bucket, выдача доступа namespace через BucketPolicy и получение учётных данных через BucketAccess."
+description: "Развёртывание объектного хранилища через sds-object: включение модуля, создание cluster-scoped Bucket, выдача доступа namespace через BucketClaimPolicy и получение учётных данных через BucketAccess."
 weight: 50
 ---
 
@@ -34,9 +34,9 @@ metadata:
 spec:
   type: Lightweight
   storage:
-    size: 50Gi
+    sizePerNode: 50Gi
     class: localpath
-  redundancy: Replicated
+  redundancy: Standard
 ```
 
 Кластер `System` для нужд платформы (Garage на control-plane узлах, `hostPath`; `storage.class` игнорируется):
@@ -82,11 +82,11 @@ d8 k get bucket app-data
 
 ## Разрешение namespace привязывать бакет
 
-Привязка Shared-бакета работает по принципу **deny-by-default**: namespace может заявить его, только если существует совпадающая `BucketPolicy` для этого бакета. Namespace выбираются точными именами `names` и/или RE2-паттернами `patterns`:
+Привязка Shared-бакета работает по принципу **deny-by-default**: namespace может заявить его, только если существует совпадающая `BucketClaimPolicy` для этого бакета. Namespace выбираются точными именами `names` и/или RE2-паттернами `patterns`:
 
 ```yaml
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: BucketPolicy
+kind: BucketClaimPolicy
 metadata:
   name: app-data-teams
 spec:

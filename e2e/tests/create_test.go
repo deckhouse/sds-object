@@ -91,7 +91,7 @@ func createSpecs() {
 			ctx, cancel := context.WithTimeout(context.Background(), suiteCfg.obReadyTimeout+2*time.Minute)
 			defer cancel()
 
-			By("creating BucketPolicy allowing namespace " + suiteCfg.namespace)
+			By("creating BucketClaimPolicy allowing namespace " + suiteCfg.namespace)
 			policy := buildOSBPolicy(policyName(suiteCfg.bucketName), suiteCfg.bucketName, []string{suiteCfg.namespace})
 			Expect(createOSBPolicy(ctx, policy)).To(Succeed())
 

@@ -53,7 +53,7 @@ import (
 //	    creates a cluster-scoped Bucket owned by the claim (origin=BucketClaim,
 //	    reserved-prefixed name) in spec.objectStoreRef. Brownfield binds an
 //	    existing Shared Bucket named spec.existingBucketName, but only when a
-//	    BucketPolicy grants the claim's namespace (deny-by-default).
+//	    BucketClaimPolicy grants the claim's namespace (deny-by-default).
 //	  - BucketReady gates on the bound Bucket's own Ready condition.
 //
 // A cluster-scoped Bucket cannot carry a namespaced ownerReference, so the
@@ -81,7 +81,7 @@ type claimObserved struct {
 
 // AddBucketClaimReconcilerToManager wires the BucketClaim reconciler. It watches
 // Bucket (a bound bucket becoming Ready re-reconciles the claim) and
-// BucketPolicy (a policy change re-evaluates brownfield claims for its bucket).
+// BucketClaimPolicy (a policy change re-evaluates brownfield claims for its bucket).
 func AddBucketClaimReconcilerToManager(mgr manager.Manager, cfg *config.Options, log *logger.Logger) error {
 	r := &BucketClaimReconciler{
 		Client: mgr.GetClient(),
@@ -94,7 +94,7 @@ func AddBucketClaimReconcilerToManager(mgr manager.Manager, cfg *config.Options,
 		Named("bucket-claim").
 		For(&v1alpha1.BucketClaim{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&v1alpha1.Bucket{}, handler.EnqueueRequestsFromMapFunc(r.enqueueByBucket)).
-		Watches(&v1alpha1.BucketPolicy{}, handler.EnqueueRequestsFromMapFunc(r.enqueueByPolicy)).
+		Watches(&v1alpha1.BucketClaimPolicy{}, handler.EnqueueRequestsFromMapFunc(r.enqueueByPolicy)).
 		WithOptions(controller.Options{MaxConcurrentReconciles: cfg.MaxConcurrentReconciles}).
 		Complete(r)
 }
@@ -124,7 +124,7 @@ func (r *BucketClaimReconciler) enqueueByBucket(ctx context.Context, o client.Ob
 
 // enqueueByPolicy maps a policy event to every brownfield claim for its bucket.
 func (r *BucketClaimReconciler) enqueueByPolicy(ctx context.Context, o client.Object) []reconcile.Request {
-	policy, ok := o.(*v1alpha1.BucketPolicy)
+	policy, ok := o.(*v1alpha1.BucketClaimPolicy)
 	if !ok {
 		return nil
 	}
@@ -255,7 +255,7 @@ func (r *BucketClaimReconciler) ensureBound(
 	return r.ensureGreenfield(ctx, claim, status, observed)
 }
 
-// ensureBrownfield binds an existing Shared Bucket, gated by BucketPolicy.
+// ensureBrownfield binds an existing Shared Bucket, gated by BucketClaimPolicy.
 func (r *BucketClaimReconciler) ensureBrownfield(
 	ctx context.Context,
 	claim *v1alpha1.BucketClaim,

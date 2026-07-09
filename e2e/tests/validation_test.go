@@ -46,7 +46,7 @@ func validationSpecs() {
 			// System cluster must be denied regardless of the primary profile.
 			second := newOSC("e2e-extra-system", map[string]interface{}{
 				"type":       string(objectv1alpha1.ClusterTypeSystem),
-				"redundancy": string(objectv1alpha1.RedundancySingle),
+				"redundancy": string(objectv1alpha1.RedundancyNone),
 			})
 			err := createOSC(ctx, second)
 			// Best-effort cleanup in case the guard ever regresses and admits it.
@@ -94,7 +94,7 @@ func validationSpecs() {
 
 			bad := newOSC("e2e-heavy-noref", map[string]interface{}{
 				"type":       string(objectv1alpha1.ClusterTypeHeavy),
-				"redundancy": string(objectv1alpha1.RedundancySingle),
+				"redundancy": string(objectv1alpha1.RedundancyNone),
 			})
 			err := createOSC(ctx, bad)
 			defer func() {
@@ -109,7 +109,7 @@ func validationSpecs() {
 
 			bad := newOSC("e2e-sys-ref", map[string]interface{}{
 				"type":              string(objectv1alpha1.ClusterTypeSystem),
-				"redundancy":        string(objectv1alpha1.RedundancySingle),
+				"redundancy":        string(objectv1alpha1.RedundancyNone),
 				"elasticClusterRef": "some-cluster",
 			})
 			err := createOSC(ctx, bad)
@@ -125,7 +125,7 @@ func validationSpecs() {
 
 			bad := newOSC("e2e-light-noclass", map[string]interface{}{
 				"type":       string(objectv1alpha1.ClusterTypeLightweight),
-				"redundancy": string(objectv1alpha1.RedundancySingle),
+				"redundancy": string(objectv1alpha1.RedundancyNone),
 			})
 			err := createOSC(ctx, bad)
 			defer func() {
@@ -134,7 +134,7 @@ func validationSpecs() {
 			expectDenied(err, "storage.class is required")
 		})
 
-		It("denies an BucketPolicy with an invalid regex pattern", func() {
+		It("denies an BucketClaimPolicy with an invalid regex pattern", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 
@@ -147,7 +147,7 @@ func validationSpecs() {
 			}
 			err := createOSBPolicy(ctx, bad)
 			defer func() {
-				_ = suiteDyn.Resource(bucketPolicyGVR).Delete(context.Background(), "e2e-bad-pattern", metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketClaimPolicyGVR).Delete(context.Background(), "e2e-bad-pattern", metav1.DeleteOptions{})
 			}()
 			expectDenied(err, "pattern")
 		})

@@ -27,7 +27,7 @@
     (dict "apiGroups" (list "coordination.k8s.io") "resources" (list "leases") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete"))
   )
   "clusterRoleRules" (list
-    (dict "apiGroups" (list "storage.deckhouse.io") "resources" (list "objectstores" "objectstores/status" "objectstores/finalizers" "buckets" "buckets/status" "buckets/finalizers" "bucketclaims" "bucketclaims/status" "bucketclaims/finalizers" "bucketaccesses" "bucketaccesses/status" "bucketaccesses/finalizers" "bucketpolicies" "bucketpolicies/status" "bucketpolicies/finalizers") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete"))
+    (dict "apiGroups" (list "storage.deckhouse.io") "resources" (list "objectstores" "objectstores/status" "objectstores/finalizers" "buckets" "buckets/status" "buckets/finalizers" "bucketclaims" "bucketclaims/status" "bucketclaims/finalizers" "bucketaccesses" "bucketaccesses/status" "bucketaccesses/finalizers" "bucketclaimpolicies" "bucketclaimpolicies/status" "bucketclaimpolicies/finalizers") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete"))
     (dict "apiGroups" (list "storage.deckhouse.io") "resources" (list "elasticclusters") "verbs" (list "get" "list" "watch"))
     (dict "apiGroups" (list "internal.sdselastic.deckhouse.io") "resources" (list "cephobjectstores" "cephobjectstoreusers") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete"))
     (dict "apiGroups" (list "") "resources" (list "secrets") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete"))

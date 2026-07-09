@@ -28,7 +28,7 @@ import (
 //     owned by this claim and named under the reserved prefix so it cannot
 //     collide with a Shared bucket. The bucket is private to this namespace.
 //   - brownfield (spec.existingBucketName set): the claim binds to an existing
-//     Shared Bucket of that name, but only when a BucketPolicy grants this
+//     Shared Bucket of that name, but only when a BucketClaimPolicy grants this
 //     claim's namespace (deny-by-default).
 //
 // Credentials are not issued here: workloads request scoped credentials with a
@@ -67,7 +67,7 @@ type BucketClaimSpec struct {
 
 	// ExistingBucketName, when set, switches the claim to brownfield mode: it
 	// binds to the existing Shared (administrator-declared) Bucket of this name
-	// instead of provisioning a new one. Allowed only when a BucketPolicy grants
+	// instead of provisioning a new one. Allowed only when a BucketClaimPolicy grants
 	// this claim's namespace. Immutable after creation.
 	// +optional
 	ExistingBucketName string `json:"existingBucketName,omitempty"`

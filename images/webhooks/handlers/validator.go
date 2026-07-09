@@ -54,8 +54,8 @@ var (
 	bucketClaimGVR = schema.GroupVersionResource{
 		Group: "storage.deckhouse.io", Version: "v1alpha1", Resource: "bucketclaims",
 	}
-	bucketPolicyGVR = schema.GroupVersionResource{
-		Group: "storage.deckhouse.io", Version: "v1alpha1", Resource: "bucketpolicies",
+	bucketClaimPolicyGVR = schema.GroupVersionResource{
+		Group: "storage.deckhouse.io", Version: "v1alpha1", Resource: "bucketclaimpolicies",
 	}
 	elasticClusterGVR = schema.GroupVersionResource{
 		Group: "storage.deckhouse.io", Version: "v1alpha1", Resource: "elasticclusters",

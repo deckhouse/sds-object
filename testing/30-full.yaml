@@ -1,6 +1,6 @@
 # Full profile (SeaweedFS).
-# Single/Replicated use the built-in leveldb metadata store (single filer, no
-# external DB). HighRedundancy runs a multi-filer HA set backed by a shared
+# None/Standard use the built-in leveldb metadata store (single filer, no
+# external DB). High runs a multi-filer HA set backed by a shared
 # managed-postgres database (requires the managed-postgres module).
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
@@ -9,10 +9,10 @@ metadata:
   name: full
 spec:
   type: Full
-  redundancy: Single
+  redundancy: None
   reclaimPolicy: Delete
   storage:
-    size: 10Gi
+    sizePerNode: 10Gi
     class: localpath   # <-- replace with your StorageClass (kubectl get sc)
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
@@ -24,7 +24,7 @@ spec:
   reclaimPolicy: Delete
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: BucketPolicy
+kind: BucketClaimPolicy
 metadata:
   name: full-bucket-obj-test
 spec:

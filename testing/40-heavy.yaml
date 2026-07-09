@@ -9,7 +9,7 @@ metadata:
 spec:
   type: Heavy
   elasticClusterRef: main   # <-- name of an existing, Ready ElasticCluster
-  redundancy: Replicated
+  redundancy: Standard
   reclaimPolicy: Delete
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
@@ -21,7 +21,7 @@ spec:
   reclaimPolicy: Delete
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: BucketPolicy
+kind: BucketClaimPolicy
 metadata:
   name: heavy-bucket-obj-test
 spec:

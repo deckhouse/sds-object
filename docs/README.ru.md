@@ -16,11 +16,11 @@ weight: 1
 |--------|---------|------------|
 | `ObjectStore` (`ostore`) | Cluster | Разворачивает объектное хранилище одного из четырёх готовых профилей (разворачивает data plane; вне COSI). |
 | `Bucket` (`bkt`) | Cluster | Бакет-бэкенд: либо объявлен администратором (Shared), либо создан под `BucketClaim`. |
-| `BucketClaim` (`bc`) | Namespaced | Запрос («заявка») на бакет: greenfield (создаёт собственный приватный бакет) или brownfield (привязывает Shared-бакет, гейтится `BucketPolicy`). |
+| `BucketClaim` (`bc`) | Namespaced | Запрос («заявка») на бакет: greenfield (создаёт собственный приватный бакет) или brownfield (привязывает Shared-бакет, гейтится `BucketClaimPolicy`). |
 | `BucketAccess` (`ba`) | Namespaced | Запрашивает учётные данные к `BucketClaim`; пишет стандартный `Secret` с S3-учётками рядом с приложением. |
-| `BucketPolicy` (`bp`) | Cluster | Задаёт, из каких namespace разрешена привязка Shared-бакета через brownfield-`BucketClaim` (deny-by-default). |
+| `BucketClaimPolicy` (`bcp`) | Cluster | Задаёт, из каких namespace разрешена привязка Shared-бакета через brownfield-`BucketClaim` (deny-by-default). |
 
-Модель повторяет COSI (`Bucket` + `BucketClaim`) с двумя дополнениями: `ObjectStore` разворачивает само хранилище, а `BucketPolicy` управляет совместным доступом (sharing) к Shared-бакетам между namespace. Учётные данные выдаются по namespace через `BucketAccess`, ссылающийся на `BucketClaim` в том же namespace; каждый access получает свой ключ, независимо ротируемый аннотацией `storage.deckhouse.io/rotate`.
+Модель повторяет COSI (`Bucket` + `BucketClaim`) с двумя дополнениями: `ObjectStore` разворачивает само хранилище, а `BucketClaimPolicy` управляет совместным доступом (sharing) к Shared-бакетам между namespace. Учётные данные выдаются по namespace через `BucketAccess`, ссылающийся на `BucketClaim` в том же namespace; каждый access получает свой ключ, независимо ротируемый аннотацией `storage.deckhouse.io/rotate`.
 
 ## Профили кластера
 
@@ -43,7 +43,7 @@ weight: 1
 
 - Контроллер реконсилит каждый `ObjectStore` в data plane бэкенда (workload'ы, сервисы, конфигурация) и публикует в `status` готовность, S3-эндпойнт и ёмкость.
 - Контроллер реконсилит каждый `Bucket` в бакет в указанном ObjectStore (без учётных данных).
-- Контроллер реконсилит каждый `BucketClaim`: greenfield-заявка создаёт собственный приватный `Bucket`; brownfield-заявка привязывает существующий Shared-`Bucket`, как только `BucketPolicy` разрешает её namespace.
+- Контроллер реконсилит каждый `BucketClaim`: greenfield-заявка создаёт собственный приватный `Bucket`; brownfield-заявка привязывает существующий Shared-`Bucket`, как только `BucketClaimPolicy` разрешает её namespace.
 - Контроллер реконсилит каждый `BucketAccess` — как только его `BucketClaim` в состоянии Bound — в ключ доступа с правами на бакет, затем пишет `Secret` (owned by access) со стандартными переменными подключения: `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`.
 
 Пошаговый пример — в разделе [Использование](usage.html).

@@ -9,7 +9,7 @@ spec:
             не выдаются. Потребляющие namespace запрашивают доступ и получают
             Secret с учётными данными через namespaced-ресурсы
             BucketAccess, а доступ между namespace ограничивается
-            cluster-scoped ресурсами BucketPolicy (deny-by-default).
+            cluster-scoped ресурсами BucketClaimPolicy (deny-by-default).
           properties:
             spec:
               description: |

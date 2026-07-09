@@ -144,7 +144,10 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 func (d *Driver) effectiveReplicationFactor(ctx context.Context, cluster *v1alpha1.ObjectStore) (int32, error) {
 	desired := replicationFactor(cluster)
 	if cluster.Spec.Type != v1alpha1.ClusterTypeSystem {
-		return desired, nil
+		// Lightweight runs exactly lightweightReplicas pods (which may be
+		// overridden by spec.storage.nodes), so clamp the factor to that count
+		// (odd) to keep it satisfiable.
+		return clampOdd(desired, lightweightReplicas(cluster)), nil
 	}
 	// Read through the non-cached apiReader: a cache-backed List would start a
 	// cluster-wide Node informer (extra RBAC/watch on every Node) and, if the

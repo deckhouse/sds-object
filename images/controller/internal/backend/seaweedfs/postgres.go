@@ -78,7 +78,7 @@ func pgCredsSecretName(cluster *v1alpha1.ObjectStore) string {
 // filer HA set); Single and Replicated use SeaweedFS's built-in leveldb store on
 // a local PVC, which avoids the managed-postgres dependency but is single-filer.
 func usesPostgres(cluster *v1alpha1.ObjectStore) bool {
-	return cluster.Spec.Redundancy == v1alpha1.RedundancyHighRedundancy
+	return cluster.Spec.Redundancy == v1alpha1.RedundancyHigh
 }
 
 // filerReplicas is the number of filer (S3 gateway) replicas, derived from the
@@ -116,9 +116,9 @@ func buildPostgres(cluster *v1alpha1.ObjectStore, namespace string) *unstructure
 
 	// Single -> a standalone instance; otherwise an HA cluster.
 	switch cluster.Spec.Redundancy {
-	case v1alpha1.RedundancySingle:
+	case v1alpha1.RedundancyNone:
 		spec["type"] = "Standalone"
-	case v1alpha1.RedundancyHighRedundancy:
+	case v1alpha1.RedundancyHigh:
 		spec["type"] = "Cluster"
 		spec["cluster"] = map[string]interface{}{"replication": "ConsistencyAndAvailability"}
 	default: // Replicated

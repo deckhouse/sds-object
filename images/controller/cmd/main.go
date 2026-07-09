@@ -122,8 +122,8 @@ func main() {
 		log.Error(err, "[main] unable to register BucketAccess reconciler")
 		os.Exit(1)
 	}
-	if err := controller.AddBucketPolicyReconcilerToManager(mgr, cfgParams, log); err != nil {
-		log.Error(err, "[main] unable to register BucketPolicy reconciler")
+	if err := controller.AddBucketClaimPolicyReconcilerToManager(mgr, cfgParams, log); err != nil {
+		log.Error(err, "[main] unable to register BucketClaimPolicy reconciler")
 		os.Exit(1)
 	}
 

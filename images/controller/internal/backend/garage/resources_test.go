@@ -36,10 +36,10 @@ func cluster(name string, r v1alpha1.RedundancyMode) *v1alpha1.ObjectStore {
 
 func TestReplicationFactor(t *testing.T) {
 	cases := map[v1alpha1.RedundancyMode]int32{
-		v1alpha1.RedundancySingle:         1,
-		v1alpha1.RedundancyReplicated:     3,
-		v1alpha1.RedundancyHighRedundancy: 5,
-		v1alpha1.RedundancyMode(""):       3, // default
+		v1alpha1.RedundancyNone:     1,
+		v1alpha1.RedundancyStandard: 3,
+		v1alpha1.RedundancyHigh:     5,
+		v1alpha1.RedundancyMode(""): 3, // default
 	}
 	for r, want := range cases {
 		if got := replicationFactor(cluster("c", r)); got != want {
@@ -55,13 +55,13 @@ func TestStorageSize(t *testing.T) {
 	}
 
 	sized := cluster("c", "")
-	sized.Spec.Storage = &v1alpha1.ObjectStoreStorageSpec{Size: "20Gi"}
+	sized.Spec.Storage = &v1alpha1.ObjectStoreStorageSpec{SizePerNode: "20Gi"}
 	if got := storageSize(sized); got.Cmp(resource.MustParse("20Gi")) != 0 {
 		t.Errorf("storageSize(20Gi)=%s, want 20Gi", got.String())
 	}
 
 	bad := cluster("c", "")
-	bad.Spec.Storage = &v1alpha1.ObjectStoreStorageSpec{Size: "not-a-quantity"}
+	bad.Spec.Storage = &v1alpha1.ObjectStoreStorageSpec{SizePerNode: "not-a-quantity"}
 	if got := storageSize(bad); got.Cmp(resource.MustParse("10Gi")) != 0 {
 		t.Errorf("storageSize(invalid)=%s, want 10Gi fallback", got.String())
 	}

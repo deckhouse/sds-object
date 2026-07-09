@@ -38,7 +38,7 @@ func dumpFailedSpecDiagnostics(ctx context.Context) {
 
 	dumpDynamic(ctx, objectStoreGVR, "", suiteCfg.oscName, "ObjectStore")
 	dumpDynamic(ctx, bucketGVR, "", suiteCfg.bucketName, "Bucket")
-	dumpDynamic(ctx, bucketPolicyGVR, "", policyName(suiteCfg.bucketName), "BucketPolicy")
+	dumpDynamic(ctx, bucketClaimPolicyGVR, "", policyName(suiteCfg.bucketName), "BucketClaimPolicy")
 	dumpDynamic(ctx, bucketAccessGVR, suiteCfg.namespace, accessName(suiteCfg.bucketName), "BucketAccess")
 
 	dumpPods(ctx, moduleNS)

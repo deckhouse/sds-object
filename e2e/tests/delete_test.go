@@ -59,14 +59,14 @@ func deleteSpecs() {
 			Expect(waitResourceGone(ctx, bucketClaimGVR, suiteCfg.namespace, claimName(suiteCfg.bucketName), resourceGoneTimeout)).To(Succeed())
 		})
 
-		It("deletes the BucketPolicy and the Bucket", func() {
+		It("deletes the BucketClaimPolicy and the Bucket", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), resourceGoneTimeout+2*time.Minute)
 			defer cancel()
 
-			By("deleting BucketPolicy " + policyName(suiteCfg.bucketName))
-			Expect(suiteDyn.Resource(bucketPolicyGVR).
+			By("deleting BucketClaimPolicy " + policyName(suiteCfg.bucketName))
+			Expect(suiteDyn.Resource(bucketClaimPolicyGVR).
 				Delete(ctx, policyName(suiteCfg.bucketName), metav1.DeleteOptions{})).To(Succeed())
-			Expect(waitResourceGone(ctx, bucketPolicyGVR, "", policyName(suiteCfg.bucketName), resourceGoneTimeout)).To(Succeed())
+			Expect(waitResourceGone(ctx, bucketClaimPolicyGVR, "", policyName(suiteCfg.bucketName), resourceGoneTimeout)).To(Succeed())
 
 			By("deleting Bucket " + suiteCfg.bucketName + " (reclaimPolicy=Delete)")
 			Expect(suiteDyn.Resource(bucketGVR).

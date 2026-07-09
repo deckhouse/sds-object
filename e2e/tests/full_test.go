@@ -38,8 +38,8 @@ const fullOSCReadyTimeout = 30 * time.Minute
 const fullHRReadyTimeout = 40 * time.Minute
 
 // postgresGroupVersion is the managed-postgres API the SeaweedFS filer uses for
-// its shared metadata store in HighRedundancy (multi-filer HA). Single/
-// Replicated use the built-in leveldb store and do NOT require it.
+// its shared metadata store in High (multi-filer HA). None/
+// Standard use the built-in leveldb store and do NOT require it.
 const postgresGroupVersion = "managed-services.deckhouse.io/v1alpha1"
 
 // fullSpecs exercises the Full profile (SeaweedFS) on its own cluster, alongside
@@ -82,7 +82,7 @@ func fullSpecs() {
 			By("creating Full ObjectStore " + oscName)
 			osc := newOSC(oscName, map[string]interface{}{
 				"type":       string(objectv1alpha1.ClusterTypeFull),
-				"redundancy": string(objectv1alpha1.RedundancySingle),
+				"redundancy": string(objectv1alpha1.RedundancyNone),
 				"storage": map[string]interface{}{
 					"size":  suiteCfg.oscSize,
 					"class": storageClass,
@@ -150,8 +150,8 @@ func fullSpecs() {
 				Expect(waitSecretGone(ctx, suiteCfg.namespace, secretName, 2*time.Minute)).To(Succeed())
 			}
 
-			By("deleting BucketPolicy + Bucket " + bucketName)
-			_ = suiteDyn.Resource(bucketPolicyGVR).Delete(ctx, policyName(bucketName), metav1.DeleteOptions{})
+			By("deleting BucketClaimPolicy + Bucket " + bucketName)
+			_ = suiteDyn.Resource(bucketClaimPolicyGVR).Delete(ctx, policyName(bucketName), metav1.DeleteOptions{})
 			Expect(suiteDyn.Resource(bucketGVR).
 				Delete(ctx, bucketName, metav1.DeleteOptions{})).To(Succeed())
 			Expect(waitResourceGone(ctx, bucketGVR, "", bucketName, resourceGoneTimeout)).To(Succeed())
@@ -167,7 +167,7 @@ func fullSpecs() {
 // fullHighRedundancySpecs exercises the Full profile at redundancy
 // HighRedundancy, which runs a multi-replica master/volume/filer topology whose
 // filer metadata lives in a SHARED PostgreSQL provisioned via the
-// managed-postgres module (contrast fullSpecs, which uses Single/leveldb). It
+// managed-postgres module (contrast fullSpecs, which uses None/leveldb). It
 // needs a StorageClass AND the managed-postgres CRD, and skips when either is
 // missing.
 func fullHighRedundancySpecs() {
@@ -205,7 +205,7 @@ func fullHighRedundancySpecs() {
 
 			osc := newOSC(oscName, map[string]interface{}{
 				"type":       string(objectv1alpha1.ClusterTypeFull),
-				"redundancy": string(objectv1alpha1.RedundancyHighRedundancy),
+				"redundancy": string(objectv1alpha1.RedundancyHigh),
 				"storage": map[string]interface{}{
 					"size":  suiteCfg.oscSize,
 					"class": storageClass,
@@ -253,7 +253,7 @@ func fullHighRedundancySpecs() {
 				Expect(waitSecretGone(ctx, suiteCfg.namespace, secretName, 2*time.Minute)).To(Succeed())
 			}
 
-			_ = suiteDyn.Resource(bucketPolicyGVR).Delete(ctx, policyName(bucketName), metav1.DeleteOptions{})
+			_ = suiteDyn.Resource(bucketClaimPolicyGVR).Delete(ctx, policyName(bucketName), metav1.DeleteOptions{})
 			Expect(suiteDyn.Resource(bucketGVR).Delete(ctx, bucketName, metav1.DeleteOptions{})).To(Succeed())
 			Expect(waitResourceGone(ctx, bucketGVR, "", bucketName, resourceGoneTimeout)).To(Succeed())
 

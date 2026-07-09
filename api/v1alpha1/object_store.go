@@ -75,19 +75,20 @@ const (
 
 // RedundancyMode encodes the high-level fault-tolerance intent. The controller
 // maps it to backend-specific settings (replication factor / erasure coding).
-// +kubebuilder:validation:Enum=Single;Replicated;HighRedundancy
+// +kubebuilder:validation:Enum=None;Standard;High
 type RedundancyMode string
 
 const (
-	// RedundancySingle keeps a single copy (no redundancy).
-	RedundancySingle RedundancyMode = "Single"
+	// RedundancyNone keeps a single copy (no redundancy).
+	RedundancyNone RedundancyMode = "None"
 
-	// RedundancyReplicated keeps replicated copies across nodes/zones.
-	RedundancyReplicated RedundancyMode = "Replicated"
+	// RedundancyStandard keeps replicated copies across nodes/zones. This is
+	// the default when Redundancy is omitted.
+	RedundancyStandard RedundancyMode = "Standard"
 
-	// RedundancyHighRedundancy maximises durability (extra replicas or
-	// erasure coding) and requires more nodes.
-	RedundancyHighRedundancy RedundancyMode = "HighRedundancy"
+	// RedundancyHigh maximises durability (extra replicas or erasure coding)
+	// and requires more nodes.
+	RedundancyHigh RedundancyMode = "High"
 )
 
 // ClusterReclaimPolicy controls what happens to the backend data plane and its
@@ -145,11 +146,20 @@ type ObjectStoreSpec struct {
 
 // +k8s:deepcopy-gen=true
 type ObjectStoreStorageSpec struct {
-	// Size is the total usable capacity as a Kubernetes Quantity (BinarySI),
-	// e.g. "50Gi" or "2Ti". For type=System it is the capacity contributed
-	// per control-plane node.
+	// SizePerNode is the usable capacity provisioned per data-plane node as a
+	// Kubernetes Quantity (BinarySI), e.g. "50Gi" or "2Ti". The cluster-wide
+	// capacity is roughly SizePerNode multiplied by the node count. Defaults to
+	// 10Gi when unset.
 	// +optional
-	Size string `json:"size,omitempty"`
+	SizePerNode string `json:"sizePerNode,omitempty"`
+
+	// Nodes overrides the number of data-plane nodes (StatefulSet replicas for
+	// Lightweight / SeaweedFS volume servers for Full). When unset, the count is
+	// derived from Redundancy. Ignored for System (one pod per control-plane
+	// node) and Heavy (topology comes from the referenced Ceph cluster).
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	Nodes *int32 `json:"nodes,omitempty"`
 
 	// Class is the Kubernetes StorageClass used to provision PVCs. Required
 	// for Lightweight and Full; ignored for System (hostPath) and Heavy.

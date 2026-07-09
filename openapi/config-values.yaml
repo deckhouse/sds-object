@@ -7,7 +7,7 @@ properties:
       The built-in system object storage: a `System` ObjectStore
       (Garage on control-plane nodes) with a `system` Bucket for
       platform needs. The cluster redundancy follows the cluster HA mode
-      (`Replicated` when HA is enabled, otherwise `Single`).
+      (`Standard` when HA is enabled, otherwise `None`).
     properties:
       enabled:
         type: boolean
@@ -85,7 +85,7 @@ properties:
     description: |
       Settings of the sds-object-controller (reconciler for ObjectStore,
       Bucket, BucketAccess and
-      BucketPolicy CRs).
+      BucketClaimPolicy CRs).
     properties:
       resourcesManagement:
         description: |

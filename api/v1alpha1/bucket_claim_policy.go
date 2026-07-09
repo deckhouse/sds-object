@@ -20,7 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// BucketPolicy is a cluster-scoped CR that declares which namespaces may bind a
+// BucketClaimPolicy is a cluster-scoped CR that declares which namespaces may bind a
 // Shared (administrator-declared) Bucket via a brownfield BucketClaim
 // (spec.existingBucketName). Binding is deny-by-default: a brownfield claim is
 // only Bound when at least one policy for the target bucket matches the claim's
@@ -33,25 +33,25 @@ import (
 // +kubebuilder:object:root=true
 // +k8s:deepcopy-gen=true
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-type BucketPolicy struct {
+type BucketClaimPolicy struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   BucketPolicySpec    `json:"spec"`
-	Status *BucketPolicyStatus `json:"status,omitempty"`
+	Spec   BucketClaimPolicySpec    `json:"spec"`
+	Status *BucketClaimPolicyStatus `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +k8s:deepcopy-gen=true
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-type BucketPolicyList struct {
+type BucketClaimPolicyList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata"`
-	Items           []BucketPolicy `json:"items"`
+	Items           []BucketClaimPolicy `json:"items"`
 }
 
 // +k8s:deepcopy-gen=true
-type BucketPolicySpec struct {
+type BucketClaimPolicySpec struct {
 	// BucketRef is the name of the cluster-scoped Shared Bucket this policy
 	// governs. Immutable after creation.
 	// +kubebuilder:validation:Required
@@ -81,7 +81,7 @@ type NamespaceMatch struct {
 }
 
 // +k8s:deepcopy-gen=true
-type BucketPolicyStatus struct {
+type BucketClaimPolicyStatus struct {
 	// ObservedGeneration is the most recent .metadata.generation reconciled
 	// by the controller.
 	// +optional
@@ -102,11 +102,11 @@ type BucketPolicyStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 }
 
-// Well-known condition types for BucketPolicy.
+// Well-known condition types for BucketClaimPolicy.
 const (
-	BucketPolicyConditionReady = "Ready"
+	BucketClaimPolicyConditionReady = "Ready"
 )
 
-// BucketPolicyKind is the kind constant used for dynamic GVK
+// BucketClaimPolicyKind is the kind constant used for dynamic GVK
 // lookups.
-const BucketPolicyKind = "BucketPolicy"
+const BucketClaimPolicyKind = "BucketClaimPolicy"

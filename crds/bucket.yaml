@@ -30,7 +30,7 @@ spec:
             Consuming namespaces request scoped access and receive a
             credentials Secret via namespaced BucketAccess
             resources, and cross-namespace access is gated by cluster-scoped
-            BucketPolicy resources (deny-by-default).
+            BucketClaimPolicy resources (deny-by-default).
           required:
             - spec
           x-kubernetes-validations:
