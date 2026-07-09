@@ -94,10 +94,11 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 	if err := d.ensureSecret(ctx, cluster); err != nil {
 		return state, fmt.Errorf("ensure secret: %w", err)
 	}
-	rf, err := d.effectiveReplicationFactor(ctx, cluster)
+	rf, err := d.pinnedReplicationFactor(ctx, cluster)
 	if err != nil {
 		return state, fmt.Errorf("compute replication factor: %w", err)
 	}
+	cfgHash := configHash(renderConfig(rf))
 	if err := d.apply(ctx, cluster, buildConfigMap(cluster, d.namespace, rf)); err != nil {
 		return state, fmt.Errorf("ensure configmap: %w", err)
 	}
@@ -113,7 +114,7 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 
 	state.Endpoint = v1alpha1.EndpointStatus{Internal: s3Endpoint(cluster, d.namespace, d.clusterDomain), Region: "garage"}
 
-	workloadReady, workloadMsg, err := d.ensureWorkload(ctx, cluster)
+	workloadReady, workloadMsg, err := d.ensureWorkload(ctx, cluster, cfgHash)
 	if err != nil {
 		return state, err
 	}
@@ -135,19 +136,45 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 	return state, nil
 }
 
-// effectiveReplicationFactor returns the replication_factor to bake into
-// garage.toml. For System (a DaemonSet on control-plane nodes) it clamps the
-// intent to the number of control-plane nodes and to an odd value, so a
-// single-master cluster does not sit degraded forever on an unreachable factor.
-// Lightweight runs a StatefulSet with exactly replicationFactor replicas, so the
-// factor is always satisfiable and returned as-is.
-func (d *Driver) effectiveReplicationFactor(ctx context.Context, cluster *v1alpha1.ObjectStore) (int32, error) {
-	desired := replicationFactor(cluster)
+// pinnedReplicationFactor returns the replication_factor to bake into
+// garage.toml. Garage cannot change replication_factor on a live cluster, so it
+// is decided ONCE at cluster init and then pinned: the value is read back from
+// the running garage.toml on every subsequent reconcile and never recomputed
+// from the current node count. This keeps the factor stable across control-plane
+// node-count changes (e.g. masters going 3->1->3) — every node keeps the same
+// factor, no data-losing rf change is ever attempted, and the cluster merely
+// degrades to read-only (data intact) if the live node count drops below it.
+func (d *Driver) pinnedReplicationFactor(ctx context.Context, cluster *v1alpha1.ObjectStore) (int32, error) {
+	existing := &corev1.ConfigMap{}
+	err := d.client.Get(ctx, client.ObjectKey{Namespace: d.namespace, Name: configName(cluster)}, existing)
+	switch {
+	case err == nil:
+		if rf := replicationFactorFromConfigMap(existing); rf > 0 {
+			return rf, nil // already initialized: keep the pinned factor
+		}
+	case !apierrors.IsNotFound(err):
+		return 0, err
+	}
+	return d.initialReplicationFactor(ctx, cluster)
+}
+
+// initialReplicationFactor computes the factor to pin at first init: the
+// redundancy intent (for System always Standard=3, since redundancy is not
+// settable there) clamped to the data-plane node count at init.
+func (d *Driver) initialReplicationFactor(ctx context.Context, cluster *v1alpha1.ObjectStore) (int32, error) {
+	count, err := d.dataPlaneNodeCount(ctx, cluster)
+	if err != nil {
+		return 0, err
+	}
+	return clampRF(replicationFactor(cluster), count), nil
+}
+
+// dataPlaneNodeCount is the number of data-plane nodes at init: lightweightReplicas
+// for Lightweight (which spec.storage.nodes may override), or the number of
+// control-plane nodes for System (a DaemonSet, one pod per master).
+func (d *Driver) dataPlaneNodeCount(ctx context.Context, cluster *v1alpha1.ObjectStore) (int32, error) {
 	if cluster.Spec.Type != v1alpha1.ClusterTypeSystem {
-		// Lightweight runs exactly lightweightReplicas pods (which may be
-		// overridden by spec.storage.nodes), so clamp the factor to that count
-		// (odd) to keep it satisfiable.
-		return clampOdd(desired, lightweightReplicas(cluster)), nil
+		return lightweightReplicas(cluster), nil
 	}
 	// Read through the non-cached apiReader: a cache-backed List would start a
 	// cluster-wide Node informer (extra RBAC/watch on every Node) and, if the
@@ -160,7 +187,7 @@ func (d *Driver) effectiveReplicationFactor(ctx context.Context, cluster *v1alph
 	if n < 1 {
 		n = 1
 	}
-	return clampOdd(desired, n), nil
+	return n, nil
 }
 
 // DeleteCluster relies on owner-reference GC for the workloads and Services.
@@ -218,9 +245,9 @@ func (d *Driver) ensureSecret(ctx context.Context, cluster *v1alpha1.ObjectStore
 
 // ensureWorkload creates/updates the profile workload (DaemonSet for System,
 // StatefulSet otherwise) and reports whether its pods are ready.
-func (d *Driver) ensureWorkload(ctx context.Context, cluster *v1alpha1.ObjectStore) (bool, string, error) {
+func (d *Driver) ensureWorkload(ctx context.Context, cluster *v1alpha1.ObjectStore, cfgHash string) (bool, string, error) {
 	if cluster.Spec.Type == v1alpha1.ClusterTypeSystem {
-		ds := buildDaemonSet(cluster, d.namespace, d.image)
+		ds := buildDaemonSet(cluster, d.namespace, d.image, cfgHash)
 		if err := d.apply(ctx, cluster, ds); err != nil {
 			return false, "", fmt.Errorf("ensure daemonset: %w", err)
 		}
@@ -232,7 +259,7 @@ func (d *Driver) ensureWorkload(ctx context.Context, cluster *v1alpha1.ObjectSto
 		return true, "", nil
 	}
 
-	sts := buildStatefulSet(cluster, d.namespace, d.image)
+	sts := buildStatefulSet(cluster, d.namespace, d.image, cfgHash)
 	if err := d.apply(ctx, cluster, sts); err != nil {
 		return false, "", fmt.Errorf("ensure statefulset: %w", err)
 	}

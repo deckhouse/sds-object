@@ -17,7 +17,11 @@ limitations under the License.
 package garage
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"regexp"
+	"strconv"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -48,9 +52,14 @@ const (
 	registryPullSecret = "deckhouse-registry"
 
 	// controlPlaneNodeLabel marks control-plane nodes; the System profile
-	// schedules its DaemonSet there and the replication factor is clamped to the
-	// count of nodes carrying it.
+	// schedules its DaemonSet there and the initial replication factor is clamped
+	// to the count of nodes carrying it.
 	controlPlaneNodeLabel = "node-role.kubernetes.io/control-plane"
+
+	// annConfigHash carries a short hash of garage.toml on the pod template so
+	// the workload rolls (and every node converges to the same config) when the
+	// config changes.
+	annConfigHash = "storage.deckhouse.io/config-hash"
 )
 
 // resourceName is the common name/prefix for every object backing a cluster.
@@ -93,10 +102,12 @@ func adminEndpoint(cluster *v1alpha1.ObjectStore, namespace, clusterDomain strin
 }
 
 // replicationFactor maps the high-level redundancy intent to the desired Garage
-// replication_factor. The empty value defaults to Replicated. This is the
-// intent only; for System it must be clamped to the number of control-plane
-// nodes (see Driver.effectiveReplicationFactor) — Garage stays degraded if the
-// factor exceeds the node count.
+// replication_factor: None=1, Standard (default)=3, High=5. This is only the
+// initial intent used at cluster creation; the effective factor is clamped to
+// the node count and then PINNED for the cluster's lifetime (see
+// Driver.pinnedReplicationFactor). Garage does not support changing
+// replication_factor on a live cluster, so it must never be recomputed from the
+// current node count afterwards.
 func replicationFactor(cluster *v1alpha1.ObjectStore) int32 {
 	switch cluster.Spec.Redundancy {
 	case v1alpha1.RedundancyNone:
@@ -108,21 +119,50 @@ func replicationFactor(cluster *v1alpha1.ObjectStore) int32 {
 	}
 }
 
-// clampOdd caps desired at the available node count and rounds down to the
-// nearest odd value (Garage wants an odd replication_factor for quorum), with a
-// floor of 1. E.g. clampOdd(3, 1)=1, clampOdd(5, 3)=3, clampOdd(3, 2)=1.
-func clampOdd(desired, nodes int32) int32 {
+// clampRF caps desired at the available node count, with a floor of 1. Garage
+// accepts any replication factor in [1, nodeCount] (2 is a valid, supported
+// mode: tolerates one node down, read-only while degraded), so no odd rounding
+// is applied. E.g. clampRF(3, 1)=1, clampRF(3, 2)=2, clampRF(5, 4)=4.
+func clampRF(desired, nodes int32) int32 {
 	rf := desired
 	if nodes < rf {
 		rf = nodes
-	}
-	if rf%2 == 0 {
-		rf--
 	}
 	if rf < 1 {
 		rf = 1
 	}
 	return rf
+}
+
+// replicationFactorRE extracts replication_factor from an existing garage.toml,
+// so a running cluster's (pinned) factor can be read back rather than
+// recomputed.
+var replicationFactorRE = regexp.MustCompile(`(?m)^replication_factor\s*=\s*(\d+)`)
+
+// replicationFactorFromConfigMap returns the replication_factor recorded in an
+// existing garage.toml ConfigMap, or 0 when the ConfigMap is nil or the value is
+// absent/unparseable.
+func replicationFactorFromConfigMap(cm *corev1.ConfigMap) int32 {
+	if cm == nil {
+		return 0
+	}
+	m := replicationFactorRE.FindStringSubmatch(cm.Data[configFileName])
+	if len(m) != 2 {
+		return 0
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil || n < 1 {
+		return 0
+	}
+	return int32(n)
+}
+
+// configHash is a short content hash of garage.toml, stamped onto the pod
+// template so the workload rolls when the config changes (Garage reads the file
+// only at startup, and every node must run the same replication_factor).
+func configHash(cfg string) string {
+	sum := sha256.Sum256([]byte(cfg))
+	return hex.EncodeToString(sum[:])[:16]
 }
 
 // lightweightReplicas is the StatefulSet replica count for the Lightweight
@@ -329,7 +369,7 @@ func ptrInt64(v int64) *int64 { return &v }
 // buildStatefulSet returns the StatefulSet for the Lightweight/Full profiles
 // (PVC-backed). Full currently reuses the Garage layout until the SeaweedFS
 // driver lands.
-func buildStatefulSet(cluster *v1alpha1.ObjectStore, namespace, image string) *appsv1.StatefulSet {
+func buildStatefulSet(cluster *v1alpha1.ObjectStore, namespace, image, cfgHash string) *appsv1.StatefulSet {
 	replicas := lightweightReplicas(cluster)
 	spec := podSpec(cluster, image, nil) // data comes from volumeClaimTemplates
 
@@ -354,8 +394,11 @@ func buildStatefulSet(cluster *v1alpha1.ObjectStore, namespace, image string) *a
 			Replicas:    &replicas,
 			Selector:    &metav1.LabelSelector{MatchLabels: commonLabels(cluster)},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: commonLabels(cluster)},
-				Spec:       spec,
+				ObjectMeta: metav1.ObjectMeta{
+					Labels:      commonLabels(cluster),
+					Annotations: map[string]string{annConfigHash: cfgHash},
+				},
+				Spec: spec,
 			},
 			VolumeClaimTemplates: []corev1.PersistentVolumeClaim{
 				{
@@ -375,7 +418,7 @@ func buildStatefulSet(cluster *v1alpha1.ObjectStore, namespace, image string) *a
 
 // buildDaemonSet returns the DaemonSet for the System profile (hostPath on
 // control-plane nodes).
-func buildDaemonSet(cluster *v1alpha1.ObjectStore, namespace, image string) *appsv1.DaemonSet {
+func buildDaemonSet(cluster *v1alpha1.ObjectStore, namespace, image, cfgHash string) *appsv1.DaemonSet {
 	hostPathType := corev1.HostPathDirectoryOrCreate
 	dataVolume := &corev1.Volume{
 		Name: "data",
@@ -404,8 +447,11 @@ func buildDaemonSet(cluster *v1alpha1.ObjectStore, namespace, image string) *app
 		Spec: appsv1.DaemonSetSpec{
 			Selector: &metav1.LabelSelector{MatchLabels: commonLabels(cluster)},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: commonLabels(cluster)},
-				Spec:       spec,
+				ObjectMeta: metav1.ObjectMeta{
+					Labels:      commonLabels(cluster),
+					Annotations: map[string]string{annConfigHash: cfgHash},
+				},
+				Spec: spec,
 			},
 		},
 	}

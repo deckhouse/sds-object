@@ -81,20 +81,31 @@ func TestRenderConfig(t *testing.T) {
 	}
 }
 
-func TestClampOdd(t *testing.T) {
+func TestClampRF(t *testing.T) {
 	cases := []struct{ desired, nodes, want int32 }{
 		{1, 1, 1},
 		{3, 1, 1}, // one master -> single copy
-		{3, 2, 1}, // two nodes -> nearest odd below
+		{3, 2, 2}, // two nodes -> rf=2 (valid Garage mode)
 		{3, 3, 3},
-		{5, 3, 3}, // HighRedundancy on three masters
+		{5, 3, 3}, // High on three masters
+		{5, 4, 4}, // no odd rounding
 		{5, 5, 5},
 		{3, 0, 1}, // floor
 	}
 	for _, c := range cases {
-		if got := clampOdd(c.desired, c.nodes); got != c.want {
-			t.Errorf("clampOdd(%d, %d)=%d, want %d", c.desired, c.nodes, got, c.want)
+		if got := clampRF(c.desired, c.nodes); got != c.want {
+			t.Errorf("clampRF(%d, %d)=%d, want %d", c.desired, c.nodes, got, c.want)
 		}
+	}
+}
+
+func TestReplicationFactorFromConfigMap(t *testing.T) {
+	cm := buildConfigMap(cluster("shared", ""), "d8-sds-object", 2)
+	if got := replicationFactorFromConfigMap(cm); got != 2 {
+		t.Errorf("replicationFactorFromConfigMap=%d, want 2", got)
+	}
+	if got := replicationFactorFromConfigMap(nil); got != 0 {
+		t.Errorf("replicationFactorFromConfigMap(nil)=%d, want 0", got)
 	}
 }
 
