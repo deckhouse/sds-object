@@ -18,9 +18,10 @@ limitations under the License.
 // backend (the System and Lightweight cluster profiles).
 //
 // It reconciles the Garage data plane — the ServiceAccount, RPC/admin secret,
-// garage.toml ConfigMap, the workload (DaemonSet on control-plane + hostPath for
-// System, StatefulSet + PVC for Lightweight) and the S3/RPC Services — then
-// connects the RPC peers and assigns the cluster layout via the Garage admin API
+// garage.toml ConfigMap, the workload (a StatefulSet: hostPath with a fixed
+// replica count on control-plane nodes for System, PVC-backed for Lightweight)
+// and the S3/RPC Services — then connects the RPC peers and assigns the cluster
+// layout via the Garage admin API
 // (see mesh.go), and provisions buckets/access keys (buckets.go, access.go).
 package garage
 
@@ -114,6 +115,14 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 
 	state.Endpoint = v1alpha1.EndpointStatus{Internal: s3Endpoint(cluster, d.namespace, d.clusterDomain), Region: "garage"}
 
+	// System is backed by node-sticky local PVs the controller provisions itself;
+	// the pool must exist before the StatefulSet's PVCs try to bind.
+	if cluster.Spec.Type == v1alpha1.ClusterTypeSystem {
+		if err := d.ensureSystemLocalPVs(ctx, cluster); err != nil {
+			return state, fmt.Errorf("ensure system local PVs: %w", err)
+		}
+	}
+
 	workloadReady, workloadMsg, err := d.ensureWorkload(ctx, cluster, cfgHash)
 	if err != nil {
 		return state, err
@@ -155,39 +164,15 @@ func (d *Driver) pinnedReplicationFactor(ctx context.Context, cluster *v1alpha1.
 	case !apierrors.IsNotFound(err):
 		return 0, err
 	}
-	return d.initialReplicationFactor(ctx, cluster)
+	return initialReplicationFactor(cluster), nil
 }
 
 // initialReplicationFactor computes the factor to pin at first init: the
 // redundancy intent (for System always Standard=3, since redundancy is not
-// settable there) clamped to the data-plane node count at init.
-func (d *Driver) initialReplicationFactor(ctx context.Context, cluster *v1alpha1.ObjectStore) (int32, error) {
-	count, err := d.dataPlaneNodeCount(ctx, cluster)
-	if err != nil {
-		return 0, err
-	}
-	return clampRF(replicationFactor(cluster), count), nil
-}
-
-// dataPlaneNodeCount is the number of data-plane nodes at init: lightweightReplicas
-// for Lightweight (which spec.storage.nodes may override), or the number of
-// control-plane nodes for System (a DaemonSet, one pod per master).
-func (d *Driver) dataPlaneNodeCount(ctx context.Context, cluster *v1alpha1.ObjectStore) (int32, error) {
-	if cluster.Spec.Type != v1alpha1.ClusterTypeSystem {
-		return lightweightReplicas(cluster), nil
-	}
-	// Read through the non-cached apiReader: a cache-backed List would start a
-	// cluster-wide Node informer (extra RBAC/watch on every Node) and, if the
-	// controller lacks node list/watch, block the reconcile instead of erroring.
-	nodes := &corev1.NodeList{}
-	if err := d.apiReader.List(ctx, nodes, client.HasLabels{controlPlaneNodeLabel}); err != nil {
-		return 0, err
-	}
-	n := int32(len(nodes.Items))
-	if n < 1 {
-		n = 1
-	}
-	return n, nil
+// settable there) clamped to the desired replica count. For System the count is
+// fixed (systemReplicas), so the factor is independent of the master count.
+func initialReplicationFactor(cluster *v1alpha1.ObjectStore) int32 {
+	return clampRF(replicationFactor(cluster), desiredReplicas(cluster))
 }
 
 // DeleteCluster relies on owner-reference GC for the workloads and Services.
@@ -243,23 +228,14 @@ func (d *Driver) ensureSecret(ctx context.Context, cluster *v1alpha1.ObjectStore
 	return d.client.Create(ctx, secret)
 }
 
-// ensureWorkload creates/updates the profile workload (DaemonSet for System,
-// StatefulSet otherwise) and reports whether its pods are ready.
+// ensureWorkload creates/updates the profile StatefulSet (hostPath, fixed
+// replicas for System; PVC-backed for Lightweight/Full) and reports whether its
+// pods are ready.
 func (d *Driver) ensureWorkload(ctx context.Context, cluster *v1alpha1.ObjectStore, cfgHash string) (bool, string, error) {
-	if cluster.Spec.Type == v1alpha1.ClusterTypeSystem {
-		ds := buildDaemonSet(cluster, d.namespace, d.image, cfgHash)
-		if err := d.apply(ctx, cluster, ds); err != nil {
-			return false, "", fmt.Errorf("ensure daemonset: %w", err)
-		}
-		desired := ds.Status.DesiredNumberScheduled
-		ready := ds.Status.NumberReady
-		if desired == 0 || ready < desired {
-			return false, fmt.Sprintf("Garage DaemonSet rolling out (%d/%d pods ready)", ready, desired), nil
-		}
-		return true, "", nil
-	}
-
 	sts := buildStatefulSet(cluster, d.namespace, d.image, cfgHash)
+	if cluster.Spec.Type == v1alpha1.ClusterTypeSystem {
+		sts = buildSystemStatefulSet(cluster, d.namespace, d.image, cfgHash)
+	}
 	if err := d.apply(ctx, cluster, sts); err != nil {
 		return false, "", fmt.Errorf("ensure statefulset: %w", err)
 	}
@@ -306,10 +282,6 @@ func mergeDesired(live, desired client.Object) {
 		d := desired.(*appsv1.StatefulSet)
 		l.Labels = d.Labels
 		l.Spec.Replicas = d.Spec.Replicas
-		l.Spec.Template = d.Spec.Template
-	case *appsv1.DaemonSet:
-		d := desired.(*appsv1.DaemonSet)
-		l.Labels = d.Labels
 		l.Spec.Template = d.Spec.Template
 	}
 }

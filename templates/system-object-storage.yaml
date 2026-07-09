@@ -2,17 +2,23 @@
   Built-in system object storage.
 
   Ships a cluster-scoped `system` ObjectStore (type System — Garage on
-  control-plane nodes with hostPath) plus a `system` Shared Bucket for platform
-  needs, and a BucketClaimPolicy granting d8-* module namespaces the right to bind it
-  via a brownfield BucketClaim (binding is deny-by-default otherwise).
+  control-plane nodes with node-sticky local PVs) plus a `system` Shared Bucket
+  for platform needs, and a BucketClaimPolicy granting d8-* module namespaces the
+  right to bind it via a brownfield BucketClaim (binding is deny-by-default
+  otherwise).
 
-  The Garage replication factor is decided once at cluster init as
-  min(3, control-plane node count) — rf=1 on a single-master cluster, rf=3 on a
-  3-master HA cluster — and then PINNED (Garage cannot change it on a live
-  cluster). spec.redundancy is not set (and not allowed) for System. Later
-  control-plane changes only reshape the layout at that fixed factor: a 3-master
-  store keeps serving at 2 masters and degrades read-only (data intact) at 1,
-  recovering when masters return.
+  System runs a FIXED 3-replica Garage (a StatefulSet), independent of the
+  control-plane node count: replicas spread one-per-node across masters when
+  several exist and co-locate on the single master otherwise. Storage is a
+  per-replica node-sticky local PV (managed StorageClass sds-object-system-local,
+  a controller-provisioned pool of nodeAffinity-pinned PVs), so a replica returns
+  to its node — hence its data — after a restart. The replication factor is pinned
+  at 3 (spec.redundancy is not set / not allowed for System). Because three Garage
+  nodes always run, the quorum tracks the pod count, not the master count: the
+  store keeps serving read-write across master-count changes (3<->2<->1), and the
+  layout is reconciled as replicas move and rejoin. Co-located replicas share one
+  disk, so hardware-level redundancy is only realised while masters allow
+  spreading (see DESIGN).
 */ -}}
 {{- if .Values.sdsObject.systemBucket.enabled }}
 apiVersion: storage.deckhouse.io/v1alpha1

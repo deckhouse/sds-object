@@ -1,0 +1,22 @@
+{{- /*
+  StorageClass backing the built-in System ObjectStore's node-sticky local
+  PersistentVolumes.
+
+  no-provisioner + WaitForFirstConsumer: PVs are pre-created by the controller
+  (a static pool of hostPath-backed, nodeAffinity-pinned PVs on control-plane
+  nodes — see images/controller/internal/backend/garage). Late binding lets the
+  scheduler pick the node (honouring the System pods' soft anti-affinity) before
+  a PVC binds to a PV on that node, so a replica sticks to its node and finds its
+  data again after a restart. Retain never wipes data on PVC/PV deletion.
+*/ -}}
+{{- if .Values.sdsObject.systemBucket.enabled }}
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: sds-object-system-local
+  {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain
+allowVolumeExpansion: false
+{{- end }}

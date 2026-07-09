@@ -58,7 +58,7 @@ profile so CI needs no extra storage modules:
 
 | `E2E_OSC_TYPE` | Backend | Extra requirements |
 |----------------|---------|--------------------|
-| `System` (default) | Garage (DaemonSet on control-plane, hostPath) | none |
+| `System` (default) | Garage (StatefulSet, fixed 3 replicas on control-plane, node-sticky local PV) | none |
 | `Lightweight` | Garage (StatefulSet + PVC) | `E2E_STORAGE_CLASS` + a CSI/local-volume module enabled in `cluster_config.yml` |
 | `Full` | SeaweedFS | `E2E_STORAGE_CLASS` + `managed-postgres` module |
 | `Heavy` | Ceph RGW | `sds-elastic` module + a Ready `ElasticCluster` (`E2E_ELASTIC_CLUSTER_REF`) |

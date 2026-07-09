@@ -45,7 +45,7 @@ import (
 //		BackendReady -> EndpointReady -> Ready
 //
 //	  - BackendReady covers the data-plane: the backend.Driver brings up the
-//	    workloads (Garage DaemonSet/StatefulSet, SeaweedFS, Ceph RGW) and
+//	    workloads (Garage StatefulSet, SeaweedFS, Ceph RGW) and
 //	    reports readiness.
 //	  - EndpointReady is satisfied once the backend reports an S3 endpoint.
 //

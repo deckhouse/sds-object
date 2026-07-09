@@ -23,6 +23,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -35,7 +36,7 @@ import (
 // sdsObject.systemBucket.enabled config value (default true). It asserts the
 // three CRs exist and carry the expected shape:
 //   - a cluster-scoped `system` ObjectStore of type System, whose
-//     redundancy is not set on System (derived from control-plane node count),
+//     redundancy is not set on System (it runs a fixed 3-replica Garage),
 //     with reclaimPolicy Retain;
 //   - a cluster-scoped `system` Bucket referencing it;
 //   - a `system-d8-namespaces` BucketClaimPolicy allowing the d8-*
@@ -73,7 +74,7 @@ func systemBucketSpecs() {
 			reclaim, _, _ := unstructured.NestedString(osc.Object, "spec", "reclaimPolicy")
 			Expect(reclaim).To(Equal(string(objectv1alpha1.ClusterReclaimRetain)))
 
-			By("asserting redundancy is not set on the System store (derived from the control-plane node count)")
+			By("asserting redundancy is not set on the System store (it runs a fixed 3-replica Garage)")
 			_, hasRedundancy, _ := unstructured.NestedString(osc.Object, "spec", "redundancy")
 			Expect(hasRedundancy).To(BeFalse(), "spec.redundancy must not be set on a System ObjectStore")
 
@@ -95,22 +96,30 @@ func systemBucketSpecs() {
 			Expect(waitOSCReady(ctx, systemCluster)).To(Succeed())
 			Expect(waitOSBReady(ctx, systemBucket)).To(Succeed())
 
-			By("asserting the replication factor is pinned to min(3, control-plane nodes)")
-			masters, err := controlPlaneNodeCount(ctx)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(masters).To(BeNumerically(">=", 1))
-			wantRF := masters
-			if wantRF > 3 {
-				wantRF = 3
-			}
+			By("asserting the replication factor is pinned to 3 (fixed, independent of the master count)")
 			rf, err := garageReplicationFactor(ctx, systemCluster)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(rf).To(Equal(wantRF), "System rf = min(3, control-plane nodes)")
+			Expect(rf).To(Equal(3), "System rf is pinned to 3")
 
-			By("asserting the System DaemonSet carries a config-hash annotation")
-			ds, err := suiteClientset.AppsV1().DaemonSets(moduleNS).Get(ctx, systemCluster+"-garage", metav1.GetOptions{})
-			Expect(err).NotTo(HaveOccurred(), "get Garage DaemonSet")
-			Expect(ds.Spec.Template.Annotations).To(HaveKey("storage.deckhouse.io/config-hash"))
+			By("asserting the System StatefulSet runs a fixed 3 replicas and carries a config-hash annotation")
+			sts, err := suiteClientset.AppsV1().StatefulSets(moduleNS).Get(ctx, systemCluster+"-garage", metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred(), "get Garage StatefulSet")
+			Expect(sts.Spec.Replicas).NotTo(BeNil())
+			Expect(*sts.Spec.Replicas).To(Equal(int32(3)), "System runs a fixed 3 replicas")
+			Expect(sts.Spec.Template.Annotations).To(HaveKey("storage.deckhouse.io/config-hash"))
+			Expect(sts.Spec.VolumeClaimTemplates).To(HaveLen(1), "System is PVC-backed (node-sticky local PV)")
+
+			By("asserting the managed local StorageClass exists and the 3 replica PVCs are bound")
+			_, err = suiteClientset.StorageV1().StorageClasses().Get(ctx, "sds-object-system-local", metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred(), "get managed local StorageClass")
+			pvcs, err := suiteClientset.CoreV1().PersistentVolumeClaims(moduleNS).List(ctx, metav1.ListOptions{
+				LabelSelector: "storage.deckhouse.io/object-store=" + systemCluster,
+			})
+			Expect(err).NotTo(HaveOccurred(), "list System PVCs")
+			Expect(pvcs.Items).To(HaveLen(3), "one node-sticky PVC per replica")
+			for _, pvc := range pvcs.Items {
+				Expect(pvc.Status.Phase).To(Equal(corev1.ClaimBound), "PVC %s must be bound to a local PV", pvc.Name)
+			}
 
 			DeferCleanup(func() {
 				bg := context.Background()

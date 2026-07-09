@@ -470,15 +470,6 @@ func garageReplicationFactor(ctx context.Context, storeName string) (int, error)
 	return strconv.Atoi(m[1])
 }
 
-// controlPlaneNodeCount counts nodes carrying the control-plane role label.
-func controlPlaneNodeCount(ctx context.Context) (int, error) {
-	nodes, err := suiteClientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{LabelSelector: "node-role.kubernetes.io/control-plane"})
-	if err != nil {
-		return 0, err
-	}
-	return len(nodes.Items), nil
-}
-
 // buildOSBPolicy renders a cluster-scoped BucketClaimPolicy that allows
 // the given namespaces (by exact name) to request access to bucketRef. Access is
 // deny-by-default, so a matching policy must exist before an
