@@ -64,6 +64,10 @@ spec:
                   message: "spec.elasticClusterRef is only allowed when spec.type is Heavy."
                 - rule: "!(self.type in ['Lightweight', 'Full']) || (has(self.storage) && has(self.storage.class) && size(self.storage.class) > 0)"
                   message: "spec.storage.class is required when spec.type is Lightweight or Full."
+                - rule: "self.type != 'System' || !has(self.redundancy)"
+                  message: "spec.redundancy must not be set when spec.type is System (it is derived from the control-plane node count)."
+                - rule: "self.type != 'System' || !has(self.storage) || !has(self.storage.sizePerNode)"
+                  message: "spec.storage.sizePerNode must not be set when spec.type is System (System uses hostPath on control-plane nodes)."
               properties:
                 type:
                   type: string
@@ -99,7 +103,8 @@ spec:
                         Usable capacity provisioned per data-plane node as a
                         Kubernetes Quantity (BinarySI), e.g. `50Gi` or `2Ti`. The
                         cluster-wide capacity is roughly `sizePerNode` times the
-                        node count. Defaults to `10Gi` when unset.
+                        node count. Defaults to `10Gi` when unset. Must not be set
+                        for `System` (hostPath on control-plane nodes).
                       pattern: '^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$'
                     nodes:
                       type: integer
@@ -133,8 +138,9 @@ spec:
                       coding), requires more nodes.
 
                     Immutable after creation: changing the replication factor on
-                    a live cluster is not supported. For `System` the effective
-                    factor is capped by the number of control-plane nodes.
+                    a live cluster is not supported. Must not be set for `System`:
+                    the factor is derived from (and capped by) the number of
+                    control-plane nodes.
                   enum:
                     - None
                     - Standard

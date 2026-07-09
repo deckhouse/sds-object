@@ -6,9 +6,11 @@
   needs, and a BucketClaimPolicy granting d8-* module namespaces the right to bind it
   via a brownfield BucketClaim (binding is deny-by-default otherwise).
 
-  The ObjectStore redundancy — and therefore the number of Garage data-plane
-  replicas — follows the cluster HA mode: `Standard` (rf=3 across the 3
-  control-plane nodes) when HA is enabled, otherwise `None` (rf=1).
+  The number of Garage data-plane replicas is derived automatically from the
+  control-plane node count (spec.redundancy is not set — and not allowed — for
+  System): the effective replication factor is clamped to the number of
+  control-plane nodes (rounded to an odd value), i.e. rf=3 on a 3-master HA
+  cluster and rf=1 on a single-master cluster.
 */ -}}
 {{- if .Values.sdsObject.systemBucket.enabled }}
 apiVersion: storage.deckhouse.io/v1alpha1
@@ -18,7 +20,6 @@ metadata:
   {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
 spec:
   type: System
-  redundancy: {{ include "helm_lib_is_ha_to_value" (list . "Standard" "None") | trim }}
   reclaimPolicy: Retain
 ---
 apiVersion: storage.deckhouse.io/v1alpha1

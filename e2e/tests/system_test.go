@@ -35,7 +35,7 @@ import (
 // sdsObject.systemBucket.enabled config value (default true). It asserts the
 // three CRs exist and carry the expected shape:
 //   - a cluster-scoped `system` ObjectStore of type System, whose
-//     redundancy follows the cluster HA mode (Standard in HA, else None),
+//     redundancy is not set on System (derived from control-plane node count),
 //     with reclaimPolicy Retain;
 //   - a cluster-scoped `system` Bucket referencing it;
 //   - a `system-d8-namespaces` BucketClaimPolicy allowing the d8-*
@@ -73,12 +73,9 @@ func systemBucketSpecs() {
 			reclaim, _, _ := unstructured.NestedString(osc.Object, "spec", "reclaimPolicy")
 			Expect(reclaim).To(Equal(string(objectv1alpha1.ClusterReclaimRetain)))
 
-			By("asserting redundancy follows the HA mode (Standard or None)")
-			redundancy, _, _ := unstructured.NestedString(osc.Object, "spec", "redundancy")
-			Expect(redundancy).To(Or(
-				Equal(string(objectv1alpha1.RedundancyStandard)),
-				Equal(string(objectv1alpha1.RedundancyNone)),
-			), "system cluster redundancy is HA-dependent")
+			By("asserting redundancy is not set on the System store (derived from the control-plane node count)")
+			_, hasRedundancy, _ := unstructured.NestedString(osc.Object, "spec", "redundancy")
+			Expect(hasRedundancy).To(BeFalse(), "spec.redundancy must not be set on a System ObjectStore")
 
 			By("asserting the system Bucket references the system cluster")
 			osb, err := suiteDyn.Resource(bucketGVR).Get(ctx, systemBucket, metav1.GetOptions{})

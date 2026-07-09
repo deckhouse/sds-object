@@ -15,7 +15,6 @@ metadata:
   name: system
 spec:
   type: System
-  redundancy: None
   reclaimPolicy: Delete
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
