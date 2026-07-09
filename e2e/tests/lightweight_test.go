@@ -64,13 +64,14 @@ func lightweightSpecs() {
 			ctx, cancel := context.WithTimeout(context.Background(), suiteCfg.oscReadyTimeout+2*time.Minute)
 			defer cancel()
 
-			By("creating Lightweight ObjectStore " + oscName)
+			By("creating Lightweight ObjectStore " + oscName + " with spec.storage.nodes=2")
 			osc := newOSC(oscName, map[string]interface{}{
 				"type":       string(objectv1alpha1.ClusterTypeLightweight),
-				"redundancy": string(objectv1alpha1.RedundancyNone),
+				"redundancy": string(objectv1alpha1.RedundancyStandard),
 				"storage": map[string]interface{}{
 					"sizePerNode": suiteCfg.oscSize,
 					"class":       storageClass,
+					"nodes":       int64(2),
 				},
 			})
 			Expect(createOSC(ctx, osc)).To(Succeed())
@@ -85,6 +86,20 @@ func lightweightSpecs() {
 			endpoint, err := getStringField(ctx, objectStoreGVR, "", oscName, "status", "endpoint", "internal")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(endpoint).NotTo(BeEmpty())
+
+			By("asserting spec.storage.nodes drove 2 data-plane replicas")
+			sts, err := suiteClientset.AppsV1().StatefulSets(moduleNS).Get(ctx, oscName+"-garage", metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred(), "get Garage StatefulSet")
+			Expect(sts.Spec.Replicas).NotTo(BeNil())
+			Expect(*sts.Spec.Replicas).To(Equal(int32(2)), "spec.storage.nodes=2 -> 2 replicas")
+
+			By("asserting the replication factor is pinned to clampRF(Standard=3, nodes=2)=2")
+			rf, err := garageReplicationFactor(ctx, oscName)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(rf).To(Equal(2))
+
+			By("asserting the pod template carries a config-hash annotation")
+			Expect(sts.Spec.Template.Annotations).To(HaveKey("storage.deckhouse.io/config-hash"))
 		})
 
 		It("provisions a bucket, access + policy and a complete credentials Secret", func() {

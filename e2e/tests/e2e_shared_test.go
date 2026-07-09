@@ -20,6 +20,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -435,6 +437,46 @@ func buildBucketClaim(name, ns, existingBucketName string) *unstructured.Unstruc
 func createBucketClaim(ctx context.Context, u *unstructured.Unstructured) error {
 	_, err := suiteDyn.Resource(bucketClaimGVR).Namespace(u.GetNamespace()).Create(ctx, u, metav1.CreateOptions{})
 	return err
+}
+
+// buildGreenfieldClaim renders a namespaced greenfield BucketClaim: no
+// existingBucketName, so the controller provisions a new private Bucket in
+// objectStoreRef, owned by the claim (reserved-prefix name, origin=BucketClaim).
+func buildGreenfieldClaim(name, ns, objectStoreRef string, reclaim objectv1alpha1.BucketReclaimPolicy) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(schema.GroupVersionKind{Group: apiGroup, Version: apiVersion, Kind: objectv1alpha1.BucketClaimKind})
+	u.SetName(name)
+	u.SetNamespace(ns)
+	u.Object["spec"] = map[string]interface{}{
+		"objectStoreRef": objectStoreRef,
+		"reclaimPolicy":  string(reclaim),
+	}
+	return u
+}
+
+var e2eReplicationFactorRE = regexp.MustCompile(`(?m)^replication_factor\s*=\s*(\d+)`)
+
+// garageReplicationFactor reads the pinned replication_factor from the Garage
+// garage.toml ConfigMap of the given ObjectStore (in the module namespace).
+func garageReplicationFactor(ctx context.Context, storeName string) (int, error) {
+	cm, err := suiteClientset.CoreV1().ConfigMaps(moduleNS).Get(ctx, storeName+"-garage-config", metav1.GetOptions{})
+	if err != nil {
+		return 0, err
+	}
+	m := e2eReplicationFactorRE.FindStringSubmatch(cm.Data["garage.toml"])
+	if len(m) != 2 {
+		return 0, fmt.Errorf("replication_factor not found in %s-garage-config", storeName)
+	}
+	return strconv.Atoi(m[1])
+}
+
+// controlPlaneNodeCount counts nodes carrying the control-plane role label.
+func controlPlaneNodeCount(ctx context.Context) (int, error) {
+	nodes, err := suiteClientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{LabelSelector: "node-role.kubernetes.io/control-plane"})
+	if err != nil {
+		return 0, err
+	}
+	return len(nodes.Items), nil
 }
 
 // buildOSBPolicy renders a cluster-scoped BucketClaimPolicy that allows

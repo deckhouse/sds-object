@@ -95,6 +95,23 @@ func systemBucketSpecs() {
 			Expect(waitOSCReady(ctx, systemCluster)).To(Succeed())
 			Expect(waitOSBReady(ctx, systemBucket)).To(Succeed())
 
+			By("asserting the replication factor is pinned to min(3, control-plane nodes)")
+			masters, err := controlPlaneNodeCount(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(masters).To(BeNumerically(">=", 1))
+			wantRF := masters
+			if wantRF > 3 {
+				wantRF = 3
+			}
+			rf, err := garageReplicationFactor(ctx, systemCluster)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(rf).To(Equal(wantRF), "System rf = min(3, control-plane nodes)")
+
+			By("asserting the System DaemonSet carries a config-hash annotation")
+			ds, err := suiteClientset.AppsV1().DaemonSets(moduleNS).Get(ctx, systemCluster+"-garage", metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred(), "get Garage DaemonSet")
+			Expect(ds.Spec.Template.Annotations).To(HaveKey("storage.deckhouse.io/config-hash"))
+
 			DeferCleanup(func() {
 				bg := context.Background()
 				_ = suiteDyn.Resource(bucketAccessGVR).Namespace(suiteCfg.namespace).Delete(bg, testAccess, metav1.DeleteOptions{})

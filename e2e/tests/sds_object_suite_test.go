@@ -83,6 +83,7 @@ var _ = Describe("sds-object e2e", Ordered, ContinueOnFailure, func() {
 	createSpecs()             // create_test.go: OSC -> Ready, OB -> Ready, creds Secret, S3 round-trip
 	validationSpecs()         // validation_test.go: webhook + CEL admission guards
 	accessSpecs()             // access_test.go: deny-by-default + revocation, regexp policy, key rotation, ReadOnly, cross-namespace
+	greenfieldSpecs()         // greenfield_test.go: self-service claim provisions a private bucket, capture guard, finalizer gate
 	systemBucketSpecs()       // system_test.go: built-in system OSCluster+OSB+policy shipped by templates
 	lightweightSpecs()        // lightweight_test.go: Lightweight (Garage on PVC) create -> bucket -> round-trip -> delete
 	fullSpecs()               // full_test.go: Full (SeaweedFS, None/leveldb) create -> bucket -> round-trip -> delete
