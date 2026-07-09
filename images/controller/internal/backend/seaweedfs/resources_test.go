@@ -28,10 +28,10 @@ import (
 	v1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 )
 
-func cluster(name string, r v1alpha1.RedundancyMode) *v1alpha1.ObjectStorageCluster {
-	return &v1alpha1.ObjectStorageCluster{
+func cluster(name string, r v1alpha1.RedundancyMode) *v1alpha1.ObjectStore {
+	return &v1alpha1.ObjectStore{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec:       v1alpha1.ObjectStorageClusterSpec{Type: v1alpha1.ClusterTypeFull, Redundancy: r},
+		Spec:       v1alpha1.ObjectStoreSpec{Type: v1alpha1.ClusterTypeFull, Redundancy: r},
 	}
 }
 
@@ -55,10 +55,10 @@ func TestTopology(t *testing.T) {
 		volumes     int32
 		replication string
 	}{
-		{v1alpha1.RedundancySingle, 1, 1, "000"},
-		{v1alpha1.RedundancyReplicated, 3, 3, "001"},
+		{v1alpha1.RedundancyNone, 1, 1, "000"},
+		{v1alpha1.RedundancyStandard, 3, 3, "001"},
 		{v1alpha1.RedundancyMode(""), 3, 3, "001"},
-		{v1alpha1.RedundancyHighRedundancy, 3, 4, "002"},
+		{v1alpha1.RedundancyHigh, 3, 4, "002"},
 	}
 	for _, c := range cases {
 		m, v, repl := topology(cluster("c", c.r))
@@ -70,11 +70,11 @@ func TestTopology(t *testing.T) {
 
 func TestMasterServers(t *testing.T) {
 	// Single -> one peer.
-	if got := masterServers(cluster("c", v1alpha1.RedundancySingle), "d8-sds-object"); got != "c-seaweedfs-master-0.c-seaweedfs-master.d8-sds-object:9333" {
+	if got := masterServers(cluster("c", v1alpha1.RedundancyNone), "d8-sds-object"); got != "c-seaweedfs-master-0.c-seaweedfs-master.d8-sds-object:9333" {
 		t.Errorf("single masterServers=%q", got)
 	}
 	// Replicated -> three comma-separated peers.
-	got := masterServers(cluster("c", v1alpha1.RedundancyReplicated), "d8-sds-object")
+	got := masterServers(cluster("c", v1alpha1.RedundancyStandard), "d8-sds-object")
 	if n := strings.Count(got, ","); n != 2 {
 		t.Errorf("replicated masterServers should have 3 peers, got %q", got)
 	}
@@ -84,8 +84,8 @@ func TestMasterServers(t *testing.T) {
 }
 
 func TestBuildStatefulSets(t *testing.T) {
-	c := cluster("media", v1alpha1.RedundancyHighRedundancy)
-	c.Spec.Storage = &v1alpha1.ObjectStorageClusterStorageSpec{Size: "100Gi", Class: "fast"}
+	c := cluster("media", v1alpha1.RedundancyHigh)
+	c.Spec.Storage = &v1alpha1.ObjectStoreStorageSpec{SizePerNode: "100Gi", Class: "fast"}
 
 	master := buildMasterStatefulSet(c, "d8-sds-object", "img")
 	if master.Spec.Replicas == nil || *master.Spec.Replicas != 3 {
@@ -143,10 +143,10 @@ func TestFilerReplicas(t *testing.T) {
 	}{
 		// Only HighRedundancy runs a multi-replica filer (backed by Postgres);
 		// Single/Replicated run a single filer on the built-in leveldb store.
-		{v1alpha1.RedundancySingle, 1},
-		{v1alpha1.RedundancyReplicated, 1},
+		{v1alpha1.RedundancyNone, 1},
+		{v1alpha1.RedundancyStandard, 1},
 		{v1alpha1.RedundancyMode(""), 1},
-		{v1alpha1.RedundancyHighRedundancy, 3},
+		{v1alpha1.RedundancyHigh, 3},
 	}
 	for _, c := range cases {
 		if got := filerReplicas(cluster("c", c.r)); got != c.want {
@@ -156,20 +156,20 @@ func TestFilerReplicas(t *testing.T) {
 }
 
 func TestUsesPostgres(t *testing.T) {
-	if usesPostgres(cluster("c", v1alpha1.RedundancySingle)) {
+	if usesPostgres(cluster("c", v1alpha1.RedundancyNone)) {
 		t.Errorf("Single must not use Postgres")
 	}
-	if usesPostgres(cluster("c", v1alpha1.RedundancyReplicated)) {
+	if usesPostgres(cluster("c", v1alpha1.RedundancyStandard)) {
 		t.Errorf("Replicated must not use Postgres")
 	}
-	if !usesPostgres(cluster("c", v1alpha1.RedundancyHighRedundancy)) {
+	if !usesPostgres(cluster("c", v1alpha1.RedundancyHigh)) {
 		t.Errorf("HighRedundancy must use Postgres")
 	}
 }
 
 func TestBuildPostgres(t *testing.T) {
-	c := cluster("media", v1alpha1.RedundancyHighRedundancy)
-	c.Spec.Storage = &v1alpha1.ObjectStorageClusterStorageSpec{Class: "fast"}
+	c := cluster("media", v1alpha1.RedundancyHigh)
+	c.Spec.Storage = &v1alpha1.ObjectStoreStorageSpec{Class: "fast"}
 
 	pg := buildPostgres(c, "d8-sds-object")
 	if pg.GetName() != "media-seaweedfs-pg" {
@@ -192,7 +192,7 @@ func TestBuildPostgres(t *testing.T) {
 	}
 
 	// Single -> a standalone instance.
-	single := buildPostgres(cluster("c", v1alpha1.RedundancySingle), "d8-sds-object")
+	single := buildPostgres(cluster("c", v1alpha1.RedundancyNone), "d8-sds-object")
 	if s, _ := single.Object["spec"].(map[string]interface{}); s["type"] != "Standalone" {
 		t.Errorf("Single pg type=%v, want Standalone", s["type"])
 	}
@@ -226,7 +226,7 @@ func TestRenderFilerToml(t *testing.T) {
 }
 
 func TestBuildFilerConfigSecret(t *testing.T) {
-	c := cluster("media", v1alpha1.RedundancyReplicated)
+	c := cluster("media", v1alpha1.RedundancyStandard)
 	s := buildFilerConfigSecret(c, "d8-sds-object", "toml-body")
 	if s.Name != filerConfigName(c) {
 		t.Errorf("secret name=%q, want %q", s.Name, filerConfigName(c))

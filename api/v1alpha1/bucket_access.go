@@ -20,44 +20,46 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// ObjectStorageBucketAccess is a namespaced CR that requests scoped S3 access
-// to a cluster-scoped ObjectStorageBucket from a consuming namespace. The
-// controller mints a dedicated access key / secret key for this access,
-// writes a Secret in the access's namespace (status.secretRef) with the
-// standard S3 connection variables, and revokes the key when the access is
-// deleted. Whether the access is allowed is governed by ObjectStorageBucket
-// Policy resources (deny-by-default: an access with no matching policy stays
-// Pending/Denied).
+// BucketAccess is a namespaced CR that requests scoped S3 credentials for a
+// BucketClaim in the same namespace. The controller resolves the claim to its
+// bound Bucket and ObjectStore, mints a dedicated access key / secret key for
+// this access, writes a Secret in the access's namespace (status.secretRef)
+// with the standard S3 connection variables, and revokes the key when the
+// access is deleted. Because the access can only reference a claim in its own
+// namespace, access is namespace-local by construction; cross-namespace sharing
+// is governed upstream, when the claim binds a Shared Bucket (see BucketClaimPolicy).
+// If the referenced claim is not Bound, the access stays Pending and any
+// previously issued key is revoked.
 //
 // Key rotation: add or change the annotation
-// storage.deckhouse.io/rotate on the ObjectStorageBucketAccess to trigger
+// storage.deckhouse.io/rotate on the BucketAccess to trigger
 // issuance of a fresh key pair (the Secret is updated and the previous key is
 // revoked). status.observedRotation records the last processed value.
 //
-// +kubebuilder:resource:scope=Namespaced,shortName=osba
+// +kubebuilder:resource:scope=Namespaced,shortName=ba
 // +kubebuilder:subresource:status
 // +kubebuilder:object:root=true
 // +k8s:deepcopy-gen=true
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-type ObjectStorageBucketAccess struct {
+type BucketAccess struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   ObjectStorageBucketAccessSpec    `json:"spec"`
-	Status *ObjectStorageBucketAccessStatus `json:"status,omitempty"`
+	Spec   BucketAccessSpec    `json:"spec"`
+	Status *BucketAccessStatus `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +k8s:deepcopy-gen=true
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-type ObjectStorageBucketAccessList struct {
+type BucketAccessList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata"`
-	Items           []ObjectStorageBucketAccess `json:"items"`
+	Items           []BucketAccess `json:"items"`
 }
 
 // AccessPermission is the level of access granted to the credentials issued for
-// an ObjectStorageBucketAccess.
+// an BucketAccess.
 // +kubebuilder:validation:Enum=ReadWrite;ReadOnly
 type AccessPermission string
 
@@ -70,24 +72,26 @@ const (
 )
 
 // +k8s:deepcopy-gen=true
-type ObjectStorageBucketAccessSpec struct {
-	// BucketRef is the name of the cluster-scoped ObjectStorageBucket this
-	// access targets. Immutable after creation.
+type BucketAccessSpec struct {
+	// BucketClaimName is the name of the BucketClaim (in this access's
+	// namespace) whose bound Bucket the credentials are scoped to. The claim
+	// must be Bound before credentials are issued. Immutable after creation.
 	// +kubebuilder:validation:Required
-	BucketRef string `json:"bucketRef"`
+	BucketClaimName string `json:"bucketClaimName"`
 
 	// Permission is the access level granted to the issued credentials.
 	// +kubebuilder:default=ReadWrite
 	Permission AccessPermission `json:"permission,omitempty"`
 
-	// SecretName overrides the name of the credentials Secret written in this
-	// access's namespace. Defaults to <metadata.name>-s3-credentials.
+	// CredentialsSecretName overrides the name of the credentials Secret
+	// written in this access's namespace. Defaults to
+	// <metadata.name>-s3-credentials.
 	// +optional
-	SecretName string `json:"secretName,omitempty"`
+	CredentialsSecretName string `json:"credentialsSecretName,omitempty"`
 }
 
 // +k8s:deepcopy-gen=true
-type ObjectStorageBucketAccessStatus struct {
+type BucketAccessStatus struct {
 	// ObservedGeneration is the most recent .metadata.generation reconciled
 	// by the controller.
 	// +optional
@@ -136,23 +140,23 @@ type ObjectStorageBucketAccessStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 }
 
-// Well-known condition types for ObjectStorageBucketAccess.
+// Well-known condition types for BucketAccess.
 const (
-	OSBAConditionAccessGranted    = "AccessGranted"
-	OSBAConditionCredentialsReady = "CredentialsReady"
-	OSBAConditionReady            = "Ready"
+	BucketAccessConditionAccessGranted    = "AccessGranted"
+	BucketAccessConditionCredentialsReady = "CredentialsReady"
+	BucketAccessConditionReady            = "Ready"
 )
 
-// ObjectStorageBucketAccessKind is the kind constant used for OwnerReferences
+// BucketAccessKind is the kind constant used for OwnerReferences
 // and dynamic GVK lookups.
-const ObjectStorageBucketAccessKind = "ObjectStorageBucketAccess"
+const BucketAccessKind = "BucketAccess"
 
 // RotateAnnotation, when its value changes, triggers issuance of a fresh access
-// key pair for the ObjectStorageBucketAccess.
+// key pair for the BucketAccess.
 const RotateAnnotation = "storage.deckhouse.io/rotate"
 
 // Keys written into the credentials Secret referenced by
-// ObjectStorageBucketAccessStatus.SecretRef. Standardised so applications can
+// BucketAccessStatus.SecretRef. Standardised so applications can
 // `envFrom` it directly.
 const (
 	SecretKeyS3Endpoint     = "S3_ENDPOINT"

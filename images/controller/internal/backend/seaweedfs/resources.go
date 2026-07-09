@@ -60,66 +60,66 @@ const (
 	compFiler  = "filer"
 )
 
-func resourceName(cluster *v1alpha1.ObjectStorageCluster) string {
+func resourceName(cluster *v1alpha1.ObjectStore) string {
 	return cluster.Name + "-seaweedfs"
 }
 
 // svcName is the main S3 Service (selects the filer pods that run the S3
 // gateway); the bucket/IAM code addresses the cluster through it.
-func svcName(cluster *v1alpha1.ObjectStorageCluster) string { return resourceName(cluster) }
+func svcName(cluster *v1alpha1.ObjectStore) string { return resourceName(cluster) }
 
 // componentName is the StatefulSet / headless Service name for a component.
-func componentName(cluster *v1alpha1.ObjectStorageCluster, comp string) string {
+func componentName(cluster *v1alpha1.ObjectStore, comp string) string {
 	return resourceName(cluster) + "-" + comp
 }
 
-func commonLabels(cluster *v1alpha1.ObjectStorageCluster) map[string]string {
+func commonLabels(cluster *v1alpha1.ObjectStore) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/managed-by":                "sds-object",
-		"app.kubernetes.io/name":                      "seaweedfs",
-		"storage.deckhouse.io/object-storage-cluster": cluster.Name,
+		"app.kubernetes.io/managed-by":      "sds-object",
+		"app.kubernetes.io/name":            "seaweedfs",
+		"storage.deckhouse.io/object-store": cluster.Name,
 	}
 }
 
 // componentLabels are the pod/selector labels for one component.
-func componentLabels(cluster *v1alpha1.ObjectStorageCluster, comp string) map[string]string {
+func componentLabels(cluster *v1alpha1.ObjectStore, comp string) map[string]string {
 	l := commonLabels(cluster)
 	l["app.kubernetes.io/component"] = comp
 	return l
 }
 
 // s3Endpoint is the in-cluster S3 URL of the cluster's main Service.
-func s3Endpoint(cluster *v1alpha1.ObjectStorageCluster, namespace, clusterDomain string) string {
+func s3Endpoint(cluster *v1alpha1.ObjectStore, namespace, clusterDomain string) string {
 	return fmt.Sprintf("http://%s.%s.svc.%s:%d", svcName(cluster), namespace, clusterDomain, s3Port)
 }
 
 // s3HostPort is the host:port of the S3 endpoint (no scheme), for the S3 client.
-func s3HostPort(cluster *v1alpha1.ObjectStorageCluster, namespace, clusterDomain string) string {
+func s3HostPort(cluster *v1alpha1.ObjectStore, namespace, clusterDomain string) string {
 	return fmt.Sprintf("%s.%s.svc.%s:%d", svcName(cluster), namespace, clusterDomain, s3Port)
 }
 
 // filerEndpoint is the in-cluster filer HTTP URL (for the S3 IAM config).
-func filerEndpoint(cluster *v1alpha1.ObjectStorageCluster, namespace, clusterDomain string) string {
+func filerEndpoint(cluster *v1alpha1.ObjectStore, namespace, clusterDomain string) string {
 	return fmt.Sprintf("http://%s.%s.svc.%s:%d", svcName(cluster), namespace, clusterDomain, filerPort)
 }
 
 // adminSecretName is the Secret (in the module namespace) holding the cluster's
 // S3 admin credentials.
-func adminSecretName(cluster *v1alpha1.ObjectStorageCluster) string {
+func adminSecretName(cluster *v1alpha1.ObjectStore) string {
 	return resourceName(cluster) + "-admin"
 }
 
 // storageSize returns the per-volume-server PVC size, default 10Gi.
-func storageSize(cluster *v1alpha1.ObjectStorageCluster) resource.Quantity {
-	if cluster.Spec.Storage != nil && cluster.Spec.Storage.Size != "" {
-		if q, err := resource.ParseQuantity(cluster.Spec.Storage.Size); err == nil {
+func storageSize(cluster *v1alpha1.ObjectStore) resource.Quantity {
+	if cluster.Spec.Storage != nil && cluster.Spec.Storage.SizePerNode != "" {
+		if q, err := resource.ParseQuantity(cluster.Spec.Storage.SizePerNode); err == nil {
 			return q
 		}
 	}
 	return resource.MustParse("10Gi")
 }
 
-func storageClass(cluster *v1alpha1.ObjectStorageCluster) string {
+func storageClass(cluster *v1alpha1.ObjectStore) string {
 	if cluster.Spec.Storage != nil {
 		return cluster.Spec.Storage.Class
 	}
@@ -129,11 +129,11 @@ func storageClass(cluster *v1alpha1.ObjectStorageCluster) string {
 // topology maps the redundancy intent to the master/volume replica counts and
 // the SeaweedFS default replication code (xyz: other-DC/other-rack/other-server
 // copies). Single is deployable on a one-node cluster.
-func topology(cluster *v1alpha1.ObjectStorageCluster) (masters, volumes int32, replication string) {
+func topology(cluster *v1alpha1.ObjectStore) (masters, volumes int32, replication string) {
 	switch cluster.Spec.Redundancy {
-	case v1alpha1.RedundancySingle:
+	case v1alpha1.RedundancyNone:
 		return 1, 1, "000"
-	case v1alpha1.RedundancyHighRedundancy:
+	case v1alpha1.RedundancyHigh:
 		return 3, 4, "002"
 	default: // Replicated or unset
 		return 3, 3, "001"
@@ -143,7 +143,7 @@ func topology(cluster *v1alpha1.ObjectStorageCluster) (masters, volumes int32, r
 // masterServers is the comma-separated list of master peer addresses used for
 // both -peers (master raft) and -master (volume/filer). Resolved via the master
 // headless Service per-pod DNS (the cluster search domain completes it).
-func masterServers(cluster *v1alpha1.ObjectStorageCluster, namespace string) string {
+func masterServers(cluster *v1alpha1.ObjectStore, namespace string) string {
 	masters, _, _ := topology(cluster)
 	name := componentName(cluster, compMaster)
 	peers := make([]string, 0, masters)
@@ -176,7 +176,7 @@ func rootSecurityContext() *corev1.PodSecurityContext {
 var filerStoreSize = resource.MustParse("2Gi")
 
 // dataPVC is a per-pod PersistentVolumeClaim template named "data".
-func dataPVC(cluster *v1alpha1.ObjectStorageCluster, size resource.Quantity) corev1.PersistentVolumeClaim {
+func dataPVC(cluster *v1alpha1.ObjectStore, size resource.Quantity) corev1.PersistentVolumeClaim {
 	sc := storageClass(cluster)
 	return corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{Name: "data", Labels: commonLabels(cluster)},
@@ -192,7 +192,7 @@ func dataPVC(cluster *v1alpha1.ObjectStorageCluster, size resource.Quantity) cor
 
 // buildMainService is the ClusterIP Service exposing S3 (and filer) on the
 // filer pods. This is the cluster's S3 endpoint.
-func buildMainService(cluster *v1alpha1.ObjectStorageCluster, namespace string) *corev1.Service {
+func buildMainService(cluster *v1alpha1.ObjectStore, namespace string) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: svcName(cluster), Namespace: namespace, Labels: commonLabels(cluster)},
 		Spec: corev1.ServiceSpec{
@@ -207,7 +207,7 @@ func buildMainService(cluster *v1alpha1.ObjectStorageCluster, namespace string) 
 
 // buildHeadlessService is the per-component headless Service for stable per-pod
 // DNS (master raft peers, volume/filer registration).
-func buildHeadlessService(cluster *v1alpha1.ObjectStorageCluster, namespace, comp string, ports []corev1.ServicePort) *corev1.Service {
+func buildHeadlessService(cluster *v1alpha1.ObjectStore, namespace, comp string, ports []corev1.ServicePort) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: componentName(cluster, comp), Namespace: namespace, Labels: componentLabels(cluster, comp)},
 		Spec: corev1.ServiceSpec{
@@ -219,21 +219,21 @@ func buildHeadlessService(cluster *v1alpha1.ObjectStorageCluster, namespace, com
 	}
 }
 
-func buildMasterService(cluster *v1alpha1.ObjectStorageCluster, namespace string) *corev1.Service {
+func buildMasterService(cluster *v1alpha1.ObjectStore, namespace string) *corev1.Service {
 	return buildHeadlessService(cluster, namespace, compMaster, []corev1.ServicePort{
 		{Name: "http", Port: masterPort, TargetPort: intstr.FromInt(masterPort)},
 		{Name: "grpc", Port: masterGRPC, TargetPort: intstr.FromInt(masterGRPC)},
 	})
 }
 
-func buildVolumeService(cluster *v1alpha1.ObjectStorageCluster, namespace string) *corev1.Service {
+func buildVolumeService(cluster *v1alpha1.ObjectStore, namespace string) *corev1.Service {
 	return buildHeadlessService(cluster, namespace, compVolume, []corev1.ServicePort{
 		{Name: "http", Port: volumePort, TargetPort: intstr.FromInt(volumePort)},
 		{Name: "grpc", Port: volumeGRPC, TargetPort: intstr.FromInt(volumeGRPC)},
 	})
 }
 
-func buildFilerService(cluster *v1alpha1.ObjectStorageCluster, namespace string) *corev1.Service {
+func buildFilerService(cluster *v1alpha1.ObjectStore, namespace string) *corev1.Service {
 	return buildHeadlessService(cluster, namespace, compFiler, []corev1.ServicePort{
 		{Name: "http", Port: filerPort, TargetPort: intstr.FromInt(filerPort)},
 		{Name: "grpc", Port: filerGRPC, TargetPort: intstr.FromInt(filerGRPC)},
@@ -251,7 +251,7 @@ func tcpProbe(port int) *corev1.Probe {
 	}
 }
 
-func statefulSet(cluster *v1alpha1.ObjectStorageCluster, namespace, comp string, replicas int32, c corev1.Container, pvcs []corev1.PersistentVolumeClaim, volumes []corev1.Volume) *appsv1.StatefulSet {
+func statefulSet(cluster *v1alpha1.ObjectStore, namespace, comp string, replicas int32, c corev1.Container, pvcs []corev1.PersistentVolumeClaim, volumes []corev1.Volume) *appsv1.StatefulSet {
 	return &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{Name: componentName(cluster, comp), Namespace: namespace, Labels: componentLabels(cluster, comp)},
 		Spec: appsv1.StatefulSetSpec{
@@ -272,7 +272,7 @@ func statefulSet(cluster *v1alpha1.ObjectStorageCluster, namespace, comp string,
 	}
 }
 
-func buildMasterStatefulSet(cluster *v1alpha1.ObjectStorageCluster, namespace, image string) *appsv1.StatefulSet {
+func buildMasterStatefulSet(cluster *v1alpha1.ObjectStore, namespace, image string) *appsv1.StatefulSet {
 	masters, _, replication := topology(cluster)
 	name := componentName(cluster, compMaster)
 	c := corev1.Container{
@@ -297,8 +297,18 @@ func buildMasterStatefulSet(cluster *v1alpha1.ObjectStorageCluster, namespace, i
 	return statefulSet(cluster, namespace, compMaster, masters, c, []corev1.PersistentVolumeClaim{dataPVC(cluster, resource.MustParse("1Gi"))}, nil)
 }
 
-func buildVolumeStatefulSet(cluster *v1alpha1.ObjectStorageCluster, namespace, image string) *appsv1.StatefulSet {
+// volumeServers is the SeaweedFS volume-server replica count: spec.storage.nodes
+// when set, otherwise the redundancy-derived topology value.
+func volumeServers(cluster *v1alpha1.ObjectStore) int32 {
 	_, volumes, _ := topology(cluster)
+	if cluster.Spec.Storage != nil && cluster.Spec.Storage.Nodes != nil && *cluster.Spec.Storage.Nodes >= 1 {
+		return *cluster.Spec.Storage.Nodes
+	}
+	return volumes
+}
+
+func buildVolumeStatefulSet(cluster *v1alpha1.ObjectStore, namespace, image string) *appsv1.StatefulSet {
+	volumes := volumeServers(cluster)
 	name := componentName(cluster, compVolume)
 	c := corev1.Container{
 		Name:    "volume",
@@ -329,7 +339,7 @@ func buildVolumeStatefulSet(cluster *v1alpha1.ObjectStorageCluster, namespace, i
 // filer.toml Secret. Started WITHOUT -s3.config so the gateway uses the
 // filer-stored IAM config (/etc/iam/identity.json) the access reconciler
 // manages and the gateway reloads automatically.
-func buildFilerStatefulSet(cluster *v1alpha1.ObjectStorageCluster, namespace, image string) *appsv1.StatefulSet {
+func buildFilerStatefulSet(cluster *v1alpha1.ObjectStore, namespace, image string) *appsv1.StatefulSet {
 	mounts := []corev1.VolumeMount{{Name: "config", MountPath: configMount}}
 	var pvcs []corev1.PersistentVolumeClaim
 	if !usesPostgres(cluster) {

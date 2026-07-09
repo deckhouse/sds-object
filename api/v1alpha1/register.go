@@ -38,14 +38,16 @@ var (
 
 func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(SchemeGroupVersion,
-		&ObjectStorageCluster{},
-		&ObjectStorageClusterList{},
-		&ObjectStorageBucket{},
-		&ObjectStorageBucketList{},
-		&ObjectStorageBucketAccess{},
-		&ObjectStorageBucketAccessList{},
-		&ObjectStorageBucketPolicy{},
-		&ObjectStorageBucketPolicyList{},
+		&ObjectStore{},
+		&ObjectStoreList{},
+		&Bucket{},
+		&BucketList{},
+		&BucketClaim{},
+		&BucketClaimList{},
+		&BucketAccess{},
+		&BucketAccessList{},
+		&BucketClaimPolicy{},
+		&BucketClaimPolicyList{},
 	)
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil

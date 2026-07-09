@@ -49,8 +49,8 @@ func TestResolveBackendType(t *testing.T) {
 func TestRegistryFor(t *testing.T) {
 	reg := DefaultRegistry()
 
-	cluster := &v1alpha1.ObjectStorageCluster{
-		Spec: v1alpha1.ObjectStorageClusterSpec{Type: v1alpha1.ClusterTypeLightweight},
+	cluster := &v1alpha1.ObjectStore{
+		Spec: v1alpha1.ObjectStoreSpec{Type: v1alpha1.ClusterTypeLightweight},
 	}
 	d, err := reg.For(cluster)
 	if err != nil {
@@ -60,8 +60,8 @@ func TestRegistryFor(t *testing.T) {
 		t.Errorf("For(Lightweight).Type()=%q, want %q", d.Type(), v1alpha1.BackendGarage)
 	}
 
-	bad := &v1alpha1.ObjectStorageCluster{
-		Spec: v1alpha1.ObjectStorageClusterSpec{Type: v1alpha1.ClusterType("Bogus")},
+	bad := &v1alpha1.ObjectStore{
+		Spec: v1alpha1.ObjectStoreSpec{Type: v1alpha1.ClusterType("Bogus")},
 	}
 	if _, err := reg.For(bad); err == nil {
 		t.Errorf("For(Bogus): expected error, got nil")
@@ -74,7 +74,7 @@ func TestNotImplementedDriver(t *testing.T) {
 		t.Errorf("Type()=%q, want %q", d.Type(), v1alpha1.BackendSeaweedFS)
 	}
 
-	st, err := d.EnsureCluster(context.Background(), &v1alpha1.ObjectStorageCluster{})
+	st, err := d.EnsureCluster(context.Background(), &v1alpha1.ObjectStore{})
 	if err != nil {
 		t.Fatalf("EnsureCluster: unexpected error %v", err)
 	}
@@ -85,7 +85,7 @@ func TestNotImplementedDriver(t *testing.T) {
 		t.Errorf("EnsureCluster: stub must explain why it is not ready")
 	}
 
-	bs, err := d.EnsureBucket(context.Background(), &v1alpha1.ObjectStorageCluster{}, &v1alpha1.ObjectStorageBucket{})
+	bs, err := d.EnsureBucket(context.Background(), &v1alpha1.ObjectStore{}, &v1alpha1.Bucket{})
 	if err != nil {
 		t.Fatalf("EnsureBucket: unexpected error %v", err)
 	}

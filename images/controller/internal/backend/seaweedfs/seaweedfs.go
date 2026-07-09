@@ -26,7 +26,7 @@ limitations under the License.
 // (/etc/iam/identity.json, managed over the filer HTTP API; the S3 gateway
 // subscribes to filer metadata and reloads it) plus the S3 API for the bucket
 // itself. EnsureCluster bootstraps an admin identity used for bucket
-// create/delete; each ObjectStorageBucketAccess gets its own identity scoped to
+// create/delete; each BucketAccess gets its own identity scoped to
 // its bucket.
 package seaweedfs
 
@@ -84,7 +84,7 @@ func (d *Driver) Type() v1alpha1.BackendType { return v1alpha1.BackendSeaweedFS 
 
 // EnsureCluster reconciles the SeaweedFS data plane and bootstraps the S3 admin
 // identity, then reports the cluster state.
-func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) (backend.ClusterState, error) {
+func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStore) (backend.ClusterState, error) {
 	state := backend.ClusterState{
 		Backend: v1alpha1.BackendStatus{Type: v1alpha1.BackendSeaweedFS, Version: seaweedfsVersion},
 	}
@@ -177,7 +177,7 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 // The StatefulSet PVCs (volume servers, and the filer's leveldb store) are not
 // garbage-collected by Kubernetes, so they persist by default (Retain). Only
 // when the cluster reclaim policy is Delete are they removed.
-func (d *Driver) DeleteCluster(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) error {
+func (d *Driver) DeleteCluster(ctx context.Context, cluster *v1alpha1.ObjectStore) error {
 	if cluster.Spec.ReclaimPolicy != v1alpha1.ClusterReclaimDelete {
 		return nil
 	}
@@ -185,9 +185,9 @@ func (d *Driver) DeleteCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 }
 
 // EnsureBucket creates the bucket via the S3 API with the admin credentials
-// (no per-bucket key — access keys are issued per ObjectStorageBucketAccess).
+// (no per-bucket key — access keys are issued per BucketAccess).
 // Idempotent.
-func (d *Driver) EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectStorageBucket) (backend.BucketState, error) {
+func (d *Driver) EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStore, bucket *v1alpha1.Bucket) (backend.BucketState, error) {
 	adminAK, adminSK, err := d.adminCreds(ctx, cluster)
 	if err != nil {
 		return backend.BucketState{}, err
@@ -210,7 +210,7 @@ func (d *Driver) EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStora
 
 // DeleteBucket removes the bucket when the reclaim policy is Delete. Access
 // keys (IAM identities) are removed separately by DeleteAccess. Idempotent.
-func (d *Driver) DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectStorageBucket) error {
+func (d *Driver) DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStore, bucket *v1alpha1.Bucket) error {
 	if bucket.Spec.ReclaimPolicy != v1alpha1.BucketReclaimDelete {
 		return nil
 	}
@@ -235,7 +235,7 @@ func (d *Driver) DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStora
 
 // ensureAdminIdentity makes sure the admin Secret exists and the matching
 // admin identity is present in the filer IAM config.
-func (d *Driver) ensureAdminIdentity(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) error {
+func (d *Driver) ensureAdminIdentity(ctx context.Context, cluster *v1alpha1.ObjectStore) error {
 	ak, sk, err := d.ensureAdminSecret(ctx, cluster)
 	if err != nil {
 		return err
@@ -261,7 +261,7 @@ func (d *Driver) ensureAdminIdentity(ctx context.Context, cluster *v1alpha1.Obje
 
 // ensureAdminSecret creates the cluster admin Secret on first reconcile and
 // returns its credentials. It never overwrites existing values.
-func (d *Driver) ensureAdminSecret(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) (string, string, error) {
+func (d *Driver) ensureAdminSecret(ctx context.Context, cluster *v1alpha1.ObjectStore) (string, string, error) {
 	key := client.ObjectKey{Namespace: d.namespace, Name: adminSecretName(cluster)}
 	existing := &corev1.Secret{}
 	err := d.client.Get(ctx, key, existing)
@@ -302,7 +302,7 @@ func (d *Driver) ensureAdminSecret(ctx context.Context, cluster *v1alpha1.Object
 }
 
 // adminCreds reads the cluster admin credentials (empty when not bootstrapped).
-func (d *Driver) adminCreds(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) (string, string, error) {
+func (d *Driver) adminCreds(ctx context.Context, cluster *v1alpha1.ObjectStore) (string, string, error) {
 	secret := &corev1.Secret{}
 	if err := d.apiReader.Get(ctx, client.ObjectKey{Namespace: d.namespace, Name: adminSecretName(cluster)}, secret); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -314,7 +314,7 @@ func (d *Driver) adminCreds(ctx context.Context, cluster *v1alpha1.ObjectStorage
 }
 
 // apply creates or updates obj, setting the cluster as its controller owner.
-func (d *Driver) apply(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, obj client.Object) error {
+func (d *Driver) apply(ctx context.Context, cluster *v1alpha1.ObjectStore, obj client.Object) error {
 	desired := obj.DeepCopyObject().(client.Object)
 	_, err := controllerutil.CreateOrUpdate(ctx, d.client, obj, func() error {
 		mergeDesired(obj, desired)

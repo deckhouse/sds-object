@@ -10,10 +10,11 @@ rules:
 - apiGroups:
   - storage.deckhouse.io
   resources:
-  - objectstorageclusters
-  - objectstoragebuckets
-  - objectstoragebucketaccesses
-  - objectstoragebucketpolicies
+  - objectstores
+  - buckets
+  - bucketclaims
+  - bucketaccesses
+  - bucketclaimpolicies
   verbs:
   - get
   - list
@@ -30,10 +31,11 @@ rules:
 - apiGroups:
   - storage.deckhouse.io
   resources:
-  - objectstorageclusters
-  - objectstoragebuckets
-  - objectstoragebucketaccesses
-  - objectstoragebucketpolicies
+  - objectstores
+  - buckets
+  - bucketclaims
+  - bucketaccesses
+  - bucketclaimpolicies
   verbs:
   - create
   - delete

@@ -30,7 +30,7 @@ import (
 // access. SeaweedFS stores credentials in the filer IAM config, so the secret
 // key is recoverable and always returned; mintFresh replaces it with a new
 // random pair (rotation), which revokes the previous key.
-func (d *Driver) EnsureAccess(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, bucket *v1alpha1.ObjectStorageBucket, access *v1alpha1.ObjectStorageBucketAccess, mintFresh bool) (backend.AccessState, error) {
+func (d *Driver) EnsureAccess(ctx context.Context, cluster *v1alpha1.ObjectStore, bucket *v1alpha1.Bucket, access *v1alpha1.BucketAccess, mintFresh bool) (backend.AccessState, error) {
 	adminAK, _, err := d.adminCreds(ctx, cluster)
 	if err != nil {
 		return backend.AccessState{}, err
@@ -84,7 +84,7 @@ func (d *Driver) EnsureAccess(ctx context.Context, cluster *v1alpha1.ObjectStora
 
 // DeleteAccess removes the IAM identity issued for the access. Idempotent and
 // tolerant of an already-deleted cluster.
-func (d *Driver) DeleteAccess(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster, _ *v1alpha1.ObjectStorageBucket, access *v1alpha1.ObjectStorageBucketAccess) error {
+func (d *Driver) DeleteAccess(ctx context.Context, cluster *v1alpha1.ObjectStore, _ *v1alpha1.Bucket, access *v1alpha1.BucketAccess) error {
 	adminAK, _, err := d.adminCreds(ctx, cluster)
 	if err != nil {
 		if apierrors.IsNotFound(err) {

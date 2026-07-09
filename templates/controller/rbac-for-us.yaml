@@ -7,7 +7,7 @@
   ServiceAccount. Mutation of the data-plane objects the Garage driver creates
   (ConfigMap, Service, ServiceAccount, StatefulSet, DaemonSet) stays in the
   namespaced Role — they only ever live in d8-sds-object. Secrets are the
-  exception: the ObjectStorageBucketAccess reconciler writes the S3 credentials
+  exception: the BucketAccess reconciler writes the S3 credentials
   Secret into the consuming application's namespace, so secret write verbs are
   granted cluster-wide. The webhooks share the same ServiceAccount but exercise
   only the read verbs.
@@ -27,7 +27,7 @@
     (dict "apiGroups" (list "coordination.k8s.io") "resources" (list "leases") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete"))
   )
   "clusterRoleRules" (list
-    (dict "apiGroups" (list "storage.deckhouse.io") "resources" (list "objectstorageclusters" "objectstorageclusters/status" "objectstorageclusters/finalizers" "objectstoragebuckets" "objectstoragebuckets/status" "objectstoragebuckets/finalizers" "objectstoragebucketaccesses" "objectstoragebucketaccesses/status" "objectstoragebucketaccesses/finalizers" "objectstoragebucketpolicies" "objectstoragebucketpolicies/status" "objectstoragebucketpolicies/finalizers") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete"))
+    (dict "apiGroups" (list "storage.deckhouse.io") "resources" (list "objectstores" "objectstores/status" "objectstores/finalizers" "buckets" "buckets/status" "buckets/finalizers" "bucketclaims" "bucketclaims/status" "bucketclaims/finalizers" "bucketaccesses" "bucketaccesses/status" "bucketaccesses/finalizers" "bucketclaimpolicies" "bucketclaimpolicies/status" "bucketclaimpolicies/finalizers") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete"))
     (dict "apiGroups" (list "storage.deckhouse.io") "resources" (list "elasticclusters") "verbs" (list "get" "list" "watch"))
     (dict "apiGroups" (list "internal.sdselastic.deckhouse.io") "resources" (list "cephobjectstores" "cephobjectstoreusers") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete"))
     (dict "apiGroups" (list "") "resources" (list "secrets") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete"))

@@ -1,32 +1,32 @@
 # System profile (Garage on control-plane nodes, hostPath).
-# Apply, wait for the cluster to be Ready, then re-apply so the bucket, policy,
-# access and the test Job provision against the ready cluster.
+# Apply, wait for the ObjectStore to be Ready, then re-apply so the bucket,
+# policy, claim, access and the test Job provision against the ready store.
 #
-# Flow (new model):
-#   ObjectStorageCluster (cluster-scoped)
-#     -> ObjectStorageBucket (cluster-scoped)
-#     -> ObjectStorageBucketPolicy (allow the obj-test namespace)
-#     -> ObjectStorageBucketAccess (namespaced; issues the creds Secret)
+# Flow (COSI-aligned, brownfield/shared path):
+#   ObjectStore (cluster-scoped)
+#     -> Bucket (cluster-scoped, Shared/administrator-declared)
+#     -> BucketPolicy (allow the obj-test namespace to bind it)
+#     -> BucketClaim (namespaced; brownfield bind via existingBucketName)
+#     -> BucketAccess (namespaced; issues the creds Secret)
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectStorageCluster
+kind: ObjectStore
 metadata:
   name: system
 spec:
   type: System
-  redundancy: Single
   reclaimPolicy: Delete
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectStorageBucket
+kind: Bucket
 metadata:
   name: sys-bucket
 spec:
-  clusterRef: system
+  objectStoreRef: system
   reclaimPolicy: Delete
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectStorageBucketPolicy
+kind: BucketClaimPolicy
 metadata:
   name: sys-bucket-obj-test
 spec:
@@ -36,12 +36,20 @@ spec:
       - obj-test
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectStorageBucketAccess
+kind: BucketClaim
+metadata:
+  name: sys-claim
+  namespace: obj-test
+spec:
+  existingBucketName: sys-bucket
+---
+apiVersion: storage.deckhouse.io/v1alpha1
+kind: BucketAccess
 metadata:
   name: sys-access
   namespace: obj-test
 spec:
-  bucketRef: sys-bucket
+  bucketClaimName: sys-claim
   permission: ReadWrite
 ---
 apiVersion: batch/v1

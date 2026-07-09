@@ -68,7 +68,7 @@ func isNoMatch(err error) bool { return apimeta.IsNoMatchError(err) }
 
 // EnsureCluster gates on the referenced ElasticCluster, then ensures the
 // CephObjectStore and reports readiness from its status.
-func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) (backend.ClusterState, error) {
+func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStore) (backend.ClusterState, error) {
 	state := backend.ClusterState{
 		Backend: v1alpha1.BackendStatus{Type: v1alpha1.BackendCephRGW},
 	}
@@ -131,7 +131,7 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 // policy is Delete. With the default Retain the store (and thus all bucket
 // data) is left intact — deleting it would destroy the RGW pools regardless of
 // any per-bucket Retain policy.
-func (d *Driver) DeleteCluster(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) error {
+func (d *Driver) DeleteCluster(ctx context.Context, cluster *v1alpha1.ObjectStore) error {
 	if cluster.Spec.ReclaimPolicy != v1alpha1.ClusterReclaimDelete {
 		return nil
 	}
@@ -152,7 +152,7 @@ func (d *Driver) DeleteCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 
 // ensureObjectStore creates or updates the CephObjectStore. Reads go through
 // the non-cached apiReader; writes go straight to the API server.
-func (d *Driver) ensureObjectStore(ctx context.Context, cluster *v1alpha1.ObjectStorageCluster) error {
+func (d *Driver) ensureObjectStore(ctx context.Context, cluster *v1alpha1.ObjectStore) error {
 	desired := buildCephObjectStore(cluster)
 	if err := controllerutil.SetControllerReference(cluster, desired, d.client.Scheme()); err != nil {
 		return err

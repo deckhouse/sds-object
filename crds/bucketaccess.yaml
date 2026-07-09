@@ -1,7 +1,7 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: objectstoragebucketaccesses.storage.deckhouse.io
+  name: bucketaccesses.storage.deckhouse.io
   labels:
     heritage: deckhouse
     module: sds-object
@@ -10,11 +10,11 @@ spec:
   group: storage.deckhouse.io
   scope: Namespaced
   names:
-    plural: objectstoragebucketaccesses
-    singular: objectstoragebucketaccess
-    kind: ObjectStorageBucketAccess
+    plural: bucketaccesses
+    singular: bucketaccess
+    kind: BucketAccess
     shortNames:
-      - osba
+      - ba
   preserveUnknownFields: false
   versions:
     - name: v1alpha1
@@ -24,15 +24,15 @@ spec:
         openAPIV3Schema:
           type: object
           description: |
-            ObjectStorageBucketAccess requests scoped S3 access to a
-            cluster-scoped ObjectStorageBucket from a consuming namespace. The
+            BucketAccess requests scoped S3 access to a
+            cluster-scoped Bucket from a consuming namespace. The
             controller mints a dedicated access key / secret key for this
             access, writes a Secret in the same namespace (see
             `status.secretRef`) with the standard S3 connection variables, and
             revokes the key when the access is deleted.
 
             Whether the access is provisioned is governed by
-            ObjectStorageBucketPolicy resources (deny-by-default): an access
+            BucketClaimPolicy resources (deny-by-default): an access
             whose namespace matches no policy for the referenced bucket stays
             `Pending`.
 
@@ -47,18 +47,19 @@ spec:
               description: |
                 Desired state of the access.
               required:
-                - bucketRef
+                - bucketClaimName
               x-kubernetes-validations:
-                - rule: "oldSelf == null || self.bucketRef == oldSelf.bucketRef"
-                  message: "spec.bucketRef is immutable after creation."
+                - rule: "oldSelf == null || self.bucketClaimName == oldSelf.bucketClaimName"
+                  message: "spec.bucketClaimName is immutable after creation."
               properties:
-                bucketRef:
+                bucketClaimName:
                   type: string
                   description: |
-                    Name of the cluster-scoped ObjectStorageBucket this access
-                    targets. Immutable after creation.
+                    Name of the BucketClaim (in this access's namespace) whose
+                    bound Bucket the credentials are scoped to. The claim must be
+                    Bound before credentials are issued. Immutable after creation.
                   minLength: 1
-                  maxLength: 63
+                  maxLength: 253
                   pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
                 permission:
                   type: string
@@ -71,7 +72,7 @@ spec:
                     - ReadWrite
                     - ReadOnly
                   default: ReadWrite
-                secretName:
+                credentialsSecretName:
                   type: string
                   description: |
                     Overrides the name of the credentials Secret written in this
@@ -177,8 +178,8 @@ spec:
       subresources:
         status: {}
       additionalPrinterColumns:
-        - jsonPath: .spec.bucketRef
-          name: Bucket
+        - jsonPath: .spec.bucketClaimName
+          name: Claim
           type: string
         - jsonPath: .status.phase
           name: Phase

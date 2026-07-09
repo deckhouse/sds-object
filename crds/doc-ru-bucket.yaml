@@ -4,20 +4,20 @@ spec:
       schema:
         openAPIV3Schema:
           description: |
-            Описывает один S3-бакет в кластере ObjectStorageCluster. Контроллер
+            Описывает один S3-бакет в кластере ObjectStore. Контроллер
             создаёт бакет в бэкенде. Ресурс cluster-scoped: учётные данные здесь
             не выдаются. Потребляющие namespace запрашивают доступ и получают
             Secret с учётными данными через namespaced-ресурсы
-            ObjectStorageBucketAccess, а доступ между namespace ограничивается
-            cluster-scoped ресурсами ObjectStorageBucketPolicy (deny-by-default).
+            BucketAccess, а доступ между namespace ограничивается
+            cluster-scoped ресурсами BucketClaimPolicy (deny-by-default).
           properties:
             spec:
               description: |
                 Желаемое состояние бакета.
               properties:
-                clusterRef:
+                objectStoreRef:
                   description: |
-                    Имя ObjectStorageCluster, к которому относится бакет. Кластер
+                    Имя ObjectStore, к которому относится бакет. ObjectStore
                     должен существовать и быть в фазе `Ready` до создания бакета.
                     Неизменяемо после создания.
                 bucketName:
@@ -36,7 +36,7 @@ spec:
                 reclaimPolicy:
                   description: |
                     Что происходит с данными бакета при удалении
-                    ObjectStorageBucket.
+                    Bucket.
 
                     - `Retain` (по умолчанию) — бакет и его объекты сохраняются
                       в бэкенде.

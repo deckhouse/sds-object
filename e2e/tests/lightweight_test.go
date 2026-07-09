@@ -60,17 +60,18 @@ func lightweightSpecs() {
 			GinkgoWriter.Printf("Lightweight profile using StorageClass %q (size %s)\n", storageClass, suiteCfg.oscSize)
 		})
 
-		It("creates a Lightweight ObjectStorageCluster (Garage on PVC) and reaches Ready", func() {
+		It("creates a Lightweight ObjectStore (Garage on PVC) and reaches Ready", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), suiteCfg.oscReadyTimeout+2*time.Minute)
 			defer cancel()
 
-			By("creating Lightweight ObjectStorageCluster " + oscName)
+			By("creating Lightweight ObjectStore " + oscName + " with spec.storage.nodes=2")
 			osc := newOSC(oscName, map[string]interface{}{
 				"type":       string(objectv1alpha1.ClusterTypeLightweight),
-				"redundancy": string(objectv1alpha1.RedundancySingle),
+				"redundancy": string(objectv1alpha1.RedundancyStandard),
 				"storage": map[string]interface{}{
-					"size":  suiteCfg.oscSize,
-					"class": storageClass,
+					"sizePerNode": suiteCfg.oscSize,
+					"class":       storageClass,
+					"nodes":       int64(2),
 				},
 			})
 			Expect(createOSC(ctx, osc)).To(Succeed())
@@ -78,30 +79,45 @@ func lightweightSpecs() {
 			By("waiting for the cluster Ready condition")
 			Expect(waitOSCReady(ctx, oscName)).To(Succeed())
 
-			backend, err := getStringField(ctx, objectStorageClusterGVR, "", oscName, "status", "backend", "type")
+			backend, err := getStringField(ctx, objectStoreGVR, "", oscName, "status", "backend", "type")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(backend).To(Equal(string(objectv1alpha1.BackendGarage)), "Lightweight is backed by Garage")
 
-			endpoint, err := getStringField(ctx, objectStorageClusterGVR, "", oscName, "status", "endpoint", "internal")
+			endpoint, err := getStringField(ctx, objectStoreGVR, "", oscName, "status", "endpoint", "internal")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(endpoint).NotTo(BeEmpty())
+
+			By("asserting spec.storage.nodes drove 2 data-plane replicas")
+			sts, err := suiteClientset.AppsV1().StatefulSets(moduleNS).Get(ctx, oscName+"-garage", metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred(), "get Garage StatefulSet")
+			Expect(sts.Spec.Replicas).NotTo(BeNil())
+			Expect(*sts.Spec.Replicas).To(Equal(int32(2)), "spec.storage.nodes=2 -> 2 replicas")
+
+			By("asserting the replication factor is pinned to clampRF(Standard=3, nodes=2)=2")
+			rf, err := garageReplicationFactor(ctx, oscName)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(rf).To(Equal(2))
+
+			By("asserting the pod template carries a config-hash annotation")
+			Expect(sts.Spec.Template.Annotations).To(HaveKey("storage.deckhouse.io/config-hash"))
 		})
 
 		It("provisions a bucket, access + policy and a complete credentials Secret", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), suiteCfg.obReadyTimeout+2*time.Minute)
 			defer cancel()
 
-			By("creating ObjectStorageBucket " + bucketName)
+			By("creating Bucket " + bucketName)
 			Expect(createOSB(ctx, buildOSB(bucketName, oscName, objectv1alpha1.BucketReclaimDelete))).To(Succeed())
 			Expect(waitOSBReady(ctx, bucketName)).To(Succeed())
 
-			By("creating policy + ObjectStorageBucketAccess " + accessName(bucketName))
+			By("creating policy + BucketAccess " + accessName(bucketName))
 			Expect(createOSBPolicy(ctx, buildOSBPolicy(policyName(bucketName), bucketName, []string{suiteCfg.namespace}))).To(Succeed())
-			Expect(createOSBAccess(ctx, buildOSBAccess(accessName(bucketName), suiteCfg.namespace, bucketName, objectv1alpha1.AccessReadWrite))).To(Succeed())
+			Expect(createBucketClaim(ctx, buildBucketClaim(claimName(bucketName), suiteCfg.namespace, bucketName))).To(Succeed())
+			Expect(createOSBAccess(ctx, buildOSBAccess(accessName(bucketName), suiteCfg.namespace, claimName(bucketName), objectv1alpha1.AccessReadWrite))).To(Succeed())
 			Expect(waitAccessReady(ctx, suiteCfg.namespace, accessName(bucketName))).To(Succeed())
 
 			var err error
-			secretName, err = getStringField(ctx, objectStorageBucketAccessGVR, suiteCfg.namespace, accessName(bucketName), "status", "secretRef", "name")
+			secretName, err = getStringField(ctx, bucketAccessGVR, suiteCfg.namespace, accessName(bucketName), "status", "secretRef", "name")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(secretName).NotTo(BeEmpty())
 
@@ -125,24 +141,24 @@ func lightweightSpecs() {
 			ctx, cancel := context.WithTimeout(context.Background(), resourceGoneTimeout+2*time.Minute)
 			defer cancel()
 
-			By("deleting ObjectStorageBucketAccess " + accessName(bucketName))
-			Expect(suiteDyn.Resource(objectStorageBucketAccessGVR).Namespace(suiteCfg.namespace).
+			By("deleting BucketAccess " + accessName(bucketName))
+			Expect(suiteDyn.Resource(bucketAccessGVR).Namespace(suiteCfg.namespace).
 				Delete(ctx, accessName(bucketName), metav1.DeleteOptions{})).To(Succeed())
-			Expect(waitResourceGone(ctx, objectStorageBucketAccessGVR, suiteCfg.namespace, accessName(bucketName), resourceGoneTimeout)).To(Succeed())
+			Expect(waitResourceGone(ctx, bucketAccessGVR, suiteCfg.namespace, accessName(bucketName), resourceGoneTimeout)).To(Succeed())
 			if secretName != "" {
 				Expect(waitSecretGone(ctx, suiteCfg.namespace, secretName, 2*time.Minute)).To(Succeed())
 			}
 
-			By("deleting ObjectStorageBucketPolicy + ObjectStorageBucket " + bucketName)
-			_ = suiteDyn.Resource(objectStorageBucketPolicyGVR).Delete(ctx, policyName(bucketName), metav1.DeleteOptions{})
-			Expect(suiteDyn.Resource(objectStorageBucketGVR).
+			By("deleting BucketClaimPolicy + Bucket " + bucketName)
+			_ = suiteDyn.Resource(bucketClaimPolicyGVR).Delete(ctx, policyName(bucketName), metav1.DeleteOptions{})
+			Expect(suiteDyn.Resource(bucketGVR).
 				Delete(ctx, bucketName, metav1.DeleteOptions{})).To(Succeed())
-			Expect(waitResourceGone(ctx, objectStorageBucketGVR, "", bucketName, resourceGoneTimeout)).To(Succeed())
+			Expect(waitResourceGone(ctx, bucketGVR, "", bucketName, resourceGoneTimeout)).To(Succeed())
 
-			By("deleting ObjectStorageCluster " + oscName)
-			Expect(suiteDyn.Resource(objectStorageClusterGVR).
+			By("deleting ObjectStore " + oscName)
+			Expect(suiteDyn.Resource(objectStoreGVR).
 				Delete(ctx, oscName, metav1.DeleteOptions{})).To(Succeed())
-			Expect(waitResourceGone(ctx, objectStorageClusterGVR, "", oscName, resourceGoneTimeout)).To(Succeed())
+			Expect(waitResourceGone(ctx, objectStoreGVR, "", oscName, resourceGoneTimeout)).To(Succeed())
 		})
 	})
 }

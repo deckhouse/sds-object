@@ -38,31 +38,31 @@ import (
 	"github.com/deckhouse/sds-object/images/controller/pkg/logger"
 )
 
-// ObjectStorageBucketPolicyReconciler validates an ObjectStorageBucketPolicy:
+// BucketClaimPolicyReconciler validates an BucketClaimPolicy:
 // its regexp patterns must compile and the referenced bucket should exist. It
 // carries no backend state (enforcement happens in the access reconciler and
 // the admission webhook), so it only maintains the Ready condition / phase.
-type ObjectStorageBucketPolicyReconciler struct {
+type BucketClaimPolicyReconciler struct {
 	Client client.Client
 	Log    *logger.Logger
 	Cfg    *config.Options
 }
 
-func AddObjectStorageBucketPolicyReconcilerToManager(mgr manager.Manager, cfg *config.Options, log *logger.Logger) error {
-	r := &ObjectStorageBucketPolicyReconciler{
+func AddBucketClaimPolicyReconcilerToManager(mgr manager.Manager, cfg *config.Options, log *logger.Logger) error {
+	r := &BucketClaimPolicyReconciler{
 		Client: mgr.GetClient(),
 		Log:    log,
 		Cfg:    cfg,
 	}
 	return ctrl.NewControllerManagedBy(mgr).
-		Named("object-storage-bucket-policy").
-		For(&v1alpha1.ObjectStorageBucketPolicy{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		Named("bucket-policy").
+		For(&v1alpha1.BucketClaimPolicy{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		WithOptions(controller.Options{MaxConcurrentReconciles: cfg.MaxConcurrentReconciles}).
 		Complete(r)
 }
 
-func (r *ObjectStorageBucketPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	policy := &v1alpha1.ObjectStorageBucketPolicy{}
+func (r *BucketClaimPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	policy := &v1alpha1.BucketClaimPolicy{}
 	if err := r.Client.Get(ctx, req.NamespacedName, policy); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
@@ -80,14 +80,14 @@ func (r *ObjectStorageBucketPolicyReconciler) Reconcile(ctx context.Context, req
 		message = fmt.Sprintf("invalid namespace pattern %q: %v", badPattern, err)
 	} else if !r.bucketExists(ctx, policy.Spec.BucketRef) {
 		phase, condStatus, reason = v1alpha1.PhasePending, metav1.ConditionFalse, "WaitingForBucket"
-		message = fmt.Sprintf("referenced ObjectStorageBucket %q not found", policy.Spec.BucketRef)
+		message = fmt.Sprintf("referenced Bucket %q not found", policy.Spec.BucketRef)
 	}
 
 	return ctrl.Result{}, r.updateStatus(ctx, policy, phase, condStatus, reason, message)
 }
 
-func (r *ObjectStorageBucketPolicyReconciler) bucketExists(ctx context.Context, name string) bool {
-	bucket := &v1alpha1.ObjectStorageBucket{}
+func (r *BucketClaimPolicyReconciler) bucketExists(ctx context.Context, name string) bool {
+	bucket := &v1alpha1.Bucket{}
 	return r.Client.Get(ctx, client.ObjectKey{Name: name}, bucket) == nil
 }
 
@@ -101,25 +101,25 @@ func firstInvalidPattern(patterns []string) (string, error) {
 	return "", nil
 }
 
-func (r *ObjectStorageBucketPolicyReconciler) updateStatus(
+func (r *BucketClaimPolicyReconciler) updateStatus(
 	ctx context.Context,
-	policy *v1alpha1.ObjectStorageBucketPolicy,
+	policy *v1alpha1.BucketClaimPolicy,
 	phase string,
 	condStatus metav1.ConditionStatus,
 	reason, message string,
 ) error {
 	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		latest := &v1alpha1.ObjectStorageBucketPolicy{}
+		latest := &v1alpha1.BucketClaimPolicy{}
 		if err := r.Client.Get(ctx, client.ObjectKey{Name: policy.Name}, latest); err != nil {
 			return err
 		}
 		if latest.Status == nil {
-			latest.Status = &v1alpha1.ObjectStorageBucketPolicyStatus{}
+			latest.Status = &v1alpha1.BucketClaimPolicyStatus{}
 		}
 		before := latest.Status.DeepCopy()
 
 		apimeta.SetStatusCondition(&latest.Status.Conditions, metav1.Condition{
-			Type:               v1alpha1.OSBPConditionReady,
+			Type:               v1alpha1.BucketClaimPolicyConditionReady,
 			Status:             condStatus,
 			Reason:             reason,
 			Message:            message,

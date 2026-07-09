@@ -27,19 +27,19 @@ import (
 	"github.com/deckhouse/sds-object/images/controller/internal/backend"
 )
 
-func cluster(name string, r v1alpha1.RedundancyMode) *v1alpha1.ObjectStorageCluster {
-	return &v1alpha1.ObjectStorageCluster{
+func cluster(name string, r v1alpha1.RedundancyMode) *v1alpha1.ObjectStore {
+	return &v1alpha1.ObjectStore{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec:       v1alpha1.ObjectStorageClusterSpec{Type: v1alpha1.ClusterTypeLightweight, Redundancy: r},
+		Spec:       v1alpha1.ObjectStoreSpec{Type: v1alpha1.ClusterTypeLightweight, Redundancy: r},
 	}
 }
 
 func TestReplicationFactor(t *testing.T) {
 	cases := map[v1alpha1.RedundancyMode]int32{
-		v1alpha1.RedundancySingle:         1,
-		v1alpha1.RedundancyReplicated:     3,
-		v1alpha1.RedundancyHighRedundancy: 5,
-		v1alpha1.RedundancyMode(""):       3, // default
+		v1alpha1.RedundancyNone:     1,
+		v1alpha1.RedundancyStandard: 3,
+		v1alpha1.RedundancyHigh:     5,
+		v1alpha1.RedundancyMode(""): 3, // default
 	}
 	for r, want := range cases {
 		if got := replicationFactor(cluster("c", r)); got != want {
@@ -55,13 +55,13 @@ func TestStorageSize(t *testing.T) {
 	}
 
 	sized := cluster("c", "")
-	sized.Spec.Storage = &v1alpha1.ObjectStorageClusterStorageSpec{Size: "20Gi"}
+	sized.Spec.Storage = &v1alpha1.ObjectStoreStorageSpec{SizePerNode: "20Gi"}
 	if got := storageSize(sized); got.Cmp(resource.MustParse("20Gi")) != 0 {
 		t.Errorf("storageSize(20Gi)=%s, want 20Gi", got.String())
 	}
 
 	bad := cluster("c", "")
-	bad.Spec.Storage = &v1alpha1.ObjectStorageClusterStorageSpec{Size: "not-a-quantity"}
+	bad.Spec.Storage = &v1alpha1.ObjectStoreStorageSpec{SizePerNode: "not-a-quantity"}
 	if got := storageSize(bad); got.Cmp(resource.MustParse("10Gi")) != 0 {
 		t.Errorf("storageSize(invalid)=%s, want 10Gi fallback", got.String())
 	}
@@ -81,20 +81,31 @@ func TestRenderConfig(t *testing.T) {
 	}
 }
 
-func TestClampOdd(t *testing.T) {
+func TestClampRF(t *testing.T) {
 	cases := []struct{ desired, nodes, want int32 }{
 		{1, 1, 1},
 		{3, 1, 1}, // one master -> single copy
-		{3, 2, 1}, // two nodes -> nearest odd below
+		{3, 2, 2}, // two nodes -> rf=2 (valid Garage mode)
 		{3, 3, 3},
-		{5, 3, 3}, // HighRedundancy on three masters
+		{5, 3, 3}, // High on three masters
+		{5, 4, 4}, // no odd rounding
 		{5, 5, 5},
 		{3, 0, 1}, // floor
 	}
 	for _, c := range cases {
-		if got := clampOdd(c.desired, c.nodes); got != c.want {
-			t.Errorf("clampOdd(%d, %d)=%d, want %d", c.desired, c.nodes, got, c.want)
+		if got := clampRF(c.desired, c.nodes); got != c.want {
+			t.Errorf("clampRF(%d, %d)=%d, want %d", c.desired, c.nodes, got, c.want)
 		}
+	}
+}
+
+func TestReplicationFactorFromConfigMap(t *testing.T) {
+	cm := buildConfigMap(cluster("shared", ""), "d8-sds-object", 2)
+	if got := replicationFactorFromConfigMap(cm); got != 2 {
+		t.Errorf("replicationFactorFromConfigMap=%d, want 2", got)
+	}
+	if got := replicationFactorFromConfigMap(nil); got != 0 {
+		t.Errorf("replicationFactorFromConfigMap(nil)=%d, want 0", got)
 	}
 }
 
@@ -112,24 +123,24 @@ func TestNamesAndEndpoints(t *testing.T) {
 	if got := adminEndpoint(c, "d8-sds-object", "cluster.local"); got != "http://shared-garage.d8-sds-object.svc.cluster.local:3903" {
 		t.Errorf("adminEndpoint=%q", got)
 	}
-	if l := commonLabels(c); l["storage.deckhouse.io/object-storage-cluster"] != "shared" {
+	if l := commonLabels(c); l["storage.deckhouse.io/object-store"] != "shared" {
 		t.Errorf("commonLabels missing cluster label: %v", l)
 	}
 }
 
 func TestBucketAndKeyNames(t *testing.T) {
-	def := &v1alpha1.ObjectStorageBucket{ObjectMeta: metav1.ObjectMeta{Name: "data"}}
+	def := &v1alpha1.Bucket{ObjectMeta: metav1.ObjectMeta{Name: "data"}}
 	if got := backend.BucketDisplayName(def); got != "data" {
 		t.Errorf("BucketDisplayName(default)=%q, want data", got)
 	}
-	explicit := &v1alpha1.ObjectStorageBucket{
+	explicit := &v1alpha1.Bucket{
 		ObjectMeta: metav1.ObjectMeta{Name: "data"},
-		Spec:       v1alpha1.ObjectStorageBucketSpec{BucketName: "custom"},
+		Spec:       v1alpha1.BucketSpec{BucketName: "custom"},
 	}
 	if got := backend.BucketDisplayName(explicit); got != "custom" {
 		t.Errorf("BucketDisplayName(explicit)=%q, want custom", got)
 	}
-	access := &v1alpha1.ObjectStorageBucketAccess{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "app"}}
+	access := &v1alpha1.BucketAccess{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "app"}}
 	if got := backend.AccessResourceName(access); got != "app.data" {
 		t.Errorf("AccessResourceName=%q, want app.data", got)
 	}

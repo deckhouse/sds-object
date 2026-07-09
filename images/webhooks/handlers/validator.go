@@ -35,23 +35,34 @@ func NewValidator(dyn dynamic.Interface) *Validator {
 	return &Validator{dyn: dyn}
 }
 
+// Contract constants mirrored from api/v1alpha1 (kept as local literals to avoid
+// a build dependency on the controller's API module).
+const (
+	reservedBucketNamePrefix = "claim-"
+	labelBucketOrigin        = "storage.deckhouse.io/bucket-origin"
+	bucketOriginBucketClaim  = "BucketClaim"
+)
+
 // GroupVersionResources the validators query.
 var (
-	objectStorageClusterGVR = schema.GroupVersionResource{
-		Group: "storage.deckhouse.io", Version: "v1alpha1", Resource: "objectstorageclusters",
+	objectStoreGVR = schema.GroupVersionResource{
+		Group: "storage.deckhouse.io", Version: "v1alpha1", Resource: "objectstores",
 	}
-	objectStorageBucketGVR = schema.GroupVersionResource{
-		Group: "storage.deckhouse.io", Version: "v1alpha1", Resource: "objectstoragebuckets",
+	bucketGVR = schema.GroupVersionResource{
+		Group: "storage.deckhouse.io", Version: "v1alpha1", Resource: "buckets",
 	}
-	objectStorageBucketPolicyGVR = schema.GroupVersionResource{
-		Group: "storage.deckhouse.io", Version: "v1alpha1", Resource: "objectstoragebucketpolicies",
+	bucketClaimGVR = schema.GroupVersionResource{
+		Group: "storage.deckhouse.io", Version: "v1alpha1", Resource: "bucketclaims",
+	}
+	bucketClaimPolicyGVR = schema.GroupVersionResource{
+		Group: "storage.deckhouse.io", Version: "v1alpha1", Resource: "bucketclaimpolicies",
 	}
 	elasticClusterGVR = schema.GroupVersionResource{
 		Group: "storage.deckhouse.io", Version: "v1alpha1", Resource: "elasticclusters",
 	}
 )
 
-// effectiveBucketName is the S3 bucket name an ObjectStorageBucket maps to:
+// effectiveBucketName is the S3 bucket name a Bucket maps to:
 // spec.bucketName when set, otherwise metadata.name.
 func effectiveBucketName(u *unstructured.Unstructured) string {
 	if name, _, _ := unstructured.NestedString(u.Object, "spec", "bucketName"); name != "" {

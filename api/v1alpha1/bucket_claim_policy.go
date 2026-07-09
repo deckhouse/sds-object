@@ -20,44 +20,45 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// ObjectStorageBucketPolicy is a cluster-scoped CR that declares which
-// namespaces may request access (via ObjectStorageBucketAccess) to a
-// cluster-scoped ObjectStorageBucket. Access is deny-by-default: an
-// ObjectStorageBucketAccess is only provisioned when at least one policy for
-// its bucket matches the access's namespace. Multiple policies for the same
-// bucket are additive (their allowed sets are unioned).
+// BucketClaimPolicy is a cluster-scoped CR that declares which namespaces may bind a
+// Shared (administrator-declared) Bucket via a brownfield BucketClaim
+// (spec.existingBucketName). Binding is deny-by-default: a brownfield claim is
+// only Bound when at least one policy for the target bucket matches the claim's
+// namespace. Multiple policies for the same bucket are additive (their allowed
+// sets are unioned). Greenfield claims provision their own private bucket and
+// need no policy.
 //
-// +kubebuilder:resource:scope=Cluster,shortName=osbp
+// +kubebuilder:resource:scope=Cluster,shortName=bp
 // +kubebuilder:subresource:status
 // +kubebuilder:object:root=true
 // +k8s:deepcopy-gen=true
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-type ObjectStorageBucketPolicy struct {
+type BucketClaimPolicy struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   ObjectStorageBucketPolicySpec    `json:"spec"`
-	Status *ObjectStorageBucketPolicyStatus `json:"status,omitempty"`
+	Spec   BucketClaimPolicySpec    `json:"spec"`
+	Status *BucketClaimPolicyStatus `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +k8s:deepcopy-gen=true
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-type ObjectStorageBucketPolicyList struct {
+type BucketClaimPolicyList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata"`
-	Items           []ObjectStorageBucketPolicy `json:"items"`
+	Items           []BucketClaimPolicy `json:"items"`
 }
 
 // +k8s:deepcopy-gen=true
-type ObjectStorageBucketPolicySpec struct {
-	// BucketRef is the name of the cluster-scoped ObjectStorageBucket this
-	// policy governs. Immutable after creation.
+type BucketClaimPolicySpec struct {
+	// BucketRef is the name of the cluster-scoped Shared Bucket this policy
+	// governs. Immutable after creation.
 	// +kubebuilder:validation:Required
 	BucketRef string `json:"bucketRef"`
 
-	// AllowedNamespaces selects the namespaces permitted to request access to
-	// the bucket. At least one of names or patterns must be set.
+	// AllowedNamespaces selects the namespaces permitted to bind the bucket via
+	// a brownfield BucketClaim. At least one of names or patterns must be set.
 	// +kubebuilder:validation:Required
 	AllowedNamespaces NamespaceMatch `json:"allowedNamespaces"`
 }
@@ -80,7 +81,7 @@ type NamespaceMatch struct {
 }
 
 // +k8s:deepcopy-gen=true
-type ObjectStorageBucketPolicyStatus struct {
+type BucketClaimPolicyStatus struct {
 	// ObservedGeneration is the most recent .metadata.generation reconciled
 	// by the controller.
 	// +optional
@@ -101,11 +102,11 @@ type ObjectStorageBucketPolicyStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 }
 
-// Well-known condition types for ObjectStorageBucketPolicy.
+// Well-known condition types for BucketClaimPolicy.
 const (
-	OSBPConditionReady = "Ready"
+	BucketClaimPolicyConditionReady = "Ready"
 )
 
-// ObjectStorageBucketPolicyKind is the kind constant used for dynamic GVK
+// BucketClaimPolicyKind is the kind constant used for dynamic GVK
 // lookups.
-const ObjectStorageBucketPolicyKind = "ObjectStorageBucketPolicy"
+const BucketClaimPolicyKind = "BucketClaimPolicy"

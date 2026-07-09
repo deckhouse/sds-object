@@ -130,7 +130,7 @@ func handlerRemoveFinalizersOnModuleDelete(ctx context.Context, input *pkg.HookI
 
 	for _, crgvk := range consts.CRGVKsForFinalizerRemoval {
 		// List cluster-wide (no namespace scoping): the module's namespaced CRs
-		// (e.g. ObjectStorageBucketAccess) live in the consuming applications'
+		// (e.g. BucketAccess) live in the consuming applications'
 		// namespaces, not in the module namespace, so restricting to
 		// ModuleNamespace would leave their finalizers set and the objects stuck
 		// in Terminating forever after the module (and its controller) is gone.

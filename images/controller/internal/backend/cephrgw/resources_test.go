@@ -25,10 +25,10 @@ import (
 	"github.com/deckhouse/sds-object/images/controller/internal/backend"
 )
 
-func heavy(name string, r v1alpha1.RedundancyMode) *v1alpha1.ObjectStorageCluster {
-	return &v1alpha1.ObjectStorageCluster{
+func heavy(name string, r v1alpha1.RedundancyMode) *v1alpha1.ObjectStore {
+	return &v1alpha1.ObjectStore{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec:       v1alpha1.ObjectStorageClusterSpec{Type: v1alpha1.ClusterTypeHeavy, Redundancy: r},
+		Spec:       v1alpha1.ObjectStoreSpec{Type: v1alpha1.ClusterTypeHeavy, Redundancy: r},
 	}
 }
 
@@ -38,10 +38,10 @@ func TestReplicatedPool(t *testing.T) {
 		size int64
 		safe bool
 	}{
-		{v1alpha1.RedundancySingle, 2, false},
-		{v1alpha1.RedundancyReplicated, 3, true},
+		{v1alpha1.RedundancyNone, 2, false},
+		{v1alpha1.RedundancyStandard, 3, true},
 		{v1alpha1.RedundancyMode(""), 3, true},
-		{v1alpha1.RedundancyHighRedundancy, 4, true},
+		{v1alpha1.RedundancyHigh, 4, true},
 	}
 	for _, c := range cases {
 		p := replicatedPool(heavy("h", c.r))
@@ -67,8 +67,8 @@ func TestRGWEndpointAndStore(t *testing.T) {
 
 func TestUserAndSecretNames(t *testing.T) {
 	c := heavy("main", "")
-	b := &v1alpha1.ObjectStorageBucket{ObjectMeta: metav1.ObjectMeta{Name: "data"}}
-	access := &v1alpha1.ObjectStorageBucketAccess{ObjectMeta: metav1.ObjectMeta{Namespace: "app", Name: "reader"}}
+	b := &v1alpha1.Bucket{ObjectMeta: metav1.ObjectMeta{Name: "data"}}
+	access := &v1alpha1.BucketAccess{ObjectMeta: metav1.ObjectMeta{Namespace: "app", Name: "reader"}}
 
 	if got := ownerUID(b); got != "data-owner" {
 		t.Errorf("ownerUID=%q, want data-owner", got)
@@ -97,7 +97,7 @@ func TestUserAndSecretNames(t *testing.T) {
 }
 
 func TestBuildCephObjectStore(t *testing.T) {
-	c := heavy("main", v1alpha1.RedundancyHighRedundancy)
+	c := heavy("main", v1alpha1.RedundancyHigh)
 	obj := buildCephObjectStore(c)
 
 	if obj.GetNamespace() != elasticNamespace {

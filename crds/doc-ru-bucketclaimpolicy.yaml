@@ -5,9 +5,9 @@ spec:
         openAPIV3Schema:
           description: |
             Определяет, из каких namespace разрешён запрос доступа (через
-            ObjectStorageBucketAccess) к cluster-scoped бакету
-            ObjectStorageBucket. Доступ работает по принципу deny-by-default:
-            ObjectStorageBucketAccess провижнится только если хотя бы одна
+            BucketAccess) к cluster-scoped бакету
+            Bucket. Доступ работает по принципу deny-by-default:
+            BucketAccess провижнится только если хотя бы одна
             политика для его бакета совпадает с namespace доступа. Несколько
             политик для одного бакета складываются (их разрешённые множества
             объединяются).
@@ -18,7 +18,7 @@ spec:
               properties:
                 bucketRef:
                   description: |
-                    Имя cluster-scoped бакета ObjectStorageBucket, к которому
+                    Имя cluster-scoped бакета Bucket, к которому
                     относится политика. Неизменяемо после создания.
                 allowedNamespaces:
                   description: |

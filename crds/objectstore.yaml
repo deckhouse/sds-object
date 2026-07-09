@@ -1,7 +1,7 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: objectstorageclusters.storage.deckhouse.io
+  name: objectstores.storage.deckhouse.io
   labels:
     heritage: deckhouse
     module: sds-object
@@ -10,11 +10,11 @@ spec:
   group: storage.deckhouse.io
   scope: Cluster
   names:
-    plural: objectstorageclusters
-    singular: objectstoragecluster
-    kind: ObjectStorageCluster
+    plural: objectstores
+    singular: objectstore
+    kind: ObjectStore
     shortNames:
-      - osc
+      - ostore
   preserveUnknownFields: false
   versions:
     - name: v1alpha1
@@ -24,22 +24,24 @@ spec:
         openAPIV3Schema:
           type: object
           description: |
-            ObjectStorageCluster describes the desired state of an S3-compatible
+            ObjectStore describes the desired state of an S3-compatible
             object storage cluster managed by the sds-object module. A single
             `spec.type` selects one of four turnkey profiles; the backend
             (Garage / SeaweedFS / Ceph RGW) and its low-level settings are hidden
             from the user (noops).
 
-            Buckets are declared separately in cluster-scoped ObjectStorageBucket
+            Buckets are declared separately in cluster-scoped Bucket
             resources that reference this cluster by name; per-namespace
-            credentials are requested via ObjectStorageBucketAccess.
+            credentials are requested via BucketAccess.
           required:
             - spec
           x-kubernetes-validations:
             - rule: "size(self.metadata.name) <= 30"
-              message: "ObjectStorageCluster metadata.name must not exceed 30 characters (used as a prefix in derived resource names)."
+              message: "ObjectStore metadata.name must not exceed 30 characters (used as a prefix in derived resource names)."
             - rule: "self.metadata.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')"
-              message: "ObjectStorageCluster metadata.name must be a valid DNS-1123 label."
+              message: "ObjectStore metadata.name must be a valid DNS-1123 label."
+            - rule: "self.spec.type != 'System' || self.metadata.name == 'system'"
+              message: "an ObjectStore with spec.type System must be named 'system'."
           properties:
             spec:
               type: object
@@ -62,6 +64,10 @@ spec:
                   message: "spec.elasticClusterRef is only allowed when spec.type is Heavy."
                 - rule: "!(self.type in ['Lightweight', 'Full']) || (has(self.storage) && has(self.storage.class) && size(self.storage.class) > 0)"
                   message: "spec.storage.class is required when spec.type is Lightweight or Full."
+                - rule: "self.type != 'System' || !has(self.redundancy)"
+                  message: "spec.redundancy must not be set when spec.type is System (it is derived from the control-plane node count)."
+                - rule: "self.type != 'System' || !has(self.storage) || !has(self.storage.sizePerNode)"
+                  message: "spec.storage.sizePerNode must not be set when spec.type is System (System uses hostPath on control-plane nodes)."
               properties:
                 type:
                   type: string
@@ -91,13 +97,25 @@ spec:
                     Capacity and backing storage. Ignored for `type: Heavy`
                     (capacity comes from the referenced Ceph cluster).
                   properties:
-                    size:
+                    sizePerNode:
                       type: string
                       description: |
-                        Total usable capacity as a Kubernetes Quantity (BinarySI),
-                        e.g. `50Gi` or `2Ti`. For `type: System` it is the capacity
-                        contributed per control-plane node.
+                        Usable capacity provisioned per data-plane node as a
+                        Kubernetes Quantity (BinarySI), e.g. `50Gi` or `2Ti`. The
+                        cluster-wide capacity is roughly `sizePerNode` times the
+                        node count. Defaults to `10Gi` when unset. Must not be set
+                        for `System` (hostPath on control-plane nodes).
                       pattern: '^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$'
+                    nodes:
+                      type: integer
+                      format: int32
+                      minimum: 1
+                      description: |
+                        Number of data-plane nodes (StatefulSet replicas for
+                        `Lightweight`, SeaweedFS volume servers for `Full`). When
+                        unset, the count is derived from `redundancy`. Ignored for
+                        `System` (one pod per control-plane node) and `Heavy`
+                        (topology comes from the referenced Ceph cluster).
                     class:
                       type: string
                       description: |
@@ -111,21 +129,22 @@ spec:
                   description: |
                     High-level fault-tolerance intent. The controller maps it to
                     backend-specific settings (replication factor / erasure coding).
-                    When omitted, a sensible default is derived from `spec.type`.
+                    When omitted, defaults to `Standard`.
 
-                    - `Single` — no redundancy (single copy). Lowest overhead.
-                    - `Replicated` — replicated copies across nodes/zones
+                    - `None` — no redundancy (single copy). Lowest overhead.
+                    - `Standard` — replicated copies across nodes/zones
                       (typical default).
-                    - `HighRedundancy` — maximum durability (extra replicas or
-                      erasure coding), requires more nodes.
+                    - `High` — maximum durability (extra replicas or erasure
+                      coding), requires more nodes.
 
                     Immutable after creation: changing the replication factor on
-                    a live cluster is not supported. For `System` the effective
-                    factor is capped by the number of control-plane nodes.
+                    a live cluster is not supported. Must not be set for `System`:
+                    the factor is derived from (and capped by) the number of
+                    control-plane nodes.
                   enum:
-                    - Single
-                    - Replicated
-                    - HighRedundancy
+                    - None
+                    - Standard
+                    - High
                 placement:
                   type: object
                   description: |
@@ -171,7 +190,7 @@ spec:
                   type: string
                   description: |
                     What happens to the backend data plane and its persisted
-                    data when the ObjectStorageCluster is deleted.
+                    data when the ObjectStore is deleted.
 
                     - `Retain` (default) — persisted data is preserved. For
                       `Heavy` the Ceph RGW pools are kept

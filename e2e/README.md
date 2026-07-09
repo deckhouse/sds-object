@@ -1,6 +1,6 @@
 # E2E tests for sds-object
 
-End-to-end coverage for the documented `ObjectStorageCluster` / `ObjectBucket`
+End-to-end coverage for the documented `ObjectStore` / `BucketClaim`
 lifecycle: cluster creation, bucket provisioning with the standardised S3
 credentials `Secret`, a real S3 write/list/read round-trip through the generated
 credentials, the admission guards (validating webhooks + CRD CEL rules), and
@@ -10,7 +10,7 @@ finalizer-driven deletion.
    (1 master + 2 workers) with the `sds-object` module enabled.
 2. `BeforeSuite` waits for the module to become Ready and ensures the in-cluster
    test namespace exists.
-3. A single shared `ObjectStorageCluster` is created and the ordered specs run
+3. A single shared `ObjectStore` is created and the ordered specs run
    on top of it: create → bucket + creds `Secret` + S3 round-trip → validation
    guards → delete.
 4. `AfterSuite` hands the cluster back to `storage-e2e` for teardown.
@@ -70,7 +70,7 @@ fails fast in `BeforeSuite` if a profile's required env knob is missing.
 ## Why one shared cluster + Ordered specs
 
 The validation and delete specs build on the cluster and bucket created by the
-first specs, so the suite uses a **single shared `ObjectStorageCluster`** inside
+first specs, so the suite uses a **single shared `ObjectStore`** inside
 one `Describe(..., Ordered)`. Spec registration goes through builder functions
 called in explicit order from the root container
 (`createSpecs → validationSpecs → deleteSpecs`); the deletion specs run last.
@@ -96,7 +96,7 @@ called in explicit order from the root container
   set to `true` to delete the VMs after the run.
 - `TEST_CLUSTER_NAMESPACE`:
   the VM namespace on the base cluster **and** the in-cluster namespace the
-  suite uses for ObjectBuckets / credentials Secrets / probe Pods (single source
+  suite uses for BucketClaims / credentials Secrets / probe Pods (single source
   of truth — no separate `E2E_NAMESPACE`).
 - `TEST_CLUSTER_STORAGE_CLASS`:
   base-cluster `StorageClass` for the VM OS disks.
@@ -123,13 +123,13 @@ called in explicit order from the root container
 
 ### `sds-object` suite knobs
 
-- `E2E_OSC_NAME`: name of the shared `ObjectStorageCluster`, defaults to `e2e-osc`.
+- `E2E_OSC_NAME`: name of the shared `ObjectStore`, defaults to `e2e-osc`.
 - `E2E_OSC_TYPE`: profile, one of `System` (default) / `Lightweight` / `Full` / `Heavy`.
 - `E2E_REDUNDANCY`: `Single` (default) / `Replicated` / `HighRedundancy`.
 - `E2E_STORAGE_CLASS`: StorageClass for the PVCs; **required** for `Lightweight`/`Full`.
 - `E2E_OSC_SIZE`: cluster storage size, defaults to `5Gi`.
 - `E2E_ELASTIC_CLUSTER_REF`: `ElasticCluster` name; **required** for `Heavy`.
-- `E2E_BUCKET_NAME`: name of the shared `ObjectBucket`, defaults to `e2e-bucket`.
+- `E2E_BUCKET_NAME`: name of the shared `BucketClaim`, defaults to `e2e-bucket`.
 - `E2E_OSC_READY_TIMEOUT`: Go duration bounding the cluster Ready wait, defaults to 15m.
 - `E2E_OB_READY_TIMEOUT`: Go duration bounding the bucket Ready wait, defaults to 5m.
 - `E2E_MODULE_READY_TIMEOUT`: Go duration bounding the module Ready wait, defaults to 15m.

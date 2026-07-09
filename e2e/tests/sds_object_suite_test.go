@@ -53,7 +53,7 @@ func TestSdsObject(t *testing.T) {
 		// Garage profiles, so the whole suite can run well past an hour.
 		suiteConfig.Timeout = 180 * time.Minute
 	}
-	// The suite shares one ObjectStorageCluster across dependency-ordered specs
+	// The suite shares one ObjectStore across dependency-ordered specs
 	// (create -> bucket + S3 round-trip -> validation guards -> delete), so spec
 	// randomization MUST stay OFF.
 	suiteConfig.RandomizeAllSpecs = false
@@ -83,10 +83,11 @@ var _ = Describe("sds-object e2e", Ordered, ContinueOnFailure, func() {
 	createSpecs()             // create_test.go: OSC -> Ready, OB -> Ready, creds Secret, S3 round-trip
 	validationSpecs()         // validation_test.go: webhook + CEL admission guards
 	accessSpecs()             // access_test.go: deny-by-default + revocation, regexp policy, key rotation, ReadOnly, cross-namespace
+	greenfieldSpecs()         // greenfield_test.go: self-service claim provisions a private bucket, capture guard, finalizer gate
 	systemBucketSpecs()       // system_test.go: built-in system OSCluster+OSB+policy shipped by templates
 	lightweightSpecs()        // lightweight_test.go: Lightweight (Garage on PVC) create -> bucket -> round-trip -> delete
-	fullSpecs()               // full_test.go: Full (SeaweedFS, Single/leveldb) create -> bucket -> round-trip -> delete
-	fullHighRedundancySpecs() // full_test.go: Full HighRedundancy (SeaweedFS multi-filer HA + managed-postgres)
+	fullSpecs()               // full_test.go: Full (SeaweedFS, None/leveldb) create -> bucket -> round-trip -> delete
+	fullHighRedundancySpecs() // full_test.go: Full High (SeaweedFS multi-filer HA + managed-postgres)
 	heavySpecs()              // heavy_test.go: Heavy (Ceph RGW on sds-elastic ElasticCluster) bring-up -> create -> bucket -> round-trip -> delete
 	deleteSpecs()             // delete_test.go: OB delete (+ creds Secret + reclaim), OSC delete
 })
@@ -146,7 +147,7 @@ func prepareSuite() {
 // readiness are already set up in BeforeSuite; this is the hook where specs wire
 // any additional shared fixtures.
 func prepareSharedState() {
-	GinkgoWriter.Printf("Shared ObjectStorageCluster for this run: %s (type %s, namespace %s)\n", suiteCfg.oscName, suiteCfg.oscType, suiteCfg.namespace)
+	GinkgoWriter.Printf("Shared ObjectStore for this run: %s (type %s, namespace %s)\n", suiteCfg.oscName, suiteCfg.oscType, suiteCfg.namespace)
 }
 
 func cleanupSuite() {
@@ -164,7 +165,7 @@ func printKeepClusterBanner() {
 	GinkgoWriter.Printf("\n========== E2E_KEEP_CLUSTER_ON_FAILURE: cluster preserved ==========\n")
 	GinkgoWriter.Printf("A spec failed and nested-cluster teardown was SKIPPED for debugging.\n")
 	GinkgoWriter.Printf("  namespace (OB/Secret + base VM ns): %s\n", suiteCfg.namespace)
-	GinkgoWriter.Printf("  ObjectStorageCluster:               %s (type %s)\n", suiteCfg.oscName, suiteCfg.oscType)
+	GinkgoWriter.Printf("  ObjectStore:               %s (type %s)\n", suiteCfg.oscName, suiteCfg.oscType)
 	GinkgoWriter.Printf("  module namespace:                   %s\n", moduleNS)
 	if suiteClusterResources != nil && suiteClusterResources.KubeconfigPath != "" {
 		GinkgoWriter.Printf("  kubeconfig (export KUBECONFIG):     %s\n", suiteClusterResources.KubeconfigPath)

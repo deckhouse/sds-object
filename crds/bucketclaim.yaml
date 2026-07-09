@@ -1,0 +1,198 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: bucketclaims.storage.deckhouse.io
+  labels:
+    heritage: deckhouse
+    module: sds-object
+    backup.deckhouse.io/cluster-config: "true"
+spec:
+  group: storage.deckhouse.io
+  scope: Namespaced
+  names:
+    plural: bucketclaims
+    singular: bucketclaim
+    kind: BucketClaim
+    shortNames:
+      - bc
+  preserveUnknownFields: false
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: |
+            BucketClaim is the namespaced request ("заявка") for a bucket.
+
+            - Greenfield (`spec.existingBucketName` empty): the controller
+              provisions a new cluster-scoped Bucket owned by this claim and
+              private to this namespace, in `spec.objectStoreRef`.
+            - Brownfield (`spec.existingBucketName` set): the claim binds an
+              existing Shared Bucket, allowed only when a `BucketClaimPolicy` grants
+              this namespace (deny-by-default).
+
+            Credentials are requested separately with a `BucketAccess` that
+            references this claim by name in the same namespace.
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              description: |
+                Desired state of the claim.
+              x-kubernetes-validations:
+                - rule: "(has(self.existingBucketName) && self.existingBucketName != '') || (has(self.objectStoreRef) && self.objectStoreRef != '')"
+                  message: "one of spec.objectStoreRef (greenfield) or spec.existingBucketName (brownfield) must be set."
+                - rule: "oldSelf == null || (has(self.objectStoreRef) == has(oldSelf.objectStoreRef) && (!has(self.objectStoreRef) || self.objectStoreRef == oldSelf.objectStoreRef))"
+                  message: "spec.objectStoreRef is immutable after creation."
+                - rule: "oldSelf == null || (has(self.existingBucketName) == has(oldSelf.existingBucketName) && (!has(self.existingBucketName) || self.existingBucketName == oldSelf.existingBucketName))"
+                  message: "spec.existingBucketName is immutable after creation."
+              properties:
+                objectStoreRef:
+                  type: string
+                  description: |
+                    Name of the ObjectStore in which a greenfield bucket is
+                    provisioned. Required for greenfield; ignored for brownfield.
+                    Immutable after creation.
+                  minLength: 1
+                  maxLength: 30
+                  pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+                existingBucketName:
+                  type: string
+                  description: |
+                    Name of an existing Shared (administrator-declared) Bucket to
+                    bind (brownfield). Allowed only when a `BucketClaimPolicy` grants
+                    this claim's namespace. Immutable after creation.
+                  minLength: 3
+                  maxLength: 63
+                  pattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+                accessPolicy:
+                  type: string
+                  description: |
+                    Access policy for a greenfield bucket. Ignored for brownfield.
+
+                    - `Private` (default) — accessible only with issued
+                      credentials.
+                    - `PublicRead` — objects are readable anonymously; writes
+                      still require credentials.
+                  enum:
+                    - Private
+                    - PublicRead
+                  default: Private
+                reclaimPolicy:
+                  type: string
+                  description: |
+                    What happens to a greenfield bucket's data when the claim (and
+                    its owned Bucket) is deleted. Ignored for brownfield.
+
+                    - `Retain` (default) — the bucket and its objects are kept.
+                    - `Delete` — the bucket and all its objects are deleted.
+                  enum:
+                    - Retain
+                    - Delete
+                  default: Retain
+                quota:
+                  type: object
+                  description: |
+                    Optional usage limits for a greenfield bucket. Enforcement
+                    depends on backend capabilities.
+                  properties:
+                    maxSize:
+                      type: string
+                      description: |
+                        Maximum total size as a Kubernetes Quantity (BinarySI),
+                        e.g. `10Gi`. Omit for no size limit.
+                      pattern: '^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$'
+                    maxObjects:
+                      type: integer
+                      format: int64
+                      minimum: 0
+                      description: |
+                        Maximum number of objects. 0 (default) means no limit.
+            status:
+              type: object
+              description: |
+                Observed state of the claim.
+              properties:
+                observedGeneration:
+                  type: integer
+                  format: int64
+                  description: |
+                    Most recent `metadata.generation` reconciled by the controller.
+                phase:
+                  type: string
+                  description: |
+                    Coarse-grained summary derived from conditions.
+                  enum:
+                    - Pending
+                    - InProgress
+                    - Ready
+                    - Error
+                boundBucketName:
+                  type: string
+                  description: |
+                    Name of the cluster-scoped Bucket this claim is bound to.
+                endpoint:
+                  type: string
+                  description: |
+                    In-cluster S3 endpoint URL of the backing ObjectStore.
+                conditions:
+                  type: array
+                  description: |
+                    Per-stage conditions: `Bound`, `BucketReady`, and the
+                    aggregate `Ready`.
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                      - lastTransitionTime
+                    properties:
+                      type:
+                        type: string
+                        description: |
+                          Condition type, for example `Ready`, `Bound`, or
+                          `BucketReady`.
+                      status:
+                        type: string
+                        description: Current status of the condition.
+                        enum:
+                          - "True"
+                          - "False"
+                          - "Unknown"
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                        description: |
+                          Value of `metadata.generation` the condition was last set against.
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                        description: |
+                          Timestamp of the last status transition for this condition.
+                      reason:
+                        type: string
+                        description: |
+                          Machine-readable reason for the current status, suitable for
+                          log filtering.
+                      message:
+                        type: string
+                        description: |
+                          Human-readable explanation of the current status.
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - jsonPath: .status.boundBucketName
+          name: Bucket
+          type: string
+        - jsonPath: .status.phase
+          name: Phase
+          type: string
+        - jsonPath: .status.conditions[?(@.type=="Ready")].status
+          name: Ready
+          type: string
+        - jsonPath: .metadata.creationTimestamp
+          name: Age
+          type: date

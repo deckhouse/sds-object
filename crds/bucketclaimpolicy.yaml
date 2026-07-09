@@ -1,7 +1,7 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: objectstoragebucketpolicies.storage.deckhouse.io
+  name: bucketclaimpolicies.storage.deckhouse.io
   labels:
     heritage: deckhouse
     module: sds-object
@@ -10,11 +10,11 @@ spec:
   group: storage.deckhouse.io
   scope: Cluster
   names:
-    plural: objectstoragebucketpolicies
-    singular: objectstoragebucketpolicy
-    kind: ObjectStorageBucketPolicy
+    plural: bucketclaimpolicies
+    singular: bucketclaimpolicy
+    kind: BucketClaimPolicy
     shortNames:
-      - osbp
+      - bcp
   preserveUnknownFields: false
   versions:
     - name: v1alpha1
@@ -24,10 +24,10 @@ spec:
         openAPIV3Schema:
           type: object
           description: |
-            ObjectStorageBucketPolicy declares which namespaces may request
-            access (via ObjectStorageBucketAccess) to a cluster-scoped
-            ObjectStorageBucket. Access is deny-by-default: an
-            ObjectStorageBucketAccess is only provisioned when at least one
+            BucketClaimPolicy declares which namespaces may request
+            access (via BucketAccess) to a cluster-scoped
+            Bucket. Access is deny-by-default: an
+            BucketAccess is only provisioned when at least one
             policy for its bucket matches the access's namespace. Multiple
             policies for the same bucket are additive (their allowed sets are
             unioned).
@@ -50,7 +50,7 @@ spec:
                 bucketRef:
                   type: string
                   description: |
-                    Name of the cluster-scoped ObjectStorageBucket this policy
+                    Name of the cluster-scoped Bucket this policy
                     governs. Immutable after creation.
                   minLength: 1
                   maxLength: 63

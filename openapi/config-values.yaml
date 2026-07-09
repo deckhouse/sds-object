@@ -4,16 +4,16 @@ properties:
     type: object
     default: {}
     description: |
-      The built-in system object storage: a `System` ObjectStorageCluster
-      (Garage on control-plane nodes) with a `system` ObjectStorageBucket for
+      The built-in system object storage: a `System` ObjectStore
+      (Garage on control-plane nodes) with a `system` Bucket for
       platform needs. The cluster redundancy follows the cluster HA mode
-      (`Replicated` when HA is enabled, otherwise `Single`).
+      (`Standard` when HA is enabled, otherwise `None`).
     properties:
       enabled:
         type: boolean
         default: true
         description: |
-          Whether to provision the system ObjectStorageCluster and its
+          Whether to provision the system ObjectStore and its
           `system` bucket. Disable if the platform does not need a built-in
           object storage.
   logLevel:
@@ -37,7 +37,7 @@ properties:
       [automatically](https://deckhouse.io/documentation/v1/#advanced-scheduling).
 
       Note: this does not control placement of object storage data planes —
-      that is configured per cluster via `ObjectStorageCluster.spec.placement`.
+      that is configured per cluster via `ObjectStore.spec.placement`.
   tolerations:
     type: array
     description: |
@@ -83,9 +83,9 @@ properties:
     type: object
     default: {}
     description: |
-      Settings of the sds-object-controller (reconciler for ObjectStorageCluster,
-      ObjectStorageBucket, ObjectStorageBucketAccess and
-      ObjectStorageBucketPolicy CRs).
+      Settings of the sds-object-controller (reconciler for ObjectStore,
+      Bucket, BucketAccess and
+      BucketClaimPolicy CRs).
     properties:
       resourcesManagement:
         description: |

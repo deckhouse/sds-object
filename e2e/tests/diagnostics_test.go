@@ -36,10 +36,10 @@ import (
 func dumpFailedSpecDiagnostics(ctx context.Context) {
 	GinkgoWriter.Printf("\n========== sds-object e2e diagnostics ==========\n")
 
-	dumpDynamic(ctx, objectStorageClusterGVR, "", suiteCfg.oscName, "ObjectStorageCluster")
-	dumpDynamic(ctx, objectStorageBucketGVR, "", suiteCfg.bucketName, "ObjectStorageBucket")
-	dumpDynamic(ctx, objectStorageBucketPolicyGVR, "", policyName(suiteCfg.bucketName), "ObjectStorageBucketPolicy")
-	dumpDynamic(ctx, objectStorageBucketAccessGVR, suiteCfg.namespace, accessName(suiteCfg.bucketName), "ObjectStorageBucketAccess")
+	dumpDynamic(ctx, objectStoreGVR, "", suiteCfg.oscName, "ObjectStore")
+	dumpDynamic(ctx, bucketGVR, "", suiteCfg.bucketName, "Bucket")
+	dumpDynamic(ctx, bucketClaimPolicyGVR, "", policyName(suiteCfg.bucketName), "BucketClaimPolicy")
+	dumpDynamic(ctx, bucketAccessGVR, suiteCfg.namespace, accessName(suiteCfg.bucketName), "BucketAccess")
 
 	dumpPods(ctx, moduleNS)
 	dumpEvents(ctx, moduleNS)

@@ -38,7 +38,7 @@ func (d NotImplementedDriver) Type() v1alpha1.BackendType {
 	return d.BackendType
 }
 
-func (d NotImplementedDriver) EnsureCluster(_ context.Context, _ *v1alpha1.ObjectStorageCluster) (ClusterState, error) {
+func (d NotImplementedDriver) EnsureCluster(_ context.Context, _ *v1alpha1.ObjectStore) (ClusterState, error) {
 	return ClusterState{
 		Ready:   false,
 		Message: fmt.Sprintf("backend %q is not implemented yet", d.BackendType),
@@ -46,29 +46,29 @@ func (d NotImplementedDriver) EnsureCluster(_ context.Context, _ *v1alpha1.Objec
 	}, nil
 }
 
-func (d NotImplementedDriver) DeleteCluster(_ context.Context, _ *v1alpha1.ObjectStorageCluster) error {
+func (d NotImplementedDriver) DeleteCluster(_ context.Context, _ *v1alpha1.ObjectStore) error {
 	return nil
 }
 
-func (d NotImplementedDriver) EnsureBucket(_ context.Context, _ *v1alpha1.ObjectStorageCluster, _ *v1alpha1.ObjectStorageBucket) (BucketState, error) {
+func (d NotImplementedDriver) EnsureBucket(_ context.Context, _ *v1alpha1.ObjectStore, _ *v1alpha1.Bucket) (BucketState, error) {
 	return BucketState{
 		Ready:   false,
 		Message: fmt.Sprintf("backend %q is not implemented yet", d.BackendType),
 	}, nil
 }
 
-func (d NotImplementedDriver) DeleteBucket(_ context.Context, _ *v1alpha1.ObjectStorageCluster, _ *v1alpha1.ObjectStorageBucket) error {
+func (d NotImplementedDriver) DeleteBucket(_ context.Context, _ *v1alpha1.ObjectStore, _ *v1alpha1.Bucket) error {
 	return nil
 }
 
-func (d NotImplementedDriver) EnsureAccess(_ context.Context, _ *v1alpha1.ObjectStorageCluster, _ *v1alpha1.ObjectStorageBucket, _ *v1alpha1.ObjectStorageBucketAccess, _ bool) (AccessState, error) {
+func (d NotImplementedDriver) EnsureAccess(_ context.Context, _ *v1alpha1.ObjectStore, _ *v1alpha1.Bucket, _ *v1alpha1.BucketAccess, _ bool) (AccessState, error) {
 	return AccessState{
 		Ready:   false,
 		Message: fmt.Sprintf("backend %q is not implemented yet", d.BackendType),
 	}, nil
 }
 
-func (d NotImplementedDriver) DeleteAccess(_ context.Context, _ *v1alpha1.ObjectStorageCluster, _ *v1alpha1.ObjectStorageBucket, _ *v1alpha1.ObjectStorageBucketAccess) error {
+func (d NotImplementedDriver) DeleteAccess(_ context.Context, _ *v1alpha1.ObjectStore, _ *v1alpha1.Bucket, _ *v1alpha1.BucketAccess) error {
 	return nil
 }
 

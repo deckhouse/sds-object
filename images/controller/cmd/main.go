@@ -106,20 +106,24 @@ func main() {
 		cephrgw.New(mgr.GetClient(), mgr.GetAPIReader(), log, cfgParams.ClusterDomain),
 	)
 
-	if err := controller.AddObjectStorageClusterReconcilerToManager(mgr, cfgParams, log, registry); err != nil {
-		log.Error(err, "[main] unable to register ObjectStorageCluster reconciler")
+	if err := controller.AddObjectStoreReconcilerToManager(mgr, cfgParams, log, registry); err != nil {
+		log.Error(err, "[main] unable to register ObjectStore reconciler")
 		os.Exit(1)
 	}
-	if err := controller.AddObjectStorageBucketReconcilerToManager(mgr, cfgParams, log, registry); err != nil {
-		log.Error(err, "[main] unable to register ObjectStorageBucket reconciler")
+	if err := controller.AddBucketReconcilerToManager(mgr, cfgParams, log, registry); err != nil {
+		log.Error(err, "[main] unable to register Bucket reconciler")
 		os.Exit(1)
 	}
-	if err := controller.AddObjectStorageBucketAccessReconcilerToManager(mgr, cfgParams, log, registry); err != nil {
-		log.Error(err, "[main] unable to register ObjectStorageBucketAccess reconciler")
+	if err := controller.AddBucketClaimReconcilerToManager(mgr, cfgParams, log); err != nil {
+		log.Error(err, "[main] unable to register BucketClaim reconciler")
 		os.Exit(1)
 	}
-	if err := controller.AddObjectStorageBucketPolicyReconcilerToManager(mgr, cfgParams, log); err != nil {
-		log.Error(err, "[main] unable to register ObjectStorageBucketPolicy reconciler")
+	if err := controller.AddBucketAccessReconcilerToManager(mgr, cfgParams, log, registry); err != nil {
+		log.Error(err, "[main] unable to register BucketAccess reconciler")
+		os.Exit(1)
+	}
+	if err := controller.AddBucketClaimPolicyReconcilerToManager(mgr, cfgParams, log); err != nil {
+		log.Error(err, "[main] unable to register BucketClaimPolicy reconciler")
 		os.Exit(1)
 	}
 

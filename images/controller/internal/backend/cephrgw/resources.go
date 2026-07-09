@@ -56,49 +56,49 @@ var (
 )
 
 // storeName is the CephObjectStore name (in d8-sds-elastic) for a cluster.
-func storeName(cluster *v1alpha1.ObjectStorageCluster) string {
+func storeName(cluster *v1alpha1.ObjectStore) string {
 	return cluster.Name
 }
 
-func commonLabels(cluster *v1alpha1.ObjectStorageCluster) map[string]string {
+func commonLabels(cluster *v1alpha1.ObjectStore) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/managed-by":                "sds-object",
-		"app.kubernetes.io/name":                      "ceph-rgw",
-		"storage.deckhouse.io/object-storage-cluster": cluster.Name,
+		"app.kubernetes.io/managed-by":      "sds-object",
+		"app.kubernetes.io/name":            "ceph-rgw",
+		"storage.deckhouse.io/object-store": cluster.Name,
 	}
 }
 
 // rgwEndpoint is the in-cluster S3 URL of the Rook RGW Service.
-func rgwEndpoint(cluster *v1alpha1.ObjectStorageCluster, clusterDomain string) string {
+func rgwEndpoint(cluster *v1alpha1.ObjectStore, clusterDomain string) string {
 	return fmt.Sprintf("http://rook-ceph-rgw-%s.%s.svc.%s:%d", storeName(cluster), elasticNamespace, clusterDomain, rgwPort)
 }
 
 // rgwHostPort is the host:port of the RGW endpoint (no scheme), for the S3 client.
-func rgwHostPort(cluster *v1alpha1.ObjectStorageCluster, clusterDomain string) string {
+func rgwHostPort(cluster *v1alpha1.ObjectStore, clusterDomain string) string {
 	return fmt.Sprintf("rook-ceph-rgw-%s.%s.svc.%s:%d", storeName(cluster), elasticNamespace, clusterDomain, rgwPort)
 }
 
 // ownerUID is the RGW user id (and CephObjectStoreUser CR name) of the
 // per-bucket owner user that creates and owns the bucket.
-func ownerUID(bucket *v1alpha1.ObjectStorageBucket) string {
+func ownerUID(bucket *v1alpha1.Bucket) string {
 	return backend.BucketDisplayName(bucket) + "-owner"
 }
 
 // accessUID is the RGW user id (and CephObjectStoreUser CR name) issued for an
-// ObjectStorageBucketAccess.
-func accessUID(access *v1alpha1.ObjectStorageBucketAccess) string {
+// BucketAccess.
+func accessUID(access *v1alpha1.BucketAccess) string {
 	return backend.AccessResourceName(access)
 }
 
 // rgwUserSecretName is the Secret Rook generates for a CephObjectStoreUser with
 // the given uid, in elasticNamespace (data keys AccessKey/SecretKey/Endpoint).
-func rgwUserSecretName(cluster *v1alpha1.ObjectStorageCluster, uid string) string {
+func rgwUserSecretName(cluster *v1alpha1.ObjectStore, uid string) string {
 	return fmt.Sprintf("rook-ceph-object-user-%s-%s", storeName(cluster), uid)
 }
 
 // buildCephObjectStoreUser returns the Rook CephObjectStoreUser with the given
 // RGW user id.
-func buildCephObjectStoreUser(cluster *v1alpha1.ObjectStorageCluster, uid string) *unstructured.Unstructured {
+func buildCephObjectStoreUser(cluster *v1alpha1.ObjectStore, uid string) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(cephObjectStoreUserGVK)
 	obj.SetName(uid)
@@ -113,16 +113,16 @@ func buildCephObjectStoreUser(cluster *v1alpha1.ObjectStorageCluster, uid string
 
 // replicatedPool maps the redundancy intent to a Ceph replicated pool spec,
 // mirroring sds-elastic's ElasticStorageClass replication conventions.
-func replicatedPool(cluster *v1alpha1.ObjectStorageCluster) map[string]interface{} {
+func replicatedPool(cluster *v1alpha1.ObjectStore) map[string]interface{} {
 	size := int64(3)
 	safe := true
 	switch cluster.Spec.Redundancy {
-	case v1alpha1.RedundancySingle:
+	case v1alpha1.RedundancyNone:
 		// Ceph size=1 is unsafe/impractical (any OSD loss loses data and blocks
 		// I/O), so the minimum for the Single intent is 2 copies with the safe-
 		// replica-size guard disabled (mirrors sds-elastic's convention).
 		size, safe = 2, false
-	case v1alpha1.RedundancyHighRedundancy:
+	case v1alpha1.RedundancyHigh:
 		size = 4
 	}
 	return map[string]interface{}{
@@ -132,7 +132,7 @@ func replicatedPool(cluster *v1alpha1.ObjectStorageCluster) map[string]interface
 }
 
 // buildCephObjectStore returns the Rook CephObjectStore for the cluster.
-func buildCephObjectStore(cluster *v1alpha1.ObjectStorageCluster) *unstructured.Unstructured {
+func buildCephObjectStore(cluster *v1alpha1.ObjectStore) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(cephObjectStoreGVK)
 	obj.SetName(storeName(cluster))
@@ -151,7 +151,7 @@ func buildCephObjectStore(cluster *v1alpha1.ObjectStorageCluster) *unstructured.
 			"replicated":    replicatedPool(cluster),
 		},
 		// Preserve the RGW data/metadata pools unless the cluster is explicitly
-		// reclaimed with Delete. Otherwise deleting the ObjectStorageCluster (or
+		// reclaimed with Delete. Otherwise deleting the ObjectStore (or
 		// even a Rook-side CephObjectStore churn) would destroy all bucket data
 		// regardless of any bucket's Retain policy.
 		"preservePoolsOnDelete": cluster.Spec.ReclaimPolicy != v1alpha1.ClusterReclaimDelete,
@@ -164,7 +164,7 @@ func buildCephObjectStore(cluster *v1alpha1.ObjectStorageCluster) *unstructured.
 }
 
 // objectStoreKey is the lookup key for the CephObjectStore.
-func objectStoreKey(cluster *v1alpha1.ObjectStorageCluster) (namespace, name string) {
+func objectStoreKey(cluster *v1alpha1.ObjectStore) (namespace, name string) {
 	return elasticNamespace, storeName(cluster)
 }
 

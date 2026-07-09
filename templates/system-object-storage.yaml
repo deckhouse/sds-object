@@ -1,37 +1,40 @@
 {{- /*
   Built-in system object storage.
 
-  Ships a cluster-scoped `system` ObjectStorageCluster (type System — Garage on
-  control-plane nodes with hostPath) plus a `system` ObjectStorageBucket for
-  platform needs, and an ObjectStorageBucketPolicy granting d8-* module
-  namespaces access to it (access is deny-by-default otherwise).
+  Ships a cluster-scoped `system` ObjectStore (type System — Garage on
+  control-plane nodes with hostPath) plus a `system` Shared Bucket for platform
+  needs, and a BucketClaimPolicy granting d8-* module namespaces the right to bind it
+  via a brownfield BucketClaim (binding is deny-by-default otherwise).
 
-  The cluster redundancy — and therefore the number of Garage data-plane
-  replicas — follows the cluster HA mode: `Replicated` (rf=3 across the 3
-  control-plane nodes) when HA is enabled, otherwise `Single` (rf=1).
+  The Garage replication factor is decided once at cluster init as
+  min(3, control-plane node count) — rf=1 on a single-master cluster, rf=3 on a
+  3-master HA cluster — and then PINNED (Garage cannot change it on a live
+  cluster). spec.redundancy is not set (and not allowed) for System. Later
+  control-plane changes only reshape the layout at that fixed factor: a 3-master
+  store keeps serving at 2 masters and degrades read-only (data intact) at 1,
+  recovering when masters return.
 */ -}}
 {{- if .Values.sdsObject.systemBucket.enabled }}
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectStorageCluster
+kind: ObjectStore
 metadata:
   name: system
   {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
 spec:
   type: System
-  redundancy: {{ include "helm_lib_is_ha_to_value" (list . "Replicated" "Single") | trim }}
   reclaimPolicy: Retain
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectStorageBucket
+kind: Bucket
 metadata:
   name: system
   {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
 spec:
-  clusterRef: system
+  objectStoreRef: system
   reclaimPolicy: Retain
 ---
 apiVersion: storage.deckhouse.io/v1alpha1
-kind: ObjectStorageBucketPolicy
+kind: BucketClaimPolicy
 metadata:
   name: system-d8-namespaces
   {{- include "helm_lib_module_labels" (list .) | nindent 2 }}

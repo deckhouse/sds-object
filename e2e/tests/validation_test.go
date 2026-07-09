@@ -38,22 +38,64 @@ import (
 // run on top of the shared cluster/bucket from create_test.go.
 func validationSpecs() {
 	Describe("validation", func() {
-		It("denies a second System ObjectStorageCluster", func() {
+		It("denies a System ObjectStore not named 'system' (CEL)", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 
-			// The module always ships a `system` System cluster, so any extra
-			// System cluster must be denied regardless of the primary profile.
+			// A System store must be named `system`; this both keeps a single
+			// System store and makes any second one collide on the name.
 			second := newOSC("e2e-extra-system", map[string]interface{}{
-				"type":       string(objectv1alpha1.ClusterTypeSystem),
-				"redundancy": string(objectv1alpha1.RedundancySingle),
+				"type": string(objectv1alpha1.ClusterTypeSystem),
 			})
 			err := createOSC(ctx, second)
 			// Best-effort cleanup in case the guard ever regresses and admits it.
 			defer func() {
-				_ = suiteDyn.Resource(objectStorageClusterGVR).Delete(context.Background(), "e2e-extra-system", metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(objectStoreGVR).Delete(context.Background(), "e2e-extra-system", metav1.DeleteOptions{})
 			}()
-			expectDenied(err, "only one System ObjectStorageCluster is allowed")
+			expectDenied(err, "must be named 'system'")
+		})
+
+		It("denies spec.redundancy on a System ObjectStore (CEL)", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+
+			// Use name 'system' so the name rule passes and the redundancy rule is
+			// the sole CEL failure. CEL runs on the submitted object at admission
+			// (before persistence), so nothing is ever created — no cleanup, and no
+			// risk of touching the shipped `system` store.
+			bad := newOSC("system", map[string]interface{}{
+				"type":       string(objectv1alpha1.ClusterTypeSystem),
+				"redundancy": string(objectv1alpha1.RedundancyStandard),
+			})
+			err := createOSC(ctx, bad)
+			expectDenied(err, "redundancy must not be set")
+		})
+
+		It("denies spec.storage.sizePerNode on a System ObjectStore (CEL)", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+
+			// name 'system' isolates the sizePerNode rule (see the redundancy case).
+			bad := newOSC("system", map[string]interface{}{
+				"type":    string(objectv1alpha1.ClusterTypeSystem),
+				"storage": map[string]interface{}{"sizePerNode": "10Gi"},
+			})
+			err := createOSC(ctx, bad)
+			expectDenied(err, "sizePerNode must not be set")
+		})
+
+		It("denies an administrator Bucket using the reserved claim- name prefix", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+
+			// The reserved prefix is only for controller-provisioned greenfield
+			// buckets; an administrator-declared Bucket may not use it.
+			bad := buildOSB("claim-e2e-reserved", suiteCfg.oscName, objectv1alpha1.BucketReclaimRetain)
+			err := createOSB(ctx, bad)
+			defer func() {
+				_ = suiteDyn.Resource(bucketGVR).Delete(context.Background(), "claim-e2e-reserved", metav1.DeleteOptions{})
+			}()
+			expectDenied(err, "reserved prefix")
 		})
 
 		It("denies a duplicate effective bucket name on the same cluster", func() {
@@ -69,7 +111,7 @@ func validationSpecs() {
 
 			err := createOSB(ctx, dup)
 			defer func() {
-				_ = suiteDyn.Resource(objectStorageBucketGVR).Delete(context.Background(), "e2e-bucket-dup", metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketGVR).Delete(context.Background(), "e2e-bucket-dup", metav1.DeleteOptions{})
 			}()
 			expectDenied(err, "already claimed by")
 		})
@@ -84,7 +126,7 @@ func validationSpecs() {
 				newType = string(objectv1alpha1.ClusterTypeSystem)
 			}
 			patch := []byte(`{"spec":{"type":"` + newType + `"}}`)
-			_, err := suiteDyn.Resource(objectStorageClusterGVR).Patch(ctx, suiteCfg.oscName, types.MergePatchType, patch, metav1.PatchOptions{})
+			_, err := suiteDyn.Resource(objectStoreGVR).Patch(ctx, suiteCfg.oscName, types.MergePatchType, patch, metav1.PatchOptions{})
 			expectDenied(err, "spec.type is immutable")
 		})
 
@@ -94,11 +136,11 @@ func validationSpecs() {
 
 			bad := newOSC("e2e-heavy-noref", map[string]interface{}{
 				"type":       string(objectv1alpha1.ClusterTypeHeavy),
-				"redundancy": string(objectv1alpha1.RedundancySingle),
+				"redundancy": string(objectv1alpha1.RedundancyNone),
 			})
 			err := createOSC(ctx, bad)
 			defer func() {
-				_ = suiteDyn.Resource(objectStorageClusterGVR).Delete(context.Background(), "e2e-heavy-noref", metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(objectStoreGVR).Delete(context.Background(), "e2e-heavy-noref", metav1.DeleteOptions{})
 			}()
 			expectDenied(err, "elasticClusterRef is required")
 		})
@@ -109,12 +151,11 @@ func validationSpecs() {
 
 			bad := newOSC("e2e-sys-ref", map[string]interface{}{
 				"type":              string(objectv1alpha1.ClusterTypeSystem),
-				"redundancy":        string(objectv1alpha1.RedundancySingle),
 				"elasticClusterRef": "some-cluster",
 			})
 			err := createOSC(ctx, bad)
 			defer func() {
-				_ = suiteDyn.Resource(objectStorageClusterGVR).Delete(context.Background(), "e2e-sys-ref", metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(objectStoreGVR).Delete(context.Background(), "e2e-sys-ref", metav1.DeleteOptions{})
 			}()
 			expectDenied(err, "elasticClusterRef is only allowed")
 		})
@@ -125,16 +166,16 @@ func validationSpecs() {
 
 			bad := newOSC("e2e-light-noclass", map[string]interface{}{
 				"type":       string(objectv1alpha1.ClusterTypeLightweight),
-				"redundancy": string(objectv1alpha1.RedundancySingle),
+				"redundancy": string(objectv1alpha1.RedundancyNone),
 			})
 			err := createOSC(ctx, bad)
 			defer func() {
-				_ = suiteDyn.Resource(objectStorageClusterGVR).Delete(context.Background(), "e2e-light-noclass", metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(objectStoreGVR).Delete(context.Background(), "e2e-light-noclass", metav1.DeleteOptions{})
 			}()
 			expectDenied(err, "storage.class is required")
 		})
 
-		It("denies an ObjectStorageBucketPolicy with an invalid regex pattern", func() {
+		It("denies an BucketClaimPolicy with an invalid regex pattern", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 
@@ -147,18 +188,18 @@ func validationSpecs() {
 			}
 			err := createOSBPolicy(ctx, bad)
 			defer func() {
-				_ = suiteDyn.Resource(objectStorageBucketPolicyGVR).Delete(context.Background(), "e2e-bad-pattern", metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketClaimPolicyGVR).Delete(context.Background(), "e2e-bad-pattern", metav1.DeleteOptions{})
 			}()
 			expectDenied(err, "pattern")
 		})
 	})
 }
 
-// newOSC builds an ObjectStorageCluster with an explicit spec map (for negative
+// newOSC builds an ObjectStore with an explicit spec map (for negative
 // cases where buildOSC's profile-aware defaults would mask the rule under test).
 func newOSC(name string, spec map[string]interface{}) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
-	u.SetGroupVersionKind(schema.GroupVersionKind{Group: apiGroup, Version: apiVersion, Kind: objectv1alpha1.ObjectStorageClusterKind})
+	u.SetGroupVersionKind(schema.GroupVersionKind{Group: apiGroup, Version: apiVersion, Kind: objectv1alpha1.ObjectStoreKind})
 	u.SetName(name)
 	u.Object["spec"] = spec
 	return u
