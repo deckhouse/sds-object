@@ -84,8 +84,8 @@ func fullSpecs() {
 				"type":       string(objectv1alpha1.ClusterTypeFull),
 				"redundancy": string(objectv1alpha1.RedundancyNone),
 				"storage": map[string]interface{}{
-					"size":  suiteCfg.oscSize,
-					"class": storageClass,
+					"sizePerNode": suiteCfg.oscSize,
+					"class":       storageClass,
 				},
 			})
 			Expect(createOSC(ctx, osc)).To(Succeed())
@@ -207,8 +207,8 @@ func fullHighRedundancySpecs() {
 				"type":       string(objectv1alpha1.ClusterTypeFull),
 				"redundancy": string(objectv1alpha1.RedundancyHigh),
 				"storage": map[string]interface{}{
-					"size":  suiteCfg.oscSize,
-					"class": storageClass,
+					"sizePerNode": suiteCfg.oscSize,
+					"class":       storageClass,
 				},
 			})
 			Expect(createOSC(ctx, osc)).To(Succeed())
