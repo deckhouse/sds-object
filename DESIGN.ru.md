@@ -140,14 +140,28 @@ spec:
 
 ### 3.2 Семантика `redundancy`
 
-| Значение | Garage | SeaweedFS | Ceph RGW |
-|----------|--------|-----------|----------|
-| `None` | replication_factor=1 | replication=000 | пул size=1 |
-| `Standard` (default) | replication_factor=3* | replication=010/020 | пул size=3, min_size=2 |
-| `High` | replication_factor=3 + зоны | EC (k+m) | пул High / EC |
+Интент отказоустойчивости → настройки бэкенда:
 
-\* Для `System` `redundancy` не задаётся: фактор вычисляется как
-`min(3, число control-plane узлов)` на старте.
+| Значение | Garage (`replication_factor`) | SeaweedFS (код репликации) | Ceph RGW (data-пул) |
+|----------|-------------------------------|----------------------------|---------------------|
+| `None` | 1 | `000` | `size=2`\* |
+| `Standard` (default) | 3 | `001` | `size=3` |
+| `High` | 5 | `002` | `size=4` |
+
+\* Ceph `size=1` небезопасен, поэтому для `None` используется `size=2` с
+отключённым `requireSafeReplicaSize`. Metadata-пул Ceph всегда `size=3`.
+
+#### Реплики data plane и фактор репликации
+
+Число реплик и итоговый фактор зависят от профиля, `redundancy` и (для профилей
+на PVC) `spec.storage.nodes`. `spec.storage.sizePerNode` — ёмкость **на узел**.
+
+| Профиль (движок) | Реплики data plane | Фактор репликации / аналог |
+|------------------|--------------------|----------------------------|
+| `System` (Garage) | по поду на каждый control-plane узел (DaemonSet) | `min(3, число мастеров)`, **pinned**; `redundancy`/`sizePerNode` задавать нельзя |
+| `Lightweight` (Garage) | `spec.storage.nodes`, иначе из `redundancy`: None→1, Standard→3, High→5 | `clampRF(intent, число узлов)` = `max(1, min(intent, узлы))`, допускается 2, **pinned** |
+| `Full` (SeaweedFS) | volume-серверы: `spec.storage.nodes`, иначе None→1 / Standard→3 / High→4 (master 1/3/3; filer 1, в High → 3) | код репликации `000`/`001`/`002` из `redundancy` |
+| `Heavy` (Ceph RGW) | топология на стороне Ceph (`sds-elastic`) | `size` пула: None→2 / Standard→3 / High→4 |
 
 **Фактор репликации фиксируется при инициализации (pinned).** Garage не
 поддерживает смену `replication_factor` на живом кластере, поэтому контроллер
@@ -167,6 +181,19 @@ reconcile **считывает обратно из работающего кон
   избыточность — повышение rf потребовало бы небезопасной смены фактора).
 - **3 → 1** (постоянное сжатие): read-only на единственном узле, данные целы
   (при rf=3 копия была на всех трёх), восстановление при возврате мастеров.
+
+#### Особенности System
+
+`System` — особый профиль (Garage, DaemonSet на control-plane узлах, данные в
+`hostPath`), поднимаемый модулем по умолчанию вместе с системным бакетом и
+`BucketClaimPolicy` для `d8-*` namespace (отключается параметром модуля). Правила
+CRD (CEL) фиксируют его отличия:
+
+- имя ObjectStore обязано быть `system` (единственность + предсказуемые имена);
+- `spec.redundancy` и `spec.storage.sizePerNode` задавать нельзя: ёмкость — это
+  `hostPath` на мастерах, фактор — `min(3, число мастеров)`, закреплён при init;
+- смена числа мастеров фактор не меняет (см. сценарии выше); поды перекатываются
+  по `config-hash`, чтобы все ноды имели одинаковый `replication_factor`.
 
 ### 3.3 Status
 
