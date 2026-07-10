@@ -18,6 +18,7 @@ package tests
 
 import (
 	"context"
+	"os"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -28,6 +29,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	commander "github.com/deckhouse/storage-e2e/pkg/commander"
 
 	objectv1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 )
@@ -189,6 +192,35 @@ func systemBucketSpecs() {
 			Expect(createOSBAccess(ctx, buildOSBAccess(testAccess, suiteCfg.namespace, claimName(systemBucket), objectv1alpha1.AccessReadWrite))).To(Succeed())
 			Expect(waitAccessReady(ctx, suiteCfg.namespace, testAccess)).To(Succeed())
 			Expect(runS3ProbeJob(ctx, "s3-probe-system", suiteCfg.namespace, testSecret)).To(Succeed())
+
+			// Master-count transition: scale the control plane from 1 to 3 and
+			// confirm the new nodes joined. This exercises the System store across
+			// a control-plane growth; the System replicas stay pinned to their
+			// original master (node-sticky local PV) until a controlled rebalance,
+			// so a node auto-relocation assertion is intentionally left for later.
+			if os.Getenv("E2E_COMMANDER_URL") == "" {
+				By("skipping the master-count change (not a Commander-provisioned run)")
+			} else {
+				By("scaling the control plane from 1 to 3 masters via Commander")
+				mcCtx, mcCancel := context.WithTimeout(context.Background(), 45*time.Minute)
+				defer mcCancel()
+				Expect(commander.SetMasterCount(mcCtx, 3)).To(Succeed(), "scale control plane to 3 masters via Commander")
+
+				By("confirming the cluster now has 3 control-plane nodes")
+				Eventually(func() (int, error) {
+					nodes, listErr := suiteClientset.CoreV1().Nodes().List(mcCtx, metav1.ListOptions{
+						LabelSelector: "node-role.kubernetes.io/control-plane",
+					})
+					if listErr != nil {
+						return 0, listErr
+					}
+					return len(nodes.Items), nil
+				}, 15*time.Minute, 15*time.Second).Should(Equal(3), "control-plane node count must reach 3")
+
+				// TODO: once the controller auto-rebalances co-located System
+				// replicas onto newly added masters, assert here that the three
+				// Garage pods spread one-per-control-plane-node.
+			}
 		})
 	})
 }
