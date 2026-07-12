@@ -38,7 +38,11 @@ type placementAction struct {
 // nextPlacementAction decides the one replica to relocate to converge the System
 // replicas onto the target topology, given the live control-plane hostnames, the
 // node each replica's local PV is pinned to (replicaNode[ordinal]; "" when the
-// replica has no bound PV / is Pending) and whether Garage is currently healthy.
+// replica's PVC is unbound — still binding, e.g. during initial bring-up) and
+// whether Garage is currently healthy. An "" (settling) replica is never
+// migrated; only a replica bound to a wrong or removed node is moved. A replica
+// left Pending after its master was removed keeps its PVC bound to the old PV
+// (Retain), so it reads back as that removed node — not "" — and is migrated.
 //
 // Topology rules (the 2-master state is intentionally left untouched — a
 // mid-shrink transient we neither spread across nor consolidate from):
@@ -76,6 +80,9 @@ func nextPlacementAction(cpNodes []string, replicaNode map[int32]string, replica
 		}
 		for ord := int32(0); ord < replicas; ord++ {
 			n := replicaNode[ord]
+			if n == "" {
+				continue // PVC still binding — let it settle, do not disturb
+			}
 			if _, onCP := cpSet[n]; !onCP {
 				return placementAction{act: true, ordinal: ord, reason: "spread: replica off a control-plane node"}
 			}
@@ -88,7 +95,11 @@ func nextPlacementAction(cpNodes []string, replicaNode map[int32]string, replica
 	case len(cpNodes) == 1: // CONSOLIDATE
 		target := cpNodes[0]
 		for ord := int32(0); ord < replicas; ord++ {
-			if replicaNode[ord] != target {
+			n := replicaNode[ord]
+			if n == "" {
+				continue // PVC still binding (e.g. initial bring-up) — leave it
+			}
+			if n != target {
 				return placementAction{act: true, ordinal: ord, reason: "consolidate onto " + target}
 			}
 		}

@@ -53,7 +53,7 @@ func TestNextPlacementAction(t *testing.T) {
 			wantAct: false,
 		},
 		{
-			name:    "spread: replica off a (removed) node + healthy -> recycle it",
+			name:    "spread: replica bound to a removed node + healthy -> recycle it",
 			cpNodes: []string{"m0", "m1", "m2"},
 			replica: map[int32]string{0: "m0", 1: "m1", 2: "gone"},
 			healthy: true,
@@ -61,12 +61,11 @@ func TestNextPlacementAction(t *testing.T) {
 			wantOrd: 2,
 		},
 		{
-			name:    "spread: Pending replica (unbound) + healthy -> recycle it",
+			name:    "spread: unbound replica (still binding) -> left alone",
 			cpNodes: []string{"m0", "m1", "m2"},
 			replica: map[int32]string{0: "m0", 1: "m1", 2: ""},
 			healthy: true,
-			wantAct: true,
-			wantOrd: 2,
+			wantAct: false,
 		},
 		// CONSOLIDATE (exactly 1 master)
 		{
@@ -77,12 +76,19 @@ func TestNextPlacementAction(t *testing.T) {
 			wantAct: false,
 		},
 		{
-			name:    "consolidate: Pending replicas -> recycle first not-on-target (anchor untouched)",
+			name:    "consolidate: replicas bound to removed masters -> recycle first (anchor untouched)",
 			cpNodes: []string{"m0"},
-			replica: map[int32]string{0: "m0", 1: "", 2: ""},
+			replica: map[int32]string{0: "m0", 1: "gone1", 2: "gone2"},
 			healthy: false,
 			wantAct: true,
 			wantOrd: 1,
+		},
+		{
+			name:    "consolidate: unbound replica (still binding) -> left alone",
+			cpNodes: []string{"m0"},
+			replica: map[int32]string{0: "m0", 1: "", 2: "m0"},
+			healthy: false,
+			wantAct: false,
 		},
 		{
 			name:    "consolidate: replica on a stale node -> recycle it",
