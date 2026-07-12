@@ -69,6 +69,33 @@ func (d *Driver) ensureSystemLocalPVs(ctx context.Context, cluster *v1alpha1.Obj
 			return err
 		}
 	}
+
+	return d.gcSystemLocalPVs(ctx, existing, hostnames)
+}
+
+// gcSystemLocalPVs reaps stale pool PVs: any Released PV (its PVC was recycled
+// during a rebalance — Retain left the PV behind), and any Available PV pinned
+// to a node that is no longer a control-plane node (a removed master). Bound PVs
+// are never touched (a live replica, or a Pending replica still owning it — the
+// placement reconcile recycles the latter's PVC, after which the PV goes
+// Released and is reaped on a later pass).
+func (d *Driver) gcSystemLocalPVs(ctx context.Context, pool *corev1.PersistentVolumeList, hostnames []string) error {
+	live := make(map[string]struct{}, len(hostnames))
+	for _, h := range hostnames {
+		live[h] = struct{}{}
+	}
+	for i := range pool.Items {
+		pv := &pool.Items[i]
+		_, onLiveNode := live[pv.Labels[labelSystemLocalNode]]
+		stale := pv.Status.Phase == corev1.VolumeReleased ||
+			(pv.Status.Phase == corev1.VolumeAvailable && !onLiveNode)
+		if !stale {
+			continue
+		}
+		if err := d.client.Delete(ctx, pv); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
 	return nil
 }
 

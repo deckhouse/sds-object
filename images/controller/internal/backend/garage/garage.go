@@ -121,6 +121,18 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 		if err := d.ensureSystemLocalPVs(ctx, cluster); err != nil {
 			return state, fmt.Errorf("ensure system local PVs: %w", err)
 		}
+		// Converge replica placement onto the target topology as the master count
+		// changes (spread across 3 masters, consolidate onto 1). One health-gated
+		// PVC recycle per reconcile; when it acts, report progress and requeue so
+		// the move settles before the next one.
+		acted, msg, err := d.reconcileSystemPlacement(ctx, cluster)
+		if err != nil {
+			return state, fmt.Errorf("reconcile system placement: %w", err)
+		}
+		if acted {
+			state.Message = msg
+			return state, nil
+		}
 	}
 
 	workloadReady, workloadMsg, err := d.ensureWorkload(ctx, cluster, cfgHash)

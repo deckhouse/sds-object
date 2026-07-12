@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"reflect"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,8 +31,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 	"github.com/deckhouse/sds-object/images/controller/internal/backend"
@@ -78,8 +81,43 @@ func AddObjectStoreReconcilerToManager(mgr manager.Manager, cfg *config.Options,
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("object-store").
 		For(&v1alpha1.ObjectStore{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		// Control-plane Node add/remove changes the master count, which drives
+		// the System profile's replica placement (spread across masters /
+		// consolidate onto one) and its local-PV pool. GenerationChangedPredicate
+		// on the ObjectStore does not see that, so watch control-plane Nodes and
+		// re-reconcile the System ObjectStore(s) on their create/delete.
+		Watches(&corev1.Node{},
+			handler.EnqueueRequestsFromMapFunc(enqueueSystemObjectStores(mgr.GetClient())),
+			builder.WithPredicates(controlPlaneNodePredicate())).
 		WithOptions(controller.Options{MaxConcurrentReconciles: cfg.MaxConcurrentReconciles}).
 		Complete(r)
+}
+
+// controlPlaneNodePredicate matches only control-plane Nodes, so the Node watch
+// ignores worker churn.
+func controlPlaneNodePredicate() predicate.Predicate {
+	return predicate.NewPredicateFuncs(func(o client.Object) bool {
+		_, ok := o.GetLabels()["node-role.kubernetes.io/control-plane"]
+		return ok
+	})
+}
+
+// enqueueSystemObjectStores maps a control-plane Node event to a reconcile of
+// every System-type ObjectStore (only System depends on the master count).
+func enqueueSystemObjectStores(c client.Client) handler.MapFunc {
+	return func(ctx context.Context, _ client.Object) []reconcile.Request {
+		list := &v1alpha1.ObjectStoreList{}
+		if err := c.List(ctx, list); err != nil {
+			return nil
+		}
+		var reqs []reconcile.Request
+		for i := range list.Items {
+			if list.Items[i].Spec.Type == v1alpha1.ClusterTypeSystem {
+				reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKey{Name: list.Items[i].Name}})
+			}
+		}
+		return reqs
+	}
 }
 
 func (r *ObjectStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
