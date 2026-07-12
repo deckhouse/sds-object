@@ -101,7 +101,7 @@ func main() {
 	// Garage backs the System and Lightweight profiles; SeaweedFS backs Full;
 	// Ceph RGW backs Heavy (on top of an sds-elastic cluster).
 	registry := backend.NewRegistry(
-		garage.New(mgr.GetClient(), mgr.GetAPIReader(), log, cfgParams.ControllerNamespace, cfgParams.GarageImage, cfgParams.ClusterDomain),
+		garage.New(mgr.GetClient(), mgr.GetAPIReader(), mgr.GetConfig(), log, cfgParams.ControllerNamespace, cfgParams.GarageImage, cfgParams.ClusterDomain),
 		seaweedfs.New(mgr.GetClient(), mgr.GetAPIReader(), log, cfgParams.ControllerNamespace, cfgParams.SeaweedFSImage, cfgParams.ClusterDomain),
 		cephrgw.New(mgr.GetClient(), mgr.GetAPIReader(), log, cfgParams.ClusterDomain),
 	)

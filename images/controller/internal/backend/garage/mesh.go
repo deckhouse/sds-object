@@ -107,6 +107,21 @@ func (d *Driver) ensureMeshAndLayout(ctx context.Context, cluster *v1alpha1.Obje
 	if err != nil {
 		return meshResult{msg: fmt.Sprintf("reading health: %v", err)}, nil
 	}
+	// A removed replica whose master is gone stays a dead node Garage keeps
+	// waiting to drain, pinning the cluster at "degraded" (fewer storage nodes ok
+	// than known) forever — which blocks ObjectStore readiness and the next
+	// placement move. The v1 admin API has no skip-dead-nodes, so force progress
+	// via the CLI, then re-read health. Runs every reconcile while stuck, so a
+	// transient exec failure just retries.
+	if health.Status != "healthy" && health.StorageNodes > health.StorageNodesOk {
+		if lv, lerr := svc.layout(ctx); lerr == nil {
+			if serr := d.skipDeadNodes(ctx, cluster, lv.Version); serr != nil {
+				d.log.Error(serr, "skip dead nodes")
+			} else if h2, herr := svc.health(ctx); herr == nil {
+				health = h2
+			}
+		}
+	}
 	total := layoutTotalCapacity(layout)
 	if health.Status != "healthy" {
 		return meshResult{msg: fmt.Sprintf("Garage cluster health is %q (%d/%d storage nodes ok)", health.Status, health.StorageNodesOk, health.StorageNodes), total: total}, nil
