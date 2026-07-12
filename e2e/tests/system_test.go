@@ -193,36 +193,93 @@ func systemBucketSpecs() {
 			Expect(waitAccessReady(ctx, suiteCfg.namespace, testAccess)).To(Succeed())
 			Expect(runS3ProbeJob(ctx, "s3-probe-system", suiteCfg.namespace, testSecret)).To(Succeed())
 
-			// Master-count transition: scale the control plane from 1 to 3 and
-			// confirm the new nodes joined. This exercises the System store across
-			// a control-plane growth; the System replicas stay pinned to their
-			// original master (node-sticky local PV) until a controlled rebalance,
-			// so a node auto-relocation assertion is intentionally left for later.
+			// Master-count transitions: grow 1->3 then shrink 3->1, asserting the
+			// controller auto-rebalances the System replicas each way (spread
+			// one-per-master on growth, consolidate onto the survivor on shrink)
+			// while the store stays healthy. This is slow (Commander resizes the
+			// control plane + Garage re-replicates per move), hence the long budget.
 			if os.Getenv("E2E_COMMANDER_URL") == "" {
-				By("skipping the master-count change (not a Commander-provisioned run)")
+				By("skipping the master-count transitions (not a Commander-provisioned run)")
 			} else {
-				By("scaling the control plane from 1 to 3 masters via Commander")
-				mcCtx, mcCancel := context.WithTimeout(context.Background(), 45*time.Minute)
+				mcCtx, mcCancel := context.WithTimeout(context.Background(), 90*time.Minute)
 				defer mcCancel()
-				Expect(commander.SetMasterCount(mcCtx, 3)).To(Succeed(), "scale control plane to 3 masters via Commander")
 
-				By("confirming the cluster now has 3 control-plane nodes")
-				Eventually(func() (int, error) {
-					nodes, listErr := suiteClientset.CoreV1().Nodes().List(mcCtx, metav1.ListOptions{
-						LabelSelector: "node-role.kubernetes.io/control-plane",
-					})
-					if listErr != nil {
-						return 0, listErr
-					}
-					return len(nodes.Items), nil
-				}, 15*time.Minute, 15*time.Second).Should(Equal(3), "control-plane node count must reach 3")
+				By("scaling the control plane from 1 to 3 masters via Commander")
+				Expect(commander.SetMasterCount(mcCtx, 3)).To(Succeed(), "scale control plane to 3 masters")
+				Eventually(func() (int, error) { return controlPlaneNodeCount(mcCtx) },
+					15*time.Minute, 15*time.Second).Should(Equal(3), "control-plane node count must reach 3")
 
-				// TODO: once the controller auto-rebalances co-located System
-				// replicas onto newly added masters, assert here that the three
-				// Garage pods spread one-per-control-plane-node.
+				By("confirming the controller auto-spreads the 3 replicas one-per-master")
+				Eventually(func(g Gomega) {
+					cp, err := controlPlaneNodeNames(mcCtx)
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(cp).To(HaveLen(3))
+					nodes, err := garageRunningPodNodes(mcCtx, systemCluster)
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(nodes).To(HaveLen(3), "all 3 replicas must be Running")
+					g.Expect(nodes).To(ConsistOf(cp), "one replica per distinct control-plane node")
+				}, 40*time.Minute, 20*time.Second).Should(Succeed())
+				Expect(waitOSCReady(mcCtx, systemCluster)).To(Succeed(), "System must be healthy after spread")
+
+				By("scaling the control plane back from 3 to 1 master via Commander")
+				Expect(commander.SetMasterCount(mcCtx, 1)).To(Succeed(), "scale control plane to 1 master")
+				Eventually(func() (int, error) { return controlPlaneNodeCount(mcCtx) },
+					25*time.Minute, 15*time.Second).Should(Equal(1), "control-plane node count must reach 1")
+
+				By("confirming the controller consolidates all 3 replicas onto the surviving master")
+				Eventually(func(g Gomega) {
+					cp, err := controlPlaneNodeNames(mcCtx)
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(cp).To(HaveLen(1))
+					nodes, err := garageRunningPodNodes(mcCtx, systemCluster)
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(nodes).To(HaveLen(3), "all 3 replicas must be Running")
+					g.Expect(nodes).To(HaveEach(cp[0]), "all replicas on the surviving master")
+				}, 40*time.Minute, 20*time.Second).Should(Succeed())
+				Expect(waitOSCReady(mcCtx, systemCluster)).To(Succeed(), "System must be healthy after consolidation")
 			}
 		})
 	})
+}
+
+// controlPlaneNodeNames returns the names of the control-plane nodes.
+func controlPlaneNodeNames(ctx context.Context) ([]string, error) {
+	nodes, err := suiteClientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{
+		LabelSelector: "node-role.kubernetes.io/control-plane",
+	})
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(nodes.Items))
+	for i := range nodes.Items {
+		names = append(names, nodes.Items[i].Name)
+	}
+	return names, nil
+}
+
+// controlPlaneNodeCount counts the control-plane nodes.
+func controlPlaneNodeCount(ctx context.Context) (int, error) {
+	names, err := controlPlaneNodeNames(ctx)
+	return len(names), err
+}
+
+// garageRunningPodNodes returns the node names hosting Running Garage pods of the
+// given ObjectStore (one entry per Running pod).
+func garageRunningPodNodes(ctx context.Context, oscName string) ([]string, error) {
+	pods, err := suiteClientset.CoreV1().Pods(moduleNS).List(ctx, metav1.ListOptions{
+		LabelSelector: "storage.deckhouse.io/object-store=" + oscName,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var nodes []string
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.Status.Phase == corev1.PodRunning && p.Spec.NodeName != "" {
+			nodes = append(nodes, p.Spec.NodeName)
+		}
+	}
+	return nodes, nil
 }
 
 // pvPinnedHostname returns the kubernetes.io/hostname value a System local PV is
