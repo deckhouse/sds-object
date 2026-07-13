@@ -20,6 +20,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/slok/kubewebhook/v2/pkg/model"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -115,5 +117,27 @@ func TestObjectStoreValidate(t *testing.T) {
 	}
 	if !res.Valid {
 		t.Errorf("ObjectStoreValidate(Lightweight): want allow, got deny (%s)", res.Message)
+	}
+}
+
+func TestIsModuleServiceAccount(t *testing.T) {
+	cases := []struct {
+		user string
+		want bool
+	}{
+		{"system:serviceaccount:d8-sds-object:controller", true},
+		{"system:serviceaccount:d8-sds-object:webhooks", true},
+		{"system:serviceaccount:kube-system:other", false},
+		{"kubernetes-admin", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		ar := &model.AdmissionReview{UserInfo: authenticationv1.UserInfo{Username: c.user}}
+		if got := isModuleServiceAccount(ar); got != c.want {
+			t.Errorf("isModuleServiceAccount(%q)=%v, want %v", c.user, got, c.want)
+		}
+	}
+	if isModuleServiceAccount(nil) {
+		t.Errorf("nil review must not be treated as the module SA")
 	}
 }
