@@ -78,7 +78,7 @@ func NewConfig() *Options {
 	if v := os.Getenv(LogLevelEnv); v != "" {
 		opts.Loglevel = logger.Verbosity(v)
 	} else {
-		opts.Loglevel = logger.DebugLevel
+		opts.Loglevel = logger.InfoLevel
 	}
 
 	if v := os.Getenv(HealthProbeBindAddressEnv); v != "" {
