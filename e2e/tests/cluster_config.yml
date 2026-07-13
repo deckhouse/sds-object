@@ -1,10 +1,12 @@
 # sds-object e2e nested test cluster.
 #
 # 1 master + 2 workers. The default E2E_OSC_TYPE=System profile (Garage as a
-# DaemonSet on control-plane nodes, hostPath) needs neither a StorageClass nor
-# extra disks, so a small cluster is enough. The master alone can host the
-# System data plane; the workers give the bucket / probe Pods somewhere to run
-# and let the optional Lightweight/Full profiles schedule their StatefulSets.
+# StatefulSet with a fixed 3-replica count on control-plane nodes, node-sticky
+# local PVs the controller provisions itself) needs neither an external
+# StorageClass nor extra disks, so a small cluster is enough. The single master
+# alone can host all three System replicas (co-located); the workers give the
+# bucket / probe Pods somewhere to run and let the optional Lightweight/Full
+# profiles schedule their StatefulSets.
 #
 # Profile-specific extras (NOT enabled here — turn them on yourself when you
 # point E2E_OSC_TYPE at a heavier profile):

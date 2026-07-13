@@ -27,6 +27,13 @@ import (
 	v1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 )
 
+// layoutZone is the Garage layout zone assigned to every node. A single zone is
+// deliberate: the System profile must keep a fixed replica count even on a
+// single master (replicas co-located there), which a per-host zone would forbid.
+// The trade-off — co-located replicas share a physical disk, so redundancy is at
+// the process level until masters allow spreading — is documented in DESIGN.
+const layoutZone = "dc1"
+
 // meshResult is the outcome of a meshing+layout reconcile pass.
 type meshResult struct {
 	ready bool
@@ -72,26 +79,16 @@ func (d *Driver) ensureMeshAndLayout(ctx context.Context, cluster *v1alpha1.Obje
 		return meshResult{msg: fmt.Sprintf("connecting Garage peers: %v", err)}, nil
 	}
 
-	// 2. Assign layout for nodes not yet in it.
+	// 2. Reconcile the layout onto the live peers: assign roles for new nodes
+	// and drop roles for nodes that are gone (once the full replica complement
+	// is live, so a transient reschedule does not churn the layout).
 	layout, err := svc.layout(ctx)
 	if err != nil {
 		return meshResult{msg: fmt.Sprintf("reading layout: %v", err)}, nil
 	}
-	assigned := map[string]struct{}{}
-	for _, r := range layout.Roles {
-		assigned[r.ID] = struct{}{}
-	}
 
 	size := storageSize(cluster)
-	capacity := size.Value()
-	var changes []roleChange
-	for _, p := range peers {
-		if _, ok := assigned[p.id]; ok {
-			continue
-		}
-		c := capacity
-		changes = append(changes, roleChange{ID: p.id, Zone: "dc1", Capacity: &c, Tags: []string{}})
-	}
+	changes := layoutRoleChanges(layout, peers, desiredReplicas(cluster), size.Value())
 	if len(changes) > 0 {
 		if err := svc.stageLayout(ctx, changes); err != nil {
 			return meshResult{msg: fmt.Sprintf("staging layout: %v", err)}, nil
@@ -153,6 +150,51 @@ func (d *Driver) discoverPeers(ctx context.Context, cluster *v1alpha1.ObjectStor
 		peers = append(peers, nodePeer{id: st.Node, ip: pod.Status.PodIP})
 	}
 	return peers, nil
+}
+
+// layoutRoleChanges computes the layout mutations converging the assigned roles
+// onto the currently-live Garage peers:
+//
+//   - every live peer not yet in the layout is assigned a role (single zone,
+//     per-node capacity), so a freshly-scheduled pod starts holding data and
+//     Garage re-replicates onto it;
+//   - a role whose node is no longer live is removed — but only once the full
+//     replica complement (expected) is live. With stable node identity a System
+//     pod recycled onto another master rejoins with its ORIGINAL node ID (the
+//     restore-node-key initContainer restores node_key), so the common case adds
+//     and removes nothing and Garage re-syncs the empty PV via anti-entropy. This
+//     removal path is the defensive fallback for a node ID that genuinely never
+//     returns (e.g. an identity lost before it was captured); gating it on a full
+//     complement avoids churning the layout during a transient reschedule.
+//
+// capacity is the per-node storage capacity in bytes.
+func layoutRoleChanges(layout *clusterLayout, peers []nodePeer, expected int32, capacity int64) []roleChange {
+	assigned := map[string]struct{}{}
+	for _, r := range layout.Roles {
+		assigned[r.ID] = struct{}{}
+	}
+	live := make(map[string]struct{}, len(peers))
+	for _, p := range peers {
+		live[p.id] = struct{}{}
+	}
+
+	var changes []roleChange
+	for _, p := range peers {
+		if _, ok := assigned[p.id]; ok {
+			continue
+		}
+		c := capacity
+		changes = append(changes, roleChange{ID: p.id, Zone: layoutZone, Capacity: &c, Tags: []string{}})
+	}
+	if int32(len(peers)) >= expected {
+		for _, r := range layout.Roles {
+			if _, ok := live[r.ID]; ok {
+				continue
+			}
+			changes = append(changes, roleChange{ID: r.ID, Remove: true, Tags: []string{}})
+		}
+	}
+	return changes
 }
 
 // layoutTotalCapacity sums the assigned role capacities (bytes) into a Quantity.

@@ -12,9 +12,21 @@ Changes:
 - The module removal hook removes finalizers from namespaced resources (ObjectStorageBucketAccess)
   in all namespaces, not just the module namespace - otherwise they would hang in
   Terminating after the module was removed.
-- Garage (System profile): replication_factor is limited by the number of control-plane
-    nodes and is set to an odd value - a single-master cluster no longer hangs in
-    degraded due to an unattainable factor.
+- Garage (System profile): works as a StatefulSet with a fixed number of replicas
+    (3) on control-plane nodes on top of a node-sticky local PersistentVolume (a pool
+    of static PVs with nodeAffinity on a managed StorageClass sds-object-system-local,
+    created by the controller) instead of a DaemonSet “under per master”, so the replication
+    factor is fixed to 3 regardless of the number of masters, and each replica returns
+    to its data after a restart. Garage quorum is now tied to the number of pods,
+    so the storage maintains read-write when the number of masters changes (3<->2<->1);
+    layout will be reconciled when moving/returning replicas. The controller watches
+    control-plane nodes and auto-moves replicas when the master count changes — spreading
+    one per master at 3 nodes and consolidating all onto one when shrinking to 1 (one
+    replica at a time, waiting for Garage to become healthy), and maintains the local-PV
+    pool. Each replica's Garage node identity (node_key) is persisted per ordinal in a
+    dedicated Secret and restored by an init container before Garage starts, so a replica
+    moved to another master rejoins with its original node ID and re-syncs via
+    anti-entropy, keeping the layout free of dead nodes.
 - spec.redundancy is made immutable (changing the replication factor on a live cluster
   is not supported).
 - SeaweedFS: values ​​in filer.toml (including the database password) are escaped

@@ -28,7 +28,7 @@ A single `spec.type` selects the profile; the backend is chosen and operated for
 
 | `spec.type` | Backend | Placement / data | Use case |
 |-------------|---------|------------------|----------|
-| `System` | Garage | DaemonSet on control-plane nodes, `hostPath` | Platform/system needs (backups, registry, logs). |
+| `System` | Garage | StatefulSet (fixed 3 replicas) on control-plane nodes, node-sticky local PV | Platform/system needs (backups, registry, logs). |
 | `Lightweight` | Garage | StatefulSet, PVC on a StorageClass | Small application workloads. |
 | `Full` | SeaweedFS | StatefulSet, PVC | Scalable, full-featured storage. |
 | `Heavy` | Ceph RGW | RADOS Gateway on an existing sds-elastic cluster | Reuses Ceph capacity and fault tolerance. |

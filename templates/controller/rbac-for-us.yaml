@@ -3,14 +3,17 @@
 
   The controller-runtime cache is cluster-scoped by default, so any namespaced
   resource the manager reads (Secret, ConfigMap, Service, ServiceAccount,
-  StatefulSet, DaemonSet) requires cluster-wide get/list/watch on the
+  StatefulSet) requires cluster-wide get/list/watch on the
   ServiceAccount. Mutation of the data-plane objects the Garage driver creates
-  (ConfigMap, Service, ServiceAccount, StatefulSet, DaemonSet) stays in the
+  (ConfigMap, Service, ServiceAccount, StatefulSet) stays in the
   namespaced Role — they only ever live in d8-sds-object. Secrets are the
   exception: the BucketAccess reconciler writes the S3 credentials
   Secret into the consuming application's namespace, so secret write verbs are
-  granted cluster-wide. The webhooks share the same ServiceAccount but exercise
-  only the read verbs.
+  granted cluster-wide. The System profile additionally reads control-plane Nodes
+  and manages a pool of cluster-scoped, node-pinned PersistentVolumes (its
+  node-sticky local storage), so node read and persistentvolume verbs are granted
+  cluster-wide too. The webhooks share the same ServiceAccount but exercise only
+  the read verbs.
 
   Note for future editors: do not place Helm/Go-template comments inside the
   argument expression of the function call below (the rule lists), the template
@@ -20,9 +23,11 @@
 {{- $rbacConfig := dict
   "roleRules" (list
     (dict "apiGroups" (list "") "resources" (list "events") "verbs" (list "create" "list" "patch"))
-    (dict "apiGroups" (list "") "resources" (list "pods") "verbs" (list "get" "list"))
+    (dict "apiGroups" (list "") "resources" (list "pods") "verbs" (list "get" "list" "delete"))
+    (dict "apiGroups" (list "") "resources" (list "pods/exec") "verbs" (list "create"))
+    (dict "apiGroups" (list "") "resources" (list "persistentvolumeclaims") "verbs" (list "get" "list" "delete"))
     (dict "apiGroups" (list "") "resources" (list "secrets" "configmaps" "services" "serviceaccounts") "verbs" (list "create" "update" "patch" "delete"))
-    (dict "apiGroups" (list "apps") "resources" (list "statefulsets" "daemonsets") "verbs" (list "create" "update" "patch" "delete"))
+    (dict "apiGroups" (list "apps") "resources" (list "statefulsets") "verbs" (list "create" "update" "patch" "delete"))
     (dict "apiGroups" (list "managed-services.deckhouse.io") "resources" (list "postgres") "verbs" (list "create" "update" "patch" "delete"))
     (dict "apiGroups" (list "coordination.k8s.io") "resources" (list "leases") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete"))
   )
@@ -32,8 +37,9 @@
     (dict "apiGroups" (list "internal.sdselastic.deckhouse.io") "resources" (list "cephobjectstores" "cephobjectstoreusers") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete"))
     (dict "apiGroups" (list "") "resources" (list "secrets") "verbs" (list "get" "list" "watch" "create" "update" "patch" "delete"))
     (dict "apiGroups" (list "") "resources" (list "configmaps" "services" "serviceaccounts") "verbs" (list "get" "list" "watch"))
-    (dict "apiGroups" (list "") "resources" (list "nodes") "verbs" (list "get" "list"))
-    (dict "apiGroups" (list "apps") "resources" (list "statefulsets" "daemonsets") "verbs" (list "get" "list" "watch"))
+    (dict "apiGroups" (list "") "resources" (list "nodes") "verbs" (list "get" "list" "watch"))
+    (dict "apiGroups" (list "") "resources" (list "persistentvolumes") "verbs" (list "get" "list" "watch" "create" "delete"))
+    (dict "apiGroups" (list "apps") "resources" (list "statefulsets") "verbs" (list "get" "list" "watch"))
     (dict "apiGroups" (list "managed-services.deckhouse.io") "resources" (list "postgres") "verbs" (list "get" "list" "watch"))
   )
 }}

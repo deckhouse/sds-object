@@ -18,12 +18,17 @@ package tests
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	objectv1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 	"github.com/deckhouse/storage-e2e/pkg/testkit"
@@ -106,13 +111,15 @@ func heavySpecs() {
 		})
 
 		AfterAll(func() {
-			// Tear the ElasticCluster down so the Ceph substrate does not linger for
-			// the rest of the suite / teardown. Best-effort: log but do not fail.
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+			// Tear the Ceph substrate down so it does not linger. This must break a
+			// teardown softlock: a Heavy ObjectStore deleted with the default Retain
+			// policy leaves its CephObjectStore (RGW) behind, which keeps the Rook
+			// Ceph cluster — and its Retain OSD PVs — alive, so sds-elastic's
+			// VolumesExist guard blocks the ElasticCluster finalizer indefinitely.
+			// Best-effort: log but do not fail.
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
 			defer cancel()
-			if err := testkit.TeardownElasticCluster(ctx, suiteRestCfg, ecName, 15*time.Minute); err != nil {
-				GinkgoWriter.Printf("warning: ElasticCluster %s teardown failed: %v\n", ecName, err)
-			}
+			cleanupHeavyElastic(ctx, oscName, ecName)
 		})
 
 		It("creates a Heavy ObjectStore (Ceph RGW) and reaches Ready", func() {
@@ -199,4 +206,71 @@ func heavySpecs() {
 			Expect(waitResourceGone(ctx, objectStoreGVR, "", oscName, resourceGoneTimeout)).To(Succeed())
 		})
 	})
+}
+
+// sdsElasticNamespace is where sds-elastic runs the Rook Ceph substrate.
+const sdsElasticNamespace = "d8-sds-elastic"
+
+// cephObjectStoreGVR is the sds-elastic-internal CephObjectStore the Heavy
+// backend provisions for a Ceph RGW ObjectStore (same group/version as
+// sdsElasticRookGroupVersion).
+var cephObjectStoreGVR = schema.GroupVersionResource{
+	Group: "internal.sdselastic.deckhouse.io", Version: "v1", Resource: "cephobjectstores",
+}
+
+// cleanupHeavyElastic removes the Ceph substrate created for the Heavy specs and
+// breaks the teardown softlock described in AfterAll:
+//
+//  1. delete the leftover CephObjectStore — a Heavy ObjectStore deleted with the
+//     default Retain policy keeps it (and its RGW) around, which pins the Rook
+//     Ceph cluster alive;
+//  2. reap the cluster's Retain OSD PVs in the background as Rook releases them
+//     (they persist after the OSDs go and keep sds-elastic's VolumesExist guard
+//     tripped, blocking the ElasticCluster finalizer);
+//  3. delete the ElasticCluster and wait for it to be gone (now unblocked).
+//
+// Best-effort throughout: it logs and never fails the suite.
+func cleanupHeavyElastic(ctx context.Context, oscName, ecName string) {
+	if err := suiteDyn.Resource(cephObjectStoreGVR).Namespace(sdsElasticNamespace).
+		Delete(ctx, oscName, metav1.DeleteOptions{}); err != nil &&
+		!apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
+		GinkgoWriter.Printf("warning: delete CephObjectStore %s/%s: %v\n", sdsElasticNamespace, oscName, err)
+	}
+
+	osdPVPrefix := "sds-elastic-" + ecName + "-osd-"
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			reapReleasedPVs(ctx, osdPVPrefix)
+			select {
+			case <-stop:
+				return
+			case <-time.After(15 * time.Second):
+			}
+		}
+	}()
+
+	if err := testkit.TeardownElasticCluster(ctx, suiteRestCfg, ecName, 20*time.Minute); err != nil {
+		GinkgoWriter.Printf("warning: ElasticCluster %s teardown failed: %v\n", ecName, err)
+	}
+	close(stop)
+	<-done
+}
+
+// reapReleasedPVs deletes PVs whose name starts with prefix and are no longer
+// Bound (Released/Available/Failed). Bound PVs are skipped so a still-running OSD
+// is never yanked out from under Ceph.
+func reapReleasedPVs(ctx context.Context, prefix string) {
+	pvs, err := suiteClientset.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return
+	}
+	for i := range pvs.Items {
+		pv := &pvs.Items[i]
+		if !strings.HasPrefix(pv.Name, prefix) || pv.Status.Phase == corev1.VolumeBound {
+			continue
+		}
+		_ = suiteClientset.CoreV1().PersistentVolumes().Delete(ctx, pv.Name, metav1.DeleteOptions{})
+	}
 }

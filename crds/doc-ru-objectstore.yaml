@@ -20,10 +20,11 @@ spec:
                   description: |
                     Профиль кластера. Выбирает бэкенд и модель размещения:
 
-                    - `System` — Garage, разворачивается как DaemonSet на
-                      control-plane узлах с хранением в `hostPath`. Для системных
-                      нужд платформы (бэкапы, registry, логи). `storage.class`
-                      игнорируется.
+                    - `System` — Garage, разворачивается как StatefulSet с
+                      фиксированным числом реплик (3) на control-plane узлах с
+                      node-sticky local PV (число реплик не зависит от числа
+                      мастеров). Для системных нужд платформы (бэкапы, registry,
+                      логи). `storage.class` игнорируется.
                     - `Lightweight` — Garage, StatefulSet с PVC на `storage.class`.
                       Для небольших прикладных нагрузок.
                     - `Full` — SeaweedFS (master/volume/filer + S3-gateway) с PVC на
@@ -45,19 +46,19 @@ spec:
                         формате Kubernetes Quantity (BinarySI), например `50Gi` или
                         `2Ti`. Суммарная ёмкость кластера — примерно `sizePerNode`,
                         умноженная на число узлов. По умолчанию `10Gi`. Нельзя
-                        задавать для `System` (hostPath на control-plane узлах).
+                        задавать для `System` (local PV на control-plane узлах).
                     nodes:
                       description: |
                         Число узлов data plane (реплики StatefulSet для
                         `Lightweight`, volume-серверы SeaweedFS для `Full`). Если не
                         задано, выводится из `redundancy`. Игнорируется для `System`
-                        (один под на control-plane узел) и `Heavy` (топология берётся
+                        (фиксированные 3 реплики) и `Heavy` (топология берётся
                         у Ceph-кластера).
                     class:
                       description: |
                         Имя Kubernetes StorageClass для создания PVC. Обязательно для
-                        `Lightweight` и `Full`; игнорируется для `System` (hostPath)
-                        и `Heavy` (Ceph).
+                        `Lightweight` и `Full`; игнорируется для `System`
+                        (управляемый local StorageClass) и `Heavy` (Ceph).
                 redundancy:
                   description: |
                     Высокоуровневый интент отказоустойчивости. Контроллер транслирует
@@ -72,8 +73,9 @@ spec:
                       erasure coding), требует больше узлов.
 
                     Неизменяемо после создания: смена фактора репликации на живом
-                    кластере не поддерживается. Нельзя задавать для `System`: фактор
-                    выводится из (и ограничен) числа control-plane узлов.
+                    кластере не поддерживается. Нельзя задавать для `System`: он
+                    работает как фиксированный Garage из 3 реплик, поэтому фактор
+                    не настраивается.
                 placement:
                   description: |
                     Размещение дата-плейна кластера. Для `type: System` размещение

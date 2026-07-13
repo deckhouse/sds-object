@@ -46,21 +46,54 @@ const (
 	configFileName = "garage.toml"
 
 	// hostPathBase is where the System profile keeps Garage data on
-	// control-plane nodes.
+	// control-plane nodes (the backing directory of each node-sticky local PV).
 	hostPathBase = "/var/lib/deckhouse/sds-object/garage"
 
 	registryPullSecret = "deckhouse-registry"
 
 	// controlPlaneNodeLabel marks control-plane nodes; the System profile
-	// schedules its DaemonSet there and the initial replication factor is clamped
-	// to the count of nodes carrying it.
+	// schedules its StatefulSet there (spread across them when several exist,
+	// co-located on the single master otherwise).
 	controlPlaneNodeLabel = "node-role.kubernetes.io/control-plane"
+
+	// hostnameTopologyKey is the node label carrying the hostname; used both for
+	// the System profile's soft pod anti-affinity and as the local-PV
+	// nodeAffinity key that pins a replica to its node.
+	hostnameTopologyKey = "kubernetes.io/hostname"
+
+	// systemLocalStorageClass is the WaitForFirstConsumer, no-provisioner
+	// StorageClass (shipped by templates/system-storageclass.yaml) that the
+	// System profile's node-sticky local PVs belong to.
+	systemLocalStorageClass = "sds-object-system-local"
+
+	// nodeIdentityMountPath is where the per-ordinal Garage node identity Secret
+	// is mounted into the System pods; the restore-node-key initContainer copies
+	// the matching key into the metadata dir before Garage starts.
+	nodeIdentityMountPath = "/etc/garage-node-identity"
 
 	// annConfigHash carries a short hash of garage.toml on the pod template so
 	// the workload rolls (and every node converges to the same config) when the
 	// config changes.
 	annConfigHash = "storage.deckhouse.io/config-hash"
 )
+
+// systemReplicas is the fixed number of Garage replicas the System profile runs,
+// independent of the control-plane node count. Keeping it constant (rather than
+// one pod per master) keeps the pinned replication factor and the Garage quorum
+// stable across master-count changes: three replicas always run — spread across
+// control-plane nodes when several exist, co-located on the single master
+// otherwise (see DESIGN, "Сценарии смены числа мастеров у System").
+const systemReplicas int32 = 3
+
+// labelSystemLocalNode marks a controller-provisioned System local PV and records
+// the node (its kubernetes.io/hostname value) its nodeAffinity pins it to. Its
+// presence distinguishes pool PVs from any other PV.
+const labelSystemLocalNode = "storage.deckhouse.io/system-local-node"
+
+// objectStoreLabel carries the owning ObjectStore name on every object the
+// driver creates for a cluster (used as a selector, e.g. to list the local-PV
+// pool).
+const objectStoreLabel = "storage.deckhouse.io/object-store"
 
 // resourceName is the common name/prefix for every object backing a cluster.
 func resourceName(cluster *v1alpha1.ObjectStore) string {
@@ -79,9 +112,9 @@ func s3SvcName(cluster *v1alpha1.ObjectStore) string  { return resourceName(clus
 // commonLabels are placed on every object owned by a cluster.
 func commonLabels(cluster *v1alpha1.ObjectStore) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/managed-by":      "sds-object",
-		"app.kubernetes.io/name":            "garage",
-		"storage.deckhouse.io/object-store": cluster.Name,
+		"app.kubernetes.io/managed-by": "sds-object",
+		"app.kubernetes.io/name":       "garage",
+		objectStoreLabel:               cluster.Name,
 	}
 }
 
@@ -173,6 +206,17 @@ func lightweightReplicas(cluster *v1alpha1.ObjectStore) int32 {
 		return *cluster.Spec.Storage.Nodes
 	}
 	return replicationFactor(cluster)
+}
+
+// desiredReplicas is the number of Garage data-plane pods for a cluster: a fixed
+// systemReplicas for System (independent of the master count), otherwise
+// lightweightReplicas (which spec.storage.nodes may override). It also drives the
+// initial replication factor (clamped to this count) and the layout reconcile.
+func desiredReplicas(cluster *v1alpha1.ObjectStore) int32 {
+	if cluster.Spec.Type == v1alpha1.ClusterTypeSystem {
+		return systemReplicas
+	}
+	return lightweightReplicas(cluster)
 }
 
 // storageSize returns the per-node PVC size for PVC-backed profiles, defaulting
@@ -272,7 +316,9 @@ func buildRPCService(cluster *v1alpha1.ObjectStore, namespace string) *corev1.Se
 	}
 }
 
-// garageContainer is the shared container spec for both profiles.
+// garageContainer is the shared container spec for both profiles. The data
+// volume is a per-pod PVC (Lightweight/Full: dynamic; System: a node-sticky
+// local PV), mounted whole at the Garage data directory.
 func garageContainer(image string) corev1.Container {
 	return corev1.Container{
 		Name:    "garage",
@@ -320,9 +366,10 @@ func secretKeyRef(key string) *corev1.EnvVarSource {
 	}
 }
 
-// podSpec assembles the shared PodSpec (the data volume is provided by the
-// caller: hostPath for System, PVC template for Lightweight).
-func podSpec(cluster *v1alpha1.ObjectStore, image string, dataVolume *corev1.Volume) corev1.PodSpec {
+// podSpec assembles the shared PodSpec. The data volume comes from the
+// StatefulSet's volumeClaimTemplates (a PVC named "data"), so no extra volume is
+// added here beyond the config ConfigMap.
+func podSpec(cluster *v1alpha1.ObjectStore, image string) corev1.PodSpec {
 	c := garageContainer(image)
 	// Patch the secret name into the env sources now that we know the cluster.
 	for i := range c.Env {
@@ -341,19 +388,17 @@ func podSpec(cluster *v1alpha1.ObjectStore, image string, dataVolume *corev1.Vol
 			},
 		},
 	}
-	if dataVolume != nil {
-		volumes = append(volumes, *dataVolume)
-	}
 
 	return corev1.PodSpec{
 		ServiceAccountName: resourceName(cluster),
 		ImagePullSecrets:   []corev1.LocalObjectReference{{Name: registryPullSecret}},
-		// Garage must own its metadata/data directory. The base image runs as
-		// a non-root user, but the backing volume is root-owned: a hostPath dir
-		// is created root:root by the kubelet (System), and a fresh PVC mounts
-		// root:root by default (Lightweight). fsGroup does not cover hostPath,
-		// so the data-plane pod runs as root (consistent with how Deckhouse
-		// storage data planes run); fsGroup keeps the PVC group-writable too.
+		// Garage must own its metadata/data directory. The base image runs as a
+		// non-root user, but a freshly-provisioned volume mounts root-owned: a
+		// hostPath-backed local PV dir is created root:root by the kubelet
+		// (System), and a fresh dynamic PVC mounts root:root by default
+		// (Lightweight). fsGroup does not cover hostPath, so the data-plane pod
+		// runs as root (consistent with how Deckhouse storage data planes run);
+		// fsGroup keeps the dynamic PVC group-writable too.
 		SecurityContext: &corev1.PodSecurityContext{
 			RunAsUser:  ptrInt64(0),
 			RunAsGroup: ptrInt64(0),
@@ -365,13 +410,44 @@ func podSpec(cluster *v1alpha1.ObjectStore, image string, dataVolume *corev1.Vol
 }
 
 func ptrInt64(v int64) *int64 { return &v }
+func ptrBool(v bool) *bool    { return &v }
+
+// nodeIdentitySecretName is the Secret holding each System replica's persisted
+// Garage node identity (keys node-<ord> and node-<ord>.pub), so a replica
+// recycled onto another master keeps its stable node ID instead of generating a
+// fresh one (which would strand the old ID as a dead node and churn the layout).
+func nodeIdentitySecretName(cluster *v1alpha1.ObjectStore) string {
+	return resourceName(cluster) + "-node-identity"
+}
+
+// restoreNodeKeyScript runs in the System pods' restore-node-key initContainer.
+// It restores this ordinal's persisted Garage node identity (node_key /
+// node_key.pub) from the mounted identity Secret into the metadata dir before
+// Garage starts, so a replica recycled onto another master (fresh empty PV)
+// rejoins with its stable node ID and re-syncs via anti-entropy. The Secret is
+// optional: on the very first boot no key exists yet, so Garage generates one
+// (which the controller then captures into the Secret).
+var restoreNodeKeyScript = fmt.Sprintf(`set -eu
+ord="${HOSTNAME##*-}"
+meta="%s/meta"
+src="%s/node-${ord}"
+mkdir -p "$meta"
+if [ -s "$src" ] && [ -s "${src}.pub" ]; then
+  cp "$src" "$meta/node_key"
+  cp "${src}.pub" "$meta/node_key.pub"
+  chmod 0600 "$meta/node_key"
+  echo "restored garage node identity for ordinal ${ord}"
+else
+  echo "no persisted identity for ordinal ${ord}; garage will generate one"
+fi
+`, dataMountPath, nodeIdentityMountPath)
 
 // buildStatefulSet returns the StatefulSet for the Lightweight/Full profiles
 // (PVC-backed). Full currently reuses the Garage layout until the SeaweedFS
 // driver lands.
 func buildStatefulSet(cluster *v1alpha1.ObjectStore, namespace, image, cfgHash string) *appsv1.StatefulSet {
 	replicas := lightweightReplicas(cluster)
-	spec := podSpec(cluster, image, nil) // data comes from volumeClaimTemplates
+	spec := podSpec(cluster, image) // data comes from volumeClaimTemplates
 
 	if cluster.Spec.Placement != nil {
 		spec.NodeSelector = cluster.Spec.Placement.NodeSelector
@@ -416,20 +492,19 @@ func buildStatefulSet(cluster *v1alpha1.ObjectStore, namespace, image, cfgHash s
 	}
 }
 
-// buildDaemonSet returns the DaemonSet for the System profile (hostPath on
-// control-plane nodes).
-func buildDaemonSet(cluster *v1alpha1.ObjectStore, namespace, image, cfgHash string) *appsv1.DaemonSet {
-	hostPathType := corev1.HostPathDirectoryOrCreate
-	dataVolume := &corev1.Volume{
-		Name: "data",
-		VolumeSource: corev1.VolumeSource{
-			HostPath: &corev1.HostPathVolumeSource{
-				Path: fmt.Sprintf("%s/%s", hostPathBase, cluster.Name),
-				Type: &hostPathType,
-			},
-		},
-	}
-	spec := podSpec(cluster, image, dataVolume)
+// buildSystemStatefulSet returns the StatefulSet for the System profile: a fixed
+// systemReplicas count backed by node-sticky local PVs on control-plane nodes.
+// The replica count is independent of the master count — replicas spread
+// one-per-node when several control-plane nodes exist (soft anti-affinity) and
+// co-locate on the single master otherwise. Pods start in parallel (no ordinal
+// barrier). Storage is a per-ordinal PVC on the WaitForFirstConsumer
+// systemLocalStorageClass: the controller pre-creates a pool of hostPath-backed,
+// nodeAffinity-pinned PVs (ensureSystemLocalPVs), so each replica sticks to its
+// node and finds its data again after a restart. This keeps a constant
+// replication factor and Garage quorum across master-count changes; the layout
+// is reconciled in mesh.go as replicas move and rejoin.
+func buildSystemStatefulSet(cluster *v1alpha1.ObjectStore, namespace, image, cfgHash string) *appsv1.StatefulSet {
+	spec := podSpec(cluster, image) // data comes from volumeClaimTemplates
 
 	// System runs on control-plane nodes and must tolerate their taints.
 	spec.NodeSelector = map[string]string{controlPlaneNodeLabel: ""}
@@ -437,21 +512,134 @@ func buildDaemonSet(cluster *v1alpha1.ObjectStore, namespace, image, cfgHash str
 		{Key: "node-role.kubernetes.io/control-plane", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoSchedule},
 		{Key: "node-role.kubernetes.io/master", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoSchedule},
 	}
+	// Prefer (not require) spreading replicas one-per-control-plane-node, so all
+	// systemReplicas still schedule and run when only a single master exists.
+	spec.Affinity = &corev1.Affinity{
+		PodAntiAffinity: &corev1.PodAntiAffinity{
+			PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{{
+				Weight: 100,
+				PodAffinityTerm: corev1.PodAffinityTerm{
+					LabelSelector: &metav1.LabelSelector{MatchLabels: commonLabels(cluster)},
+					TopologyKey:   hostnameTopologyKey,
+				},
+			}},
+		},
+	}
 
-	return &appsv1.DaemonSet{
+	// Persist each replica's Garage node identity. When placement recycles a
+	// replica onto another master its PVC is recreated empty, so without this the
+	// pod would generate a brand-new node ID — stranding the old one as a dead
+	// node and churning the layout (multi-version migrations that Garage cannot
+	// always recover from). The initContainer restores node_key from the
+	// per-ordinal identity Secret before Garage starts, so the replica rejoins
+	// with its stable ID and Garage re-syncs the data via anti-entropy. The
+	// Secret is Optional so the first boot (before any identity is captured) just
+	// lets Garage generate one, which the controller then captures.
+	spec.Volumes = append(spec.Volumes, corev1.Volume{
+		Name: "node-identity",
+		VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: nodeIdentitySecretName(cluster),
+				Optional:   ptrBool(true),
+			},
+		},
+	})
+	spec.InitContainers = []corev1.Container{{
+		Name:    "restore-node-key",
+		Image:   image,
+		Command: []string{"sh", "-c", restoreNodeKeyScript},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "data", MountPath: dataMountPath},
+			{Name: "node-identity", MountPath: nodeIdentityMountPath, ReadOnly: true},
+		},
+		SecurityContext: &corev1.SecurityContext{RunAsUser: ptrInt64(0), RunAsGroup: ptrInt64(0)},
+	}}
+
+	replicas := systemReplicas
+	sc := systemLocalStorageClass
+	return &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      resourceName(cluster),
 			Namespace: namespace,
 			Labels:    commonLabels(cluster),
 		},
-		Spec: appsv1.DaemonSetSpec{
-			Selector: &metav1.LabelSelector{MatchLabels: commonLabels(cluster)},
+		Spec: appsv1.StatefulSetSpec{
+			ServiceName:         rpcSvcName(cluster),
+			Replicas:            &replicas,
+			PodManagementPolicy: appsv1.ParallelPodManagement,
+			Selector:            &metav1.LabelSelector{MatchLabels: commonLabels(cluster)},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels:      commonLabels(cluster),
 					Annotations: map[string]string{annConfigHash: cfgHash},
 				},
 				Spec: spec,
+			},
+			VolumeClaimTemplates: []corev1.PersistentVolumeClaim{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "data", Labels: commonLabels(cluster)},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+						StorageClassName: &sc,
+						Resources: corev1.VolumeResourceRequirements{
+							Requests: corev1.ResourceList{corev1.ResourceStorage: storageSize(cluster)},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// shortHash is a filesystem/label-safe short digest of s (used to derive PV
+// names and data-directory paths from an arbitrary node hostname).
+func shortHash(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])[:10]
+}
+
+// systemLocalPVName is the deterministic name of the index-th pool PV pinned to
+// node. Deterministic naming makes the pool reconcile idempotent.
+func systemLocalPVName(cluster *v1alpha1.ObjectStore, node string, index int32) string {
+	return fmt.Sprintf("%s-local-%s-%d", resourceName(cluster), shortHash(node), index)
+}
+
+// buildSystemLocalPV builds one node-sticky local PV for the System pool: a
+// hostPath-backed volume (DirectoryOrCreate, so the kubelet creates the directory
+// on first mount — no node agent needed) pinned to node via nodeAffinity, on the
+// WaitForFirstConsumer systemLocalStorageClass, with Retain so PVC/PV deletion
+// never wipes data. The capacity is nominal (hostPath does not enforce it).
+func buildSystemLocalPV(cluster *v1alpha1.ObjectStore, node string, index int32) *corev1.PersistentVolume {
+	hostPathType := corev1.HostPathDirectoryOrCreate
+	labels := commonLabels(cluster)
+	labels[labelSystemLocalNode] = node
+	sc := systemLocalStorageClass
+	return &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   systemLocalPVName(cluster, node, index),
+			Labels: labels,
+		},
+		Spec: corev1.PersistentVolumeSpec{
+			Capacity:                      corev1.ResourceList{corev1.ResourceStorage: storageSize(cluster)},
+			AccessModes:                   []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+			StorageClassName:              sc,
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: fmt.Sprintf("%s/%s/%s-%d", hostPathBase, cluster.Name, shortHash(node), index),
+					Type: &hostPathType,
+				},
+			},
+			NodeAffinity: &corev1.VolumeNodeAffinity{
+				Required: &corev1.NodeSelector{
+					NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+						MatchExpressions: []corev1.NodeSelectorRequirement{{
+							Key:      hostnameTopologyKey,
+							Operator: corev1.NodeSelectorOpIn,
+							Values:   []string{node},
+						}},
+					}},
+				},
 			},
 		},
 	}

@@ -65,18 +65,20 @@ spec:
                 - rule: "!(self.type in ['Lightweight', 'Full']) || (has(self.storage) && has(self.storage.class) && size(self.storage.class) > 0)"
                   message: "spec.storage.class is required when spec.type is Lightweight or Full."
                 - rule: "self.type != 'System' || !has(self.redundancy)"
-                  message: "spec.redundancy must not be set when spec.type is System (it is derived from the control-plane node count)."
+                  message: "spec.redundancy must not be set when spec.type is System (it runs a fixed 3-replica Garage, so the replication factor is not configurable)."
                 - rule: "self.type != 'System' || !has(self.storage) || !has(self.storage.sizePerNode)"
-                  message: "spec.storage.sizePerNode must not be set when spec.type is System (System uses hostPath on control-plane nodes)."
+                  message: "spec.storage.sizePerNode must not be set when spec.type is System (System uses managed node-sticky local PVs on control-plane nodes)."
               properties:
                 type:
                   type: string
                   description: |
                     Cluster profile. Selects the backend and placement model:
 
-                    - `System` — Garage, deployed as a DaemonSet on control-plane
-                      nodes with `hostPath` storage. For platform/system needs
-                      (backups, registry, logs). `storage.class` is ignored.
+                    - `System` — Garage, deployed as a StatefulSet with a fixed
+                      3-replica count on control-plane nodes with node-sticky
+                      local PVs (replicas independent of the master count). For
+                      platform/system needs (backups, registry, logs).
+                      `storage.class` is ignored.
                     - `Lightweight` — Garage, deployed as a StatefulSet backed by
                       PVCs on `storage.class`. For small application workloads.
                     - `Full` — SeaweedFS (master/volume/filer + S3 gateway),
@@ -104,7 +106,7 @@ spec:
                         Kubernetes Quantity (BinarySI), e.g. `50Gi` or `2Ti`. The
                         cluster-wide capacity is roughly `sizePerNode` times the
                         node count. Defaults to `10Gi` when unset. Must not be set
-                        for `System` (hostPath on control-plane nodes).
+                        for `System` (local PVs on control-plane nodes).
                       pattern: '^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$'
                     nodes:
                       type: integer
@@ -114,14 +116,14 @@ spec:
                         Number of data-plane nodes (StatefulSet replicas for
                         `Lightweight`, SeaweedFS volume servers for `Full`). When
                         unset, the count is derived from `redundancy`. Ignored for
-                        `System` (one pod per control-plane node) and `Heavy`
-                        (topology comes from the referenced Ceph cluster).
+                        `System` (a fixed 3-replica set) and `Heavy` (topology
+                        comes from the referenced Ceph cluster).
                     class:
                       type: string
                       description: |
                         Name of the Kubernetes StorageClass used to provision PVCs.
                         Required for `Lightweight` and `Full`; ignored for `System`
-                        (hostPath) and `Heavy` (Ceph).
+                        (managed local StorageClass) and `Heavy` (Ceph).
                       minLength: 1
                       maxLength: 253
                 redundancy:
@@ -139,8 +141,8 @@ spec:
 
                     Immutable after creation: changing the replication factor on
                     a live cluster is not supported. Must not be set for `System`:
-                    the factor is derived from (and capped by) the number of
-                    control-plane nodes.
+                    it runs a fixed 3-replica Garage, so the factor is not
+                    configurable.
                   enum:
                     - None
                     - Standard

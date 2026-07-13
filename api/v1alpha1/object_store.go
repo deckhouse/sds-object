@@ -56,8 +56,9 @@ type ObjectStoreList struct {
 type ClusterType string
 
 const (
-	// ClusterTypeSystem is Garage deployed as a DaemonSet on control-plane
-	// nodes with hostPath storage. For platform/system needs.
+	// ClusterTypeSystem is Garage deployed as a StatefulSet with a fixed replica
+	// count on control-plane nodes with node-sticky local PVs (replicas
+	// independent of the master count). For platform/system needs.
 	ClusterTypeSystem ClusterType = "System"
 
 	// ClusterTypeLightweight is Garage deployed as a StatefulSet backed by
@@ -162,7 +163,8 @@ type ObjectStoreStorageSpec struct {
 	Nodes *int32 `json:"nodes,omitempty"`
 
 	// Class is the Kubernetes StorageClass used to provision PVCs. Required
-	// for Lightweight and Full; ignored for System (hostPath) and Heavy.
+	// for Lightweight and Full; ignored for System (managed local
+	// StorageClass) and Heavy.
 	// +optional
 	Class string `json:"class,omitempty"`
 }
