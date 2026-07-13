@@ -36,9 +36,9 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
-func policy(name, bucketRef string, names []string, patterns []string) *v1alpha1.BucketClaimPolicy {
+func policy(bucketRef string, names []string, patterns []string) *v1alpha1.BucketClaimPolicy {
 	return &v1alpha1.BucketClaimPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		ObjectMeta: metav1.ObjectMeta{Name: "p"},
 		Spec: v1alpha1.BucketClaimPolicySpec{
 			BucketRef:         bucketRef,
 			AllowedNamespaces: v1alpha1.NamespaceMatch{Names: names, Patterns: patterns},
@@ -62,7 +62,7 @@ func TestNamespaceAllowedForBucket(t *testing.T) {
 
 	t.Run("exact name match allows", func(t *testing.T) {
 		c := fake.NewClientBuilder().WithScheme(s).
-			WithObjects(policy("p", "shared", []string{"team-a"}, nil)).Build()
+			WithObjects(policy("shared", []string{"team-a"}, nil)).Build()
 		ok, _, err := namespaceAllowedForBucket(context.Background(), c, "shared", "team-a")
 		if err != nil || !ok {
 			t.Errorf("expected allow, got ok=%v err=%v", ok, err)
@@ -71,7 +71,7 @@ func TestNamespaceAllowedForBucket(t *testing.T) {
 
 	t.Run("pattern match allows, anchored", func(t *testing.T) {
 		c := fake.NewClientBuilder().WithScheme(s).
-			WithObjects(policy("p", "shared", nil, []string{"team-.*"})).Build()
+			WithObjects(policy("shared", nil, []string{"team-.*"})).Build()
 		ok, _, err := namespaceAllowedForBucket(context.Background(), c, "shared", "team-a")
 		if err != nil || !ok {
 			t.Errorf("expected allow for team-a, got ok=%v err=%v", ok, err)
@@ -88,7 +88,7 @@ func TestNamespaceAllowedForBucket(t *testing.T) {
 
 	t.Run("policy for a different bucket does not grant", func(t *testing.T) {
 		c := fake.NewClientBuilder().WithScheme(s).
-			WithObjects(policy("p", "other", []string{"team-a"}, nil)).Build()
+			WithObjects(policy("other", []string{"team-a"}, nil)).Build()
 		ok, _, err := namespaceAllowedForBucket(context.Background(), c, "shared", "team-a")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -151,7 +151,7 @@ func TestAccessAuthorized(t *testing.T) {
 
 	t.Run("shared: allowed with matching policy", func(t *testing.T) {
 		r := &BucketAccessReconciler{APIReader: fake.NewClientBuilder().WithScheme(s).
-			WithObjects(policy("p", "shared", []string{"team-a"}, nil)).Build()}
+			WithObjects(policy("shared", []string{"team-a"}, nil)).Build()}
 		ok, _, err := r.accessAuthorized(context.Background(), shared, "team-a")
 		if err != nil || !ok {
 			t.Errorf("expected allow, got ok=%v err=%v", ok, err)

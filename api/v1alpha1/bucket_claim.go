@@ -20,7 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// BucketClaim is a namespaced CR — the tenant-facing "заявка" (request) for a
+// BucketClaim is a namespaced CR — the tenant-facing request for a
 // bucket. It supports two paths:
 //
 //   - greenfield (spec.existingBucketName empty): the controller provisions a

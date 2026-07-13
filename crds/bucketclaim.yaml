@@ -24,7 +24,7 @@ spec:
         openAPIV3Schema:
           type: object
           description: |
-            BucketClaim is the namespaced request ("заявка") for a bucket.
+            BucketClaim is the namespaced request for a bucket.
 
             - Greenfield (`spec.existingBucketName` empty): the controller
               provisions a new cluster-scoped Bucket owned by this claim and
