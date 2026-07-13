@@ -61,15 +61,23 @@ func (d *Driver) EnsureAccess(ctx context.Context, cluster *v1alpha1.ObjectStore
 			mintFresh = true // recorded key vanished; re-issue
 		}
 	}
+	minted := false
 	if mintFresh || accessKey == "" {
 		key, err := svc.createKey(ctx, backend.AccessResourceName(access))
 		if err != nil {
 			return backend.AccessState{}, fmt.Errorf("create access key: %w", err)
 		}
 		accessKey, secretKey = key.AccessKeyID, key.SecretAccessKey
+		minted = true
 	}
 
 	if err := svc.allow(ctx, b.ID, accessKey, garagePermissions(access)); err != nil {
+		if minted {
+			// Roll back the key we just created: its id/secret were not persisted
+			// to status, so leaving it would leak an orphan key and the next
+			// reconcile would mint yet another one.
+			_ = svc.deleteKey(ctx, accessKey)
+		}
 		return backend.AccessState{}, fmt.Errorf("grant key on bucket: %w", err)
 	}
 
