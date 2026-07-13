@@ -216,13 +216,34 @@ func (r *BucketAccessReconciler) reconcileDelete(ctx context.Context, access *v1
 		return ctrl.Result{}, nil
 	}
 
-	bucket, cluster, err := r.resolve(ctx, access)
-	if err != nil {
-		r.Log.Warning(fmt.Sprintf("[reconcileDelete] access %s/%s: %v; removing finalizer", access.Namespace, access.Name, err))
-	} else if driver, derr := r.Registry.For(cluster); derr == nil {
-		if derr := driver.DeleteAccess(ctx, cluster, bucket, access); derr != nil {
-			return ctrl.Result{}, derr
+	// Resolve the bound bucket + cluster to revoke the backend key. Distinguish a
+	// transient failure (retry, keep the finalizer — do not orphan the key) from
+	// the claim being genuinely gone (its cluster teardown took the key with it,
+	// so release).
+	claim := &v1alpha1.BucketClaim{}
+	err := r.Client.Get(ctx, client.ObjectKey{Namespace: access.Namespace, Name: access.Spec.BucketClaimName}, claim)
+	switch {
+	case err == nil:
+		if claim.Status != nil && claim.Status.BoundBucketName != "" {
+			bucket, cluster := r.resolveBound(ctx, claim.Status.BoundBucketName)
+			if bucket != nil && cluster != nil {
+				driver, derr := r.Registry.For(cluster)
+				if derr != nil {
+					return ctrl.Result{}, derr
+				}
+				if derr := driver.DeleteAccess(ctx, cluster, bucket, access); derr != nil {
+					return ctrl.Result{}, derr
+				}
+			}
+			// bucket/cluster no longer resolvable: the backend (and its key) is
+			// gone; fall through to release best-effort.
 		}
+	case apierrors.IsNotFound(err):
+		// Claim gone: the key was removed with the claim's cluster; release.
+		r.Log.Info(fmt.Sprintf("[reconcileDelete] access %s/%s: claim %q not found; releasing", access.Namespace, access.Name, access.Spec.BucketClaimName))
+	default:
+		// Transient error reading the claim: retry rather than orphan the key.
+		return ctrl.Result{}, err
 	}
 
 	controllerutil.RemoveFinalizer(access, Finalizer)
@@ -377,23 +398,6 @@ func (r *BucketAccessReconciler) revokeIfIssued(ctx context.Context, access *v1a
 	observed.revoked = true
 }
 
-// resolve returns the bound Bucket and its ObjectStore for the access, going
-// through the referenced BucketClaim.
-func (r *BucketAccessReconciler) resolve(ctx context.Context, access *v1alpha1.BucketAccess) (*v1alpha1.Bucket, *v1alpha1.ObjectStore, error) {
-	claim := &v1alpha1.BucketClaim{}
-	if err := r.Client.Get(ctx, client.ObjectKey{Namespace: access.Namespace, Name: access.Spec.BucketClaimName}, claim); err != nil {
-		return nil, nil, fmt.Errorf("bucketclaim %q: %w", access.Spec.BucketClaimName, err)
-	}
-	if claim.Status == nil || claim.Status.BoundBucketName == "" {
-		return nil, nil, fmt.Errorf("bucketclaim %q is not bound", access.Spec.BucketClaimName)
-	}
-	bucket, cluster := r.resolveBound(ctx, claim.Status.BoundBucketName)
-	if bucket == nil || cluster == nil {
-		return nil, nil, fmt.Errorf("bound bucket %q or its object store is unavailable", claim.Status.BoundBucketName)
-	}
-	return bucket, cluster, nil
-}
-
 // resolveBound loads a cluster-scoped Bucket by name and its ObjectStore. It
 // returns nil pointers (not an error) when either is missing, so callers can
 // gate rather than fail.
@@ -429,10 +433,14 @@ func (r *BucketAccessReconciler) deleteCredentialsSecret(ctx context.Context, ac
 }
 
 // getSecret reads the credentials Secret (nil, false when it does not exist).
+// It reads through the uncached APIReader: the result drives the mintFresh
+// decision, and a stale cached read (Secret just written but not yet in the
+// informer cache) would make it look missing and trigger an unnecessary key
+// rotation — revoking a live key.
 func (r *BucketAccessReconciler) getSecret(ctx context.Context, access *v1alpha1.BucketAccess) (*corev1.Secret, bool, error) {
 	secret := &corev1.Secret{}
 	key := client.ObjectKey{Namespace: access.Namespace, Name: credentialsSecretName(access)}
-	if err := r.Client.Get(ctx, key, secret); err != nil {
+	if err := r.APIReader.Get(ctx, key, secret); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, false, nil
 		}

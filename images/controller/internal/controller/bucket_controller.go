@@ -169,14 +169,23 @@ func (r *BucketReconciler) reconcileDelete(ctx context.Context, bucket *v1alpha1
 
 	cluster, err := r.getCluster(ctx, bucket.Spec.ObjectStoreRef)
 	switch {
+	case apierrors.IsNotFound(err):
+		// The ObjectStore is gone; its data plane (and backend bucket) was torn
+		// down with it, honoring the cluster reclaim policy. Nothing left to
+		// clean up — safe to release the finalizer.
+		r.Log.Info(fmt.Sprintf("[reconcileDelete] bucket %q: ObjectStore %q not found; releasing", bucket.Name, bucket.Spec.ObjectStoreRef))
 	case err != nil:
-		r.Log.Warning(fmt.Sprintf("[reconcileDelete] bucket %q: cluster %q unavailable (%v); removing finalizer",
-			bucket.Name, bucket.Spec.ObjectStoreRef, err))
+		// Transient (API unavailable, etc.): keep the finalizer and retry rather
+		// than release prematurely and orphan the backend bucket.
+		return ctrl.Result{}, err
 	default:
-		if driver, derr := r.Registry.For(cluster); derr == nil {
-			if derr := driver.DeleteBucket(ctx, cluster, bucket); derr != nil {
-				return ctrl.Result{}, derr
-			}
+		driver, derr := r.Registry.For(cluster)
+		if derr != nil {
+			// Backend not resolvable: do not silently skip teardown — requeue.
+			return ctrl.Result{}, derr
+		}
+		if derr := driver.DeleteBucket(ctx, cluster, bucket); derr != nil {
+			return ctrl.Result{}, derr
 		}
 	}
 

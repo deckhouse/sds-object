@@ -166,3 +166,21 @@ func TestCephRGWUnsupported(t *testing.T) {
 		}
 	})
 }
+
+func TestUnstructuredManagedFieldsChanged(t *testing.T) {
+	c := heavy("main", v1alpha1.RedundancyStandard)
+	a := buildCephObjectStore(c)
+	b := buildCephObjectStore(c)
+	if unstructuredManagedFieldsChanged(a, b) {
+		t.Errorf("identical objects must report no change (would churn Rook)")
+	}
+	b.Object["spec"].(map[string]interface{})["gateway"] = map[string]interface{}{"instances": int64(2)}
+	if !unstructuredManagedFieldsChanged(a, b) {
+		t.Errorf("differing spec must report a change")
+	}
+	c2 := buildCephObjectStore(c)
+	c2.SetLabels(map[string]string{"extra": "x"})
+	if !unstructuredManagedFieldsChanged(a, c2) {
+		t.Errorf("differing labels must report a change")
+	}
+}
