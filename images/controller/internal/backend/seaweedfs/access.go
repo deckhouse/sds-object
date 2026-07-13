@@ -18,7 +18,6 @@ package seaweedfs
 
 import (
 	"context"
-	"fmt"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
@@ -41,37 +40,33 @@ func (d *Driver) EnsureAccess(ctx context.Context, cluster *v1alpha1.ObjectStore
 
 	name := backend.BucketDisplayName(bucket)
 	identityName := backend.AccessResourceName(access)
-	filer := newFilerClient(filerEndpoint(cluster, d.namespace, d.clusterDomain))
 
-	cfg, err := filer.readIdentities(ctx)
-	if err != nil {
-		return backend.AccessState{}, fmt.Errorf("read IAM config: %w", err)
-	}
-
-	accessKey, secretKey := "", ""
-	if !mintFresh {
-		if cur, ok := findCredentials(cfg, identityName); ok {
-			accessKey, secretKey = cur.AccessKey, cur.SecretKey
+	// Serialize the whole read-decide-write cycle so a concurrent reconcile
+	// cannot clobber the identity we issue here (or vice versa).
+	var accessKey, secretKey string
+	if err := d.mutateIdentities(ctx, cluster, func(cfg *identityConfig) (bool, error) {
+		accessKey, secretKey = "", ""
+		if !mintFresh {
+			if cur, ok := findCredentials(cfg, identityName); ok {
+				accessKey, secretKey = cur.AccessKey, cur.SecretKey
+			}
 		}
-	}
-	if accessKey == "" || secretKey == "" {
-		if accessKey, err = randomHex(16); err != nil {
-			return backend.AccessState{}, err
+		if accessKey == "" || secretKey == "" {
+			var e error
+			if accessKey, e = randomHex(16); e != nil {
+				return false, e
+			}
+			if secretKey, e = randomHex(32); e != nil {
+				return false, e
+			}
 		}
-		if secretKey, err = randomHex(32); err != nil {
-			return backend.AccessState{}, err
-		}
-	}
-
-	identity := s3Identity{
-		Name:        identityName,
-		Credentials: []s3Credential{{AccessKey: accessKey, SecretKey: secretKey}},
-		Actions:     bucketActions(name, access.Spec.Permission),
-	}
-	if cfg.upsert(identity) {
-		if err := filer.writeIdentities(ctx, cfg); err != nil {
-			return backend.AccessState{}, fmt.Errorf("write IAM config: %w", err)
-		}
+		return cfg.upsert(s3Identity{
+			Name:        identityName,
+			Credentials: []s3Credential{{AccessKey: accessKey, SecretKey: secretKey}},
+			Actions:     bucketActions(name, access.Spec.Permission),
+		}), nil
+	}); err != nil {
+		return backend.AccessState{}, err
 	}
 
 	return backend.AccessState{
@@ -96,17 +91,9 @@ func (d *Driver) DeleteAccess(ctx context.Context, cluster *v1alpha1.ObjectStore
 		return nil
 	}
 
-	filer := newFilerClient(filerEndpoint(cluster, d.namespace, d.clusterDomain))
-	cfg, err := filer.readIdentities(ctx)
-	if err != nil {
-		return fmt.Errorf("read IAM config: %w", err)
-	}
-	if cfg.remove(backend.AccessResourceName(access)) {
-		if err := filer.writeIdentities(ctx, cfg); err != nil {
-			return fmt.Errorf("write IAM config: %w", err)
-		}
-	}
-	return nil
+	return d.mutateIdentities(ctx, cluster, func(cfg *identityConfig) (bool, error) {
+		return cfg.remove(backend.AccessResourceName(access)), nil
+	})
 }
 
 // findCredentials returns the first credential pair of the named identity.

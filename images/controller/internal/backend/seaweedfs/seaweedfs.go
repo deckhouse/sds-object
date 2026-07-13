@@ -35,6 +35,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"sync"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -72,6 +73,10 @@ type Driver struct {
 	namespace     string
 	image         string
 	clusterDomain string
+	// identityLocks serializes read-modify-write of each cluster's filer
+	// identity.json (keyed by cluster name), so concurrent reconciles do not
+	// lose each other's updates. See mutateIdentities.
+	identityLocks sync.Map
 }
 
 var _ backend.Driver = (*Driver)(nil)
@@ -274,22 +279,13 @@ func (d *Driver) ensureAdminIdentity(ctx context.Context, cluster *v1alpha1.Obje
 		return err
 	}
 
-	filer := newFilerClient(filerEndpoint(cluster, d.namespace, d.clusterDomain))
-	cfg, err := filer.readIdentities(ctx)
-	if err != nil {
-		return err
-	}
-	admin := s3Identity{
-		Name:        adminIdentityName,
-		Credentials: []s3Credential{{AccessKey: ak, SecretKey: sk}},
-		Actions:     []string{actionAdmin},
-	}
-	if cfg.upsert(admin) {
-		if err := filer.writeIdentities(ctx, cfg); err != nil {
-			return err
-		}
-	}
-	return nil
+	return d.mutateIdentities(ctx, cluster, func(cfg *identityConfig) (bool, error) {
+		return cfg.upsert(s3Identity{
+			Name:        adminIdentityName,
+			Credentials: []s3Credential{{AccessKey: ak, SecretKey: sk}},
+			Actions:     []string{actionAdmin},
+		}), nil
+	})
 }
 
 // ensureAdminSecret creates the cluster admin Secret on first reconcile and
