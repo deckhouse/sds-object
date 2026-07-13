@@ -294,6 +294,20 @@ func (c *adminClient) createBucket(ctx context.Context, alias string) (*bucketIn
 	return &out, nil
 }
 
+// bucketQuotas is the quota block of the PUT /v1/bucket request/response. A nil
+// field means "no limit"; Garage stores sizes in bytes.
+type bucketQuotas struct {
+	MaxSize    *int64 `json:"maxSize"`
+	MaxObjects *int64 `json:"maxObjects"`
+}
+
+// updateBucket sets the bucket's quotas (idempotent). Passing a bucketQuotas
+// with nil fields clears the limits, so it also reconciles quota removal.
+func (c *adminClient) updateBucket(ctx context.Context, bucketID string, quotas bucketQuotas) error {
+	body := map[string]any{"quotas": quotas}
+	return c.do(ctx, http.MethodPut, "/v1/bucket?id="+url.QueryEscape(bucketID), body, nil)
+}
+
 // deleteBucket removes a bucket by id (idempotent).
 func (c *adminClient) deleteBucket(ctx context.Context, bucketID string) error {
 	err := c.do(ctx, http.MethodDelete, "/v1/bucket?id="+url.QueryEscape(bucketID), nil, nil)

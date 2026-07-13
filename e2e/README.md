@@ -12,7 +12,8 @@ finalizer-driven deletion.
    test namespace exists.
 3. A single shared `ObjectStore` is created and the ordered specs run
    on top of it: create → bucket + creds `Secret` + S3 round-trip → validation
-   guards → delete.
+   guards → access (deny-by-default + revocation) → features (fail-loud parity)
+   → delete.
 4. `AfterSuite` hands the cluster back to `storage-e2e` for teardown.
 
 ## Running in CI (PR label)

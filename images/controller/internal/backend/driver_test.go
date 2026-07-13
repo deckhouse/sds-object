@@ -68,6 +68,38 @@ func TestRegistryFor(t *testing.T) {
 	}
 }
 
+func TestRequestedFeatures(t *testing.T) {
+	cases := []struct {
+		name string
+		spec v1alpha1.BucketSpec
+		want []string
+	}{
+		{"none", v1alpha1.BucketSpec{}, nil},
+		{"empty quota is not a request", v1alpha1.BucketSpec{Quota: &v1alpha1.BucketQuota{}}, nil},
+		{"quota maxSize", v1alpha1.BucketSpec{Quota: &v1alpha1.BucketQuota{MaxSize: "1Gi"}}, []string{FeatureQuota}},
+		{"quota maxObjects", v1alpha1.BucketSpec{Quota: &v1alpha1.BucketQuota{MaxObjects: 10}}, []string{FeatureQuota}},
+		{"public read", v1alpha1.BucketSpec{AccessPolicy: v1alpha1.AccessPolicyPublicRead}, []string{FeaturePublicRead}},
+		{"private is not a request", v1alpha1.BucketSpec{AccessPolicy: v1alpha1.AccessPolicyPrivate}, nil},
+		{"both", v1alpha1.BucketSpec{
+			Quota:        &v1alpha1.BucketQuota{MaxSize: "1Gi"},
+			AccessPolicy: v1alpha1.AccessPolicyPublicRead,
+		}, []string{FeatureQuota, FeaturePublicRead}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := RequestedFeatures(&v1alpha1.Bucket{Spec: c.spec})
+			if len(got) != len(c.want) {
+				t.Fatalf("RequestedFeatures=%v, want %v", got, c.want)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Errorf("RequestedFeatures[%d]=%q, want %q", i, got[i], c.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestNotImplementedDriver(t *testing.T) {
 	d := NotImplementedDriver{BackendType: v1alpha1.BackendSeaweedFS}
 	if d.Type() != v1alpha1.BackendSeaweedFS {

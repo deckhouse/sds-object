@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -218,6 +219,17 @@ func (r *BucketReconciler) reconcileNormal(ctx context.Context, bucket *v1alpha1
 	observed.bucketName = state.BucketName
 	if !advance(status, osbStageOrder, v1alpha1.BucketConditionBucketReady, state.Ready, state.Message, err) {
 		return r.finish(ctx, bucket, status, observed, err)
+	}
+
+	// Surface whether every requested optional feature (quota, PublicRead) was
+	// enforced by the backend. Informational only — it does not gate Ready, but
+	// it turns a silent no-op into a visible condition.
+	if len(state.UnsupportedFeatures) == 0 {
+		status.setCondition(v1alpha1.BucketConditionFeaturesApplied, metav1.ConditionTrue, reasonReady,
+			"all requested features are enforced by the backend")
+	} else {
+		status.setCondition(v1alpha1.BucketConditionFeaturesApplied, metav1.ConditionFalse, "Unsupported",
+			fmt.Sprintf("backend %s does not enforce: %s", cluster.Spec.Type, strings.Join(state.UnsupportedFeatures, ", ")))
 	}
 
 	status.setCondition(v1alpha1.BucketConditionReady, metav1.ConditionTrue, reasonReady, "All stages reconciled")

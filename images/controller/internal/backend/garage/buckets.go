@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	v1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 	"github.com/deckhouse/sds-object/images/controller/internal/backend"
@@ -40,15 +41,73 @@ func (d *Driver) EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStore
 	}
 
 	name := backend.BucketDisplayName(bucket)
-	if _, found, err := svc.getBucketByAlias(ctx, name); err != nil {
+	info, found, err := svc.getBucketByAlias(ctx, name)
+	if err != nil {
 		return backend.BucketState{}, fmt.Errorf("look up bucket %q: %w", name, err)
-	} else if !found {
-		if _, err := svc.createBucket(ctx, name); err != nil {
+	}
+	if !found {
+		info, err = svc.createBucket(ctx, name)
+		if err != nil {
 			return backend.BucketState{}, fmt.Errorf("create bucket %q: %w", name, err)
 		}
 	}
 
-	return backend.BucketState{Ready: true, Message: "bucket provisioned", BucketName: name}, nil
+	// Reconcile the quota only when the bucket declares one (spec.quota present):
+	// a quota-less bucket keeps the original no-admin-call path, so the extra
+	// PUT /v1/bucket touches only buckets that opt into a quota. Setting an
+	// explicit empty quota clears any prior limit; fully removing the quota field
+	// leaves the last-applied limit in place.
+	if bucket.Spec.Quota != nil {
+		quotas, err := garageBucketQuotas(bucket.Spec.Quota)
+		if err != nil {
+			return backend.BucketState{}, fmt.Errorf("bucket %q quota: %w", name, err)
+		}
+		if err := svc.updateBucket(ctx, info.ID, quotas); err != nil {
+			return backend.BucketState{}, fmt.Errorf("apply quota to bucket %q: %w", name, err)
+		}
+	}
+
+	return backend.BucketState{
+		Ready:               true,
+		Message:             "bucket provisioned",
+		BucketName:          name,
+		UnsupportedFeatures: garageUnsupported(bucket),
+	}, nil
+}
+
+// garageBucketQuotas converts a Bucket quota into Garage's byte-based quota
+// block. Unset fields become nil (no limit), so it also reconciles removal.
+func garageBucketQuotas(quota *v1alpha1.BucketQuota) (bucketQuotas, error) {
+	q := bucketQuotas{}
+	if quota == nil {
+		return q, nil
+	}
+	if quota.MaxSize != "" {
+		size, err := resource.ParseQuantity(quota.MaxSize)
+		if err != nil {
+			return q, fmt.Errorf("parse maxSize %q: %w", quota.MaxSize, err)
+		}
+		bytes := size.Value()
+		q.MaxSize = &bytes
+	}
+	if quota.MaxObjects > 0 {
+		n := quota.MaxObjects
+		q.MaxObjects = &n
+	}
+	return q, nil
+}
+
+// garageUnsupported reports which requested bucket features Garage does not
+// enforce. Quota is applied; PublicRead is not yet implemented for Garage.
+func garageUnsupported(bucket *v1alpha1.Bucket) []string {
+	var out []string
+	for _, f := range backend.RequestedFeatures(bucket) {
+		if f == backend.FeatureQuota {
+			continue // enforced via the Garage per-bucket quota
+		}
+		out = append(out, f)
+	}
+	return out
 }
 
 // DeleteBucket removes the bucket when the reclaim policy is Delete. It is

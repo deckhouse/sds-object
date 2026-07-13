@@ -205,7 +205,15 @@ func (d *Driver) EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStore
 		return backend.BucketState{}, err
 	}
 
-	return backend.BucketState{Ready: true, Message: "bucket provisioned", BucketName: name}, nil
+	// SeaweedFS enforces neither a per-bucket quota nor anonymous PublicRead via
+	// this driver, so any requested optional feature is reported unsupported
+	// (fail-loud) rather than silently ignored.
+	return backend.BucketState{
+		Ready:               true,
+		Message:             "bucket provisioned",
+		BucketName:          name,
+		UnsupportedFeatures: backend.RequestedFeatures(bucket),
+	}, nil
 }
 
 // DeleteBucket removes the bucket when the reclaim policy is Delete. Access

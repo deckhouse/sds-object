@@ -474,6 +474,38 @@ stringData:
 - `BucketClaimPolicy.spec.allowedNamespaces.patterns` — валидные RE2
   (webhook отклоняет некомпилируемые); доступ deny-by-default.
 
+### 4.6 Паритет фич по бэкендам (feature parity)
+
+Единый контракт `Bucket`/`ObjectStore` объявляет опциональные поля, которые не
+все бэкенды умеют применять. Чтобы запрошенная фича никогда не превращалась в
+молчаливый no-op, движок **всегда явно сообщает**, что он не смог применить:
+контроллер выставляет на `Bucket` информационный condition
+`FeaturesApplied` (`False`, reason `Unsupported`, message со списком
+неприменённых полей). Этот condition **не блокирует** `Ready` — бакет остаётся
+рабочим, но пользователь видит расхождение (drift — расхождение между
+запрошенным и фактическим состоянием).
+
+| Поле | Garage (System/Lightweight) | SeaweedFS (Full) | Ceph RGW (Heavy) |
+|---|---|---|---|
+| `spec.quota.maxSize` / `maxObjects` | ✅ per-bucket quota (admin API, в байтах) | ❌ не применяется → `FeaturesApplied=False` | ✅ через квоту владельца бакета (`CephObjectStoreUser.spec.quotas`) |
+| `spec.accessPolicy: PublicRead` | ❌ fail-loud | ❌ fail-loud | ❌ fail-loud |
+| `status.capacity` (на `ObjectStore`) | ⚠️ только `total` (номинальная ёмкость layout, **не** фактическое потребление) | ❌ не заполняется | ❌ не заполняется |
+
+Пояснения:
+
+- **`PublicRead`** пока не реализован ни одним бэкендом. Чистого пути нет:
+  анонимный read у RGW/SeaweedFS выставляется через bucket-policy /
+  `identity.json`, а эти пути сейчас используются для выдачи межпользовательского
+  доступа и требуют предварительного укрепления (см. находки C2/C3/S1 в ревью).
+  До этого поле принимается API, но помечается unsupported (fail-loud), чтобы не
+  создавать ложного ощущения приватности/публичности.
+- **`status.capacity`** достоверно отдаёт только Garage и только `total` —
+  сумму провижн-ёмкости нод из layout, а не измеренное потребление; поля
+  `used`/`available`/`usedPercent` не заполняются. У SeaweedFS/CephRGW дешёвого
+  источника потребления в контроллере нет, поэтому printer-колонки
+  `Used%`/`Capacity` для них остаются пустыми. Это осознанное ограничение, а не
+  баг: колонки честно пусты, паритет задокументирован здесь.
+
 ## 5. Архитектура контроллера
 
 Один контроллер (controller-runtime), реконсайлеры на каждый CRD + слой

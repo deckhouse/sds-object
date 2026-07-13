@@ -420,6 +420,36 @@ func buildOSB(name, objectStoreRef string, reclaim objectv1alpha1.BucketReclaimP
 	return u
 }
 
+// buildOSBFeatures renders a cluster-scoped Bucket like buildOSB but also sets
+// the optional feature fields (accessPolicy and/or quota) so tests can assert
+// how each backend reports them via the FeaturesApplied condition. An empty
+// accessPolicy / nil quota leaves the field unset.
+func buildOSBFeatures(name, objectStoreRef string, reclaim objectv1alpha1.BucketReclaimPolicy, accessPolicy objectv1alpha1.AccessPolicy, quota map[string]interface{}) *unstructured.Unstructured {
+	u := buildOSB(name, objectStoreRef, reclaim)
+	spec := u.Object["spec"].(map[string]interface{})
+	if accessPolicy != "" {
+		spec["accessPolicy"] = string(accessPolicy)
+	}
+	if quota != nil {
+		spec["quota"] = quota
+	}
+	return u
+}
+
+// quotaEnforcedByBackend reports whether the backend behind the configured
+// profile enforces spec.quota (Garage and Ceph RGW do; SeaweedFS does not).
+// Kept in sync with the backend drivers' UnsupportedFeatures reporting.
+func quotaEnforcedByBackend() bool {
+	switch suiteCfg.oscType {
+	case string(objectv1alpha1.ClusterTypeSystem),
+		string(objectv1alpha1.ClusterTypeLightweight),
+		string(objectv1alpha1.ClusterTypeHeavy):
+		return true
+	default: // Full → SeaweedFS
+		return false
+	}
+}
+
 // buildBucketClaim renders a namespaced brownfield BucketClaim that binds the
 // existing Shared Bucket named existingBucketName. Binding is deny-by-default:
 // a matching BucketClaimPolicy must allow ns before the claim reaches Bound.
