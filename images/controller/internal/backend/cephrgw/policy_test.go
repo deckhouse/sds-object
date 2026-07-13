@@ -30,7 +30,8 @@ func TestSidNoCollision(t *testing.T) {
 		t.Errorf("sid must be deterministic")
 	}
 	for _, r := range a {
-		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+		alnum := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+		if !alnum {
 			t.Fatalf("sid %q is not alphanumeric (char %q)", a, r)
 		}
 	}

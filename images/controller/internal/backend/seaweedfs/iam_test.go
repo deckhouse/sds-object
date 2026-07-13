@@ -99,10 +99,12 @@ func TestIdentityLockPerCluster(t *testing.T) {
 	d := &Driver{}
 	a := &v1alpha1.ObjectStore{ObjectMeta: metav1.ObjectMeta{Name: "a"}}
 	b := &v1alpha1.ObjectStore{ObjectMeta: metav1.ObjectMeta{Name: "b"}}
-	if d.identityLock(a) != d.identityLock(a) {
+	aLock1 := d.identityLock(a)
+	aLock2 := d.identityLock(a)
+	if aLock1 != aLock2 {
 		t.Errorf("same cluster must return the same mutex")
 	}
-	if d.identityLock(a) == d.identityLock(b) {
+	if aLock1 == d.identityLock(b) {
 		t.Errorf("different clusters must return different mutexes")
 	}
 }
