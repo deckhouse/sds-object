@@ -24,6 +24,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"sync"
 	"time"
 
 	v1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
@@ -125,6 +126,44 @@ func bucketActions(bucket string, perm v1alpha1.AccessPermission) []string {
 		actionList + ":" + bucket,
 		actionTagging + ":" + bucket,
 	}
+}
+
+// identityLock returns the per-cluster mutex guarding identity.json.
+func (d *Driver) identityLock(cluster *v1alpha1.ObjectStore) *sync.Mutex {
+	v, _ := d.identityLocks.LoadOrStore(cluster.Name, &sync.Mutex{})
+	return v.(*sync.Mutex)
+}
+
+// mutateIdentities performs a serialized read-modify-write of the cluster's
+// filer identity.json: read the current config, let mutate change it, and write
+// it back only if it changed. The whole cycle holds a per-cluster in-process
+// lock so concurrent reconciles (EnsureAccess / DeleteAccess / admin identity)
+// cannot clobber each other's updates — a lost update here could revoke a
+// just-issued key or the admin identity. Leader election guarantees a single
+// active controller, and the filer has no compare-and-swap for this file, so an
+// in-process lock is the right granularity. mutate reports whether it changed
+// the config (and may return an error to abort without writing).
+func (d *Driver) mutateIdentities(ctx context.Context, cluster *v1alpha1.ObjectStore, mutate func(*identityConfig) (bool, error)) error {
+	lock := d.identityLock(cluster)
+	lock.Lock()
+	defer lock.Unlock()
+
+	filer := newFilerClient(filerEndpoint(cluster, d.namespace, d.clusterDomain))
+	cfg, err := filer.readIdentities(ctx)
+	if err != nil {
+		return fmt.Errorf("read IAM config: %w", err)
+	}
+	changed, err := mutate(cfg)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		return nil
+	}
+	if err := filer.writeIdentities(ctx, cfg); err != nil {
+		return fmt.Errorf("write IAM config: %w", err)
+	}
+	return nil
 }
 
 // filerClient reads and writes files via the SeaweedFS filer HTTP API.

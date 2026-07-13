@@ -179,14 +179,21 @@ func (d *Driver) pinnedReplicationFactor(ctx context.Context, cluster *v1alpha1.
 	existing := &corev1.ConfigMap{}
 	err := d.client.Get(ctx, client.ObjectKey{Namespace: d.namespace, Name: configName(cluster)}, existing)
 	switch {
-	case err == nil:
-		if rf := replicationFactorFromConfigMap(existing); rf > 0 {
-			return rf, nil // already initialized: keep the pinned factor
-		}
-	case !apierrors.IsNotFound(err):
+	case apierrors.IsNotFound(err):
+		// First init: no pinned factor yet, compute it once.
+		return initialReplicationFactor(cluster), nil
+	case err != nil:
 		return 0, err
 	}
-	return initialReplicationFactor(cluster), nil
+	// The ConfigMap exists — the factor is already pinned and must be read back,
+	// never recomputed. If it is missing/unparseable, fail closed rather than
+	// recompute: recomputing could differ from the value the live cluster was
+	// initialized with and trigger a forbidden replication_factor change.
+	rf := replicationFactorFromConfigMap(existing)
+	if rf <= 0 {
+		return 0, fmt.Errorf("garage.toml ConfigMap %q exists but its replication_factor is absent or unparseable; refusing to recompute (would risk a replication_factor change on a live cluster)", configName(cluster))
+	}
+	return rf, nil
 }
 
 // initialReplicationFactor computes the factor to pin at first init: the
