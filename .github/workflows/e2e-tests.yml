@@ -42,9 +42,7 @@ jobs:
       # Create a fresh cluster through Deckhouse Commander for each run.
       cluster_provider: commander
       # Check out the same storage-e2e ref for scripts / cmd / Go code.
-      # TEMPORARY: pinned to the feature branch that ships pkg/commander
-      # (SetMasterCount) — deckhouse/storage-e2e#50. Revert to `main` once it merges.
-      storage_e2e_ref: feat/commander-master-count
+      storage_e2e_ref: main
       # Install the image built for this PR (build_dev publishes the pr<N> tag).
       module_image_tag: pr${{ github.event.pull_request.number }}
     secrets: inherit

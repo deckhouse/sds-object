@@ -46,16 +46,16 @@ func classify(changes []roleChange) (assign, remove []string) {
 }
 
 func TestLayoutRoleChanges(t *testing.T) {
-	const cap = int64(10 << 30)
+	const capBytes = int64(10 << 30)
 
 	t.Run("assigns new peers", func(t *testing.T) {
-		changes := layoutRoleChanges(layoutFrom("a"), peersFrom("a", "b", "c"), 3, cap)
+		changes := layoutRoleChanges(layoutFrom("a"), peersFrom("a", "b", "c"), 3, capBytes)
 		assign, remove := classify(changes)
 		if len(assign) != 2 || len(remove) != 0 {
 			t.Fatalf("assign=%v remove=%v, want assign {b,c}", assign, remove)
 		}
 		for _, c := range changes {
-			if c.Zone != layoutZone || c.Capacity == nil || *c.Capacity != cap {
+			if c.Zone != layoutZone || c.Capacity == nil || *c.Capacity != capBytes {
 				t.Errorf("assign change %+v missing zone/capacity", c)
 			}
 		}
@@ -64,7 +64,7 @@ func TestLayoutRoleChanges(t *testing.T) {
 	t.Run("prunes stale role when full complement is live", func(t *testing.T) {
 		// Old node "a" is gone; its replacement "a2" rejoined over an empty
 		// hostPath under a new identity. All 3 replicas answer.
-		changes := layoutRoleChanges(layoutFrom("a", "b", "c"), peersFrom("a2", "b", "c"), 3, cap)
+		changes := layoutRoleChanges(layoutFrom("a", "b", "c"), peersFrom("a2", "b", "c"), 3, capBytes)
 		assign, remove := classify(changes)
 		if len(assign) != 1 || assign[0] != "a2" {
 			t.Errorf("assign=%v, want {a2}", assign)
@@ -77,7 +77,7 @@ func TestLayoutRoleChanges(t *testing.T) {
 	t.Run("does not prune during a transient reschedule", func(t *testing.T) {
 		// Only 2 of 3 replicas answer (one is mid-reschedule): keep the stale
 		// role, do not churn the layout / trigger a rebalance.
-		changes := layoutRoleChanges(layoutFrom("a", "b", "c"), peersFrom("b", "c"), 3, cap)
+		changes := layoutRoleChanges(layoutFrom("a", "b", "c"), peersFrom("b", "c"), 3, capBytes)
 		_, remove := classify(changes)
 		if len(remove) != 0 {
 			t.Errorf("remove=%v, want none while under full complement", remove)
@@ -85,7 +85,7 @@ func TestLayoutRoleChanges(t *testing.T) {
 	})
 
 	t.Run("no changes when layout already matches", func(t *testing.T) {
-		changes := layoutRoleChanges(layoutFrom("a", "b", "c"), peersFrom("a", "b", "c"), 3, cap)
+		changes := layoutRoleChanges(layoutFrom("a", "b", "c"), peersFrom("a", "b", "c"), 3, capBytes)
 		if len(changes) != 0 {
 			t.Errorf("changes=%v, want none", changes)
 		}

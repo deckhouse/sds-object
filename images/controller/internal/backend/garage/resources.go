@@ -82,7 +82,7 @@ const (
 // one pod per master) keeps the pinned replication factor and the Garage quorum
 // stable across master-count changes: three replicas always run — spread across
 // control-plane nodes when several exist, co-located on the single master
-// otherwise (see DESIGN, "Сценарии смены числа мастеров у System").
+// otherwise (see DESIGN, "System master-count change scenarios").
 const systemReplicas int32 = 3
 
 // labelSystemLocalNode marks a controller-provisioned System local PV and records

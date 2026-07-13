@@ -49,7 +49,7 @@ func (d *Driver) EnsureAccess(ctx context.Context, cluster *v1alpha1.ObjectStore
 			if err := d.deleteUser(ctx, uid); err != nil {
 				return backend.AccessState{}, err
 			}
-			if err := d.ensureUser(ctx, cluster, uid); err != nil {
+			if err := d.ensureUser(ctx, cluster, uid, nil); err != nil {
 				if isNoMatch(err) {
 					return backend.AccessState{Message: "CephObjectStoreUser CRD not found; is the sds-elastic module installed?"}, nil
 				}
@@ -58,7 +58,7 @@ func (d *Driver) EnsureAccess(ctx context.Context, cluster *v1alpha1.ObjectStore
 			return backend.AccessState{Message: "rotating RGW user credentials"}, nil
 		}
 	} else {
-		if err := d.ensureUser(ctx, cluster, uid); err != nil {
+		if err := d.ensureUser(ctx, cluster, uid, nil); err != nil {
 			if isNoMatch(err) {
 				return backend.AccessState{Message: "CephObjectStoreUser CRD not found; is the sds-elastic module installed?"}, nil
 			}

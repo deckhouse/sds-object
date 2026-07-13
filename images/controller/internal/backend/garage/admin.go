@@ -29,13 +29,17 @@ import (
 	"time"
 )
 
-// adminClient is a minimal client for the Garage admin API (v1, served on the
-// admin port behind a Bearer token).
+// adminClient is a minimal client for the Garage v2 admin API (served on the
+// admin port behind a Bearer token). Garage v2 reworked the admin API: every
+// call is `METHOD /v2/<CallName>` with the call name in the path, proper HTTP
+// 404s for missing resources, and DeleteKey/DeleteBucket/UpdateBucket as POST
+// with the id in a query parameter.
 //
-// NOTE: the request/response shapes below target the documented Garage v1
-// admin API. They have not been validated against a live Garage yet and are
-// the most likely place to need adjustment during the first in-cluster pass —
-// they are deliberately localised here so a fix stays in one file.
+// NOTE: the request/response shapes below target the documented Garage v2.3.0
+// admin API; the wire format is deliberately localised here so a fix stays in
+// one file. The exported method set and the returned Go structs are unchanged
+// from the v1 client, so the callers (mesh.go, rebalance.go, buckets.go,
+// access.go) are not affected by the v2 migration.
 type adminClient struct {
 	http    *http.Client
 	baseURL string // e.g. http://host:3903
@@ -50,15 +54,13 @@ func newAdminClient(baseURL, token string) *adminClient {
 	}
 }
 
-// knownNode is one entry of GET /v1/status knownNodes.
-type knownNode struct {
-	ID       string `json:"id"`
-	Addr     string `json:"addr"`
-	IsUp     bool   `json:"isUp"`
-	Hostname string `json:"hostname"`
+// statusResponse carries the node identity of the queried Garage node (its own
+// node id), used to seed the RPC mesh and layout.
+type statusResponse struct {
+	Node string
 }
 
-// layoutRole is one assigned (or staged) role in the cluster layout.
+// layoutRole is one assigned role in the cluster layout.
 type layoutRole struct {
 	ID       string   `json:"id"`
 	Zone     string   `json:"zone"`
@@ -66,59 +68,62 @@ type layoutRole struct {
 	Tags     []string `json:"tags"`
 }
 
-// clusterLayout mirrors the layout block of GET /v1/status and GET /v1/layout.
+// clusterLayout mirrors GET /v2/GetClusterLayout.
 type clusterLayout struct {
-	Version           int          `json:"version"`
-	Roles             []layoutRole `json:"roles"`
-	StagedRoleChanges []layoutRole `json:"stagedRoleChanges"`
+	Version int          `json:"version"`
+	Roles   []layoutRole `json:"roles"`
 }
 
-// statusResponse is GET /v1/status.
-type statusResponse struct {
-	Node          string        `json:"node"`
-	GarageVersion string        `json:"garageVersion"`
-	KnownNodes    []knownNode   `json:"knownNodes"`
-	Layout        clusterLayout `json:"layout"`
-}
-
-// healthResponse is GET /v1/health.
+// healthResponse is GET /v2/GetClusterHealth.
 type healthResponse struct {
-	Status           string `json:"status"` // healthy | degraded | unavailable
-	KnownNodes       int    `json:"knownNodes"`
-	ConnectedNodes   int    `json:"connectedNodes"`
-	StorageNodes     int    `json:"storageNodes"`
-	StorageNodesOk   int    `json:"storageNodesOk"`
-	Partitions       int    `json:"partitions"`
-	PartitionsQuorum int    `json:"partitionsQuorum"`
-	PartitionsAllOk  int    `json:"partitionsAllOk"`
+	Status         string `json:"status"` // healthy | degraded | unavailable
+	KnownNodes     int    `json:"knownNodes"`
+	ConnectedNodes int    `json:"connectedNodes"`
+	StorageNodes   int    `json:"storageNodes"`
+	// StorageNodesOk keeps the v1 Go field name used by callers; in v2 the JSON
+	// field was renamed to storageNodesUp.
+	StorageNodesOk   int `json:"storageNodesUp"`
+	Partitions       int `json:"partitions"`
+	PartitionsQuorum int `json:"partitionsQuorum"`
+	PartitionsAllOk  int `json:"partitionsAllOk"`
 }
 
-// roleChange is one entry of the POST /v1/layout request body. Garage expects
-// a JSON array of these (each carrying the node id). For an assignment set
-// Zone/Capacity/Tags; to drop a node set Remove=true.
+// roleChange is one layout mutation the reconciler wants to make. It is the
+// caller-facing intent type (mesh.go); stageLayout translates it to the v2
+// UpdateClusterLayout wire shape. For an assignment set Zone/Capacity/Tags; to
+// drop a node set Remove=true.
 type roleChange struct {
-	ID   string `json:"id"`
-	Zone string `json:"zone,omitempty"`
-	// Capacity is the storage capacity in bytes (null/omitted = gateway node).
-	Capacity *int64 `json:"capacity,omitempty"`
-	// Tags is always sent (even empty): Garage matches the "assign" variant by
-	// the presence of zone+capacity+tags, so an omitted tags field would fail
-	// to deserialize.
-	Tags   []string `json:"tags"`
-	Remove bool     `json:"remove,omitempty"`
+	ID       string
+	Zone     string
+	Capacity *int64
+	Tags     []string
+	Remove   bool
 }
 
+// nodeInfoResponse is GET /v2/GetNodeInfo (a MultiResponse keyed by node id).
+type nodeInfoResponse struct {
+	Success map[string]struct {
+		NodeID string `json:"nodeId"`
+	} `json:"success"`
+}
+
+// status returns the queried node's own identity via GET /v2/GetNodeInfo?node=self.
 func (c *adminClient) status(ctx context.Context) (*statusResponse, error) {
-	var out statusResponse
-	if err := c.do(ctx, http.MethodGet, "/v1/status", nil, &out); err != nil {
+	var out nodeInfoResponse
+	if err := c.do(ctx, http.MethodGet, "/v2/GetNodeInfo?node=self", nil, &out); err != nil {
 		return nil, err
 	}
-	return &out, nil
+	for _, v := range out.Success {
+		if v.NodeID != "" {
+			return &statusResponse{Node: v.NodeID}, nil
+		}
+	}
+	return &statusResponse{}, nil
 }
 
 func (c *adminClient) health(ctx context.Context) (*healthResponse, error) {
 	var out healthResponse
-	if err := c.do(ctx, http.MethodGet, "/v1/health", nil, &out); err != nil {
+	if err := c.do(ctx, http.MethodGet, "/v2/GetClusterHealth", nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -126,26 +131,40 @@ func (c *adminClient) health(ctx context.Context) (*healthResponse, error) {
 
 // connect asks the node to connect to the given peers ("<id>@<host>:<port>").
 func (c *adminClient) connect(ctx context.Context, peers []string) error {
-	return c.do(ctx, http.MethodPost, "/v1/connect", peers, nil)
+	return c.do(ctx, http.MethodPost, "/v2/ConnectClusterNodes", peers, nil)
 }
 
 func (c *adminClient) layout(ctx context.Context) (*clusterLayout, error) {
 	var out clusterLayout
-	if err := c.do(ctx, http.MethodGet, "/v1/layout", nil, &out); err != nil {
+	if err := c.do(ctx, http.MethodGet, "/v2/GetClusterLayout", nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
 }
 
-// stageLayout stages role changes. Garage expects a JSON array of role
-// changes, each identified by its node id.
+// stageLayout stages role changes. v2 UpdateClusterLayout takes an object
+// {roles: [...]} where each entry is either an assignment (id+zone+capacity+tags)
+// or a removal (id+remove:true) — the two variants must not be mixed on one entry.
 func (c *adminClient) stageLayout(ctx context.Context, changes []roleChange) error {
-	return c.do(ctx, http.MethodPost, "/v1/layout", changes, nil)
+	roles := make([]any, 0, len(changes))
+	for _, ch := range changes {
+		if ch.Remove {
+			roles = append(roles, map[string]any{"id": ch.ID, "remove": true})
+			continue
+		}
+		roles = append(roles, map[string]any{
+			"id":       ch.ID,
+			"zone":     ch.Zone,
+			"capacity": ch.Capacity,
+			"tags":     ch.Tags,
+		})
+	}
+	return c.do(ctx, http.MethodPost, "/v2/UpdateClusterLayout", map[string]any{"roles": roles}, nil)
 }
 
 // applyLayout applies the staged changes, producing layout version `version`.
 func (c *adminClient) applyLayout(ctx context.Context, version int) error {
-	return c.do(ctx, http.MethodPost, "/v1/layout/apply", map[string]int{"version": version}, nil)
+	return c.do(ctx, http.MethodPost, "/v2/ApplyClusterLayout", map[string]int{"version": version}, nil)
 }
 
 // do performs an authenticated JSON request and optionally decodes the body.
@@ -198,11 +217,9 @@ func (e *apiError) Error() string {
 	return fmt.Sprintf("garage admin %s %s: status %d: %s", e.Method, e.Path, e.StatusCode, e.Body)
 }
 
-// isNotFound reports whether err means "the resource does not exist". Garage
-// is inconsistent here: a missing key/bucket on GET or DELETE comes back as
-// HTTP 400 (InvalidRequest) with a "... not found" message rather than 404, so
-// a plain status check would make idempotent deletes fail on an already-gone
-// resource. Treat both 404 and a 400 whose body says "not found" as not-found.
+// isNotFound reports whether err means "the resource does not exist". Garage v2
+// returns a proper HTTP 404 for a missing key/bucket; the legacy 400-with-
+// "not found"-body case is still tolerated defensively.
 func isNotFound(err error) bool {
 	var ae *apiError
 	if !errors.As(err, &ae) {
@@ -215,20 +232,17 @@ func isNotFound(err error) bool {
 }
 
 // --- Bucket / key management ------------------------------------------------
-//
-// NOTE: as with the cluster-management calls above, these target the documented
-// Garage v1 admin API and are the most likely place to need adjustment on the
-// first live-cluster pass; they are localised here on purpose.
 
-// keyInfo is the response of POST /v1/key and GET /v1/key. secretAccessKey is
-// only populated by the server at creation time.
+// keyInfo is the response of POST /v2/CreateKey and GET /v2/GetKeyInfo.
+// secretAccessKey is only populated by the server at creation time (or when
+// GetKeyInfo is asked with showSecretKey=true).
 type keyInfo struct {
 	AccessKeyID     string `json:"accessKeyId"`
 	SecretAccessKey string `json:"secretAccessKey"`
 	Name            string `json:"name"`
 }
 
-// bucketInfo is the response of POST/GET /v1/bucket.
+// bucketInfo is the response of POST /v2/CreateBucket and GET /v2/GetBucketInfo.
 type bucketInfo struct {
 	ID            string   `json:"id"`
 	GlobalAliases []string `json:"globalAliases"`
@@ -244,7 +258,7 @@ type permissions struct {
 // createKey creates a new access key with the given display name.
 func (c *adminClient) createKey(ctx context.Context, name string) (*keyInfo, error) {
 	var out keyInfo
-	if err := c.do(ctx, http.MethodPost, "/v1/key", map[string]string{"name": name}, &out); err != nil {
+	if err := c.do(ctx, http.MethodPost, "/v2/CreateKey", map[string]string{"name": name}, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -252,7 +266,7 @@ func (c *adminClient) createKey(ctx context.Context, name string) (*keyInfo, err
 
 // keyExists reports whether an access key with the given id exists.
 func (c *adminClient) keyExists(ctx context.Context, accessKeyID string) (bool, error) {
-	err := c.do(ctx, http.MethodGet, "/v1/key?id="+url.QueryEscape(accessKeyID), nil, nil)
+	err := c.do(ctx, http.MethodGet, "/v2/GetKeyInfo?id="+url.QueryEscape(accessKeyID), nil, nil)
 	if err == nil {
 		return true, nil
 	}
@@ -264,7 +278,7 @@ func (c *adminClient) keyExists(ctx context.Context, accessKeyID string) (bool, 
 
 // deleteKey removes an access key (idempotent: a missing key is not an error).
 func (c *adminClient) deleteKey(ctx context.Context, accessKeyID string) error {
-	err := c.do(ctx, http.MethodDelete, "/v1/key?id="+url.QueryEscape(accessKeyID), nil, nil)
+	err := c.do(ctx, http.MethodPost, "/v2/DeleteKey?id="+url.QueryEscape(accessKeyID), nil, nil)
 	if isNotFound(err) {
 		return nil
 	}
@@ -275,7 +289,7 @@ func (c *adminClient) deleteKey(ctx context.Context, accessKeyID string) error {
 // false, nil) when it does not exist.
 func (c *adminClient) getBucketByAlias(ctx context.Context, alias string) (*bucketInfo, bool, error) {
 	var out bucketInfo
-	err := c.do(ctx, http.MethodGet, "/v1/bucket?globalAlias="+url.QueryEscape(alias), nil, &out)
+	err := c.do(ctx, http.MethodGet, "/v2/GetBucketInfo?globalAlias="+url.QueryEscape(alias), nil, &out)
 	if err == nil {
 		return &out, true, nil
 	}
@@ -288,7 +302,7 @@ func (c *adminClient) getBucketByAlias(ctx context.Context, alias string) (*buck
 // createBucket creates a bucket with the given global alias.
 func (c *adminClient) createBucket(ctx context.Context, alias string) (*bucketInfo, error) {
 	var out bucketInfo
-	if err := c.do(ctx, http.MethodPost, "/v1/bucket", map[string]string{"globalAlias": alias}, &out); err != nil {
+	if err := c.do(ctx, http.MethodPost, "/v2/CreateBucket", map[string]string{"globalAlias": alias}, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -296,7 +310,7 @@ func (c *adminClient) createBucket(ctx context.Context, alias string) (*bucketIn
 
 // deleteBucket removes a bucket by id (idempotent).
 func (c *adminClient) deleteBucket(ctx context.Context, bucketID string) error {
-	err := c.do(ctx, http.MethodDelete, "/v1/bucket?id="+url.QueryEscape(bucketID), nil, nil)
+	err := c.do(ctx, http.MethodPost, "/v2/DeleteBucket?id="+url.QueryEscape(bucketID), nil, nil)
 	if isNotFound(err) {
 		return nil
 	}
@@ -310,5 +324,19 @@ func (c *adminClient) allow(ctx context.Context, bucketID, accessKeyID string, p
 		"accessKeyId": accessKeyID,
 		"permissions": perms,
 	}
-	return c.do(ctx, http.MethodPost, "/v1/bucket/allow", body, nil)
+	return c.do(ctx, http.MethodPost, "/v2/AllowBucketKey", body, nil)
+}
+
+// bucketQuotas is the quota block of the UpdateBucket request. A nil field
+// means "no limit"; Garage stores sizes in bytes.
+type bucketQuotas struct {
+	MaxSize    *int64 `json:"maxSize"`
+	MaxObjects *int64 `json:"maxObjects"`
+}
+
+// updateBucket sets the bucket's quotas (idempotent). Passing a bucketQuotas
+// with nil fields clears the limits, so it also reconciles quota removal.
+func (c *adminClient) updateBucket(ctx context.Context, bucketID string, quotas bucketQuotas) error {
+	body := map[string]any{"quotas": quotas}
+	return c.do(ctx, http.MethodPost, "/v2/UpdateBucket?id="+url.QueryEscape(bucketID), body, nil)
 }

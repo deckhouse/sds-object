@@ -41,7 +41,9 @@ const (
 // that key. Per-access credentials are issued separately (see access.go);
 // cross-user access is granted through the bucket policy.
 func (d *Driver) EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStore, bucket *v1alpha1.Bucket) (backend.BucketState, error) {
-	if err := d.ensureUser(ctx, cluster, ownerUID(bucket)); err != nil {
+	// The owner user carries the bucket's quota (user-level RGW quota bounds the
+	// single bucket it owns).
+	if err := d.ensureUser(ctx, cluster, ownerUID(bucket), bucket.Spec.Quota); err != nil {
 		if isNoMatch(err) {
 			return backend.BucketState{Message: "CephObjectStoreUser CRD not found; is the sds-elastic module installed?"}, nil
 		}
@@ -65,7 +67,26 @@ func (d *Driver) EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStore
 		return backend.BucketState{}, err
 	}
 
-	return backend.BucketState{Ready: true, Message: "bucket provisioned", BucketName: name}, nil
+	return backend.BucketState{
+		Ready:               true,
+		Message:             "bucket provisioned",
+		BucketName:          name,
+		UnsupportedFeatures: cephRGWUnsupported(bucket),
+	}, nil
+}
+
+// cephRGWUnsupported reports which requested bucket features Ceph RGW does not
+// enforce. Quota is applied (via the owner user's RGW quota); PublicRead is not
+// yet implemented for RGW.
+func cephRGWUnsupported(bucket *v1alpha1.Bucket) []string {
+	var out []string
+	for _, f := range backend.RequestedFeatures(bucket) {
+		if f == backend.FeatureQuota {
+			continue // enforced via the owner user's RGW quota
+		}
+		out = append(out, f)
+	}
+	return out
 }
 
 // DeleteBucket removes the bucket (when reclaimPolicy=Delete) and the owner
@@ -91,8 +112,9 @@ func (d *Driver) DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStore
 }
 
 // ensureUser creates or updates the CephObjectStoreUser with the given uid.
-func (d *Driver) ensureUser(ctx context.Context, cluster *v1alpha1.ObjectStore, uid string) error {
-	desired := buildCephObjectStoreUser(cluster, uid)
+// quota (nil for access users) sets the user-level RGW quota.
+func (d *Driver) ensureUser(ctx context.Context, cluster *v1alpha1.ObjectStore, uid string, quota *v1alpha1.BucketQuota) error {
+	desired := buildCephObjectStoreUser(cluster, uid, quota)
 	if err := controllerutil.SetControllerReference(cluster, desired, d.client.Scheme()); err != nil {
 		return err
 	}

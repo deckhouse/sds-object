@@ -96,6 +96,12 @@ func accessSpecs() {
 				_, reason, _, _ := getCondition(ctx, bucketClaimGVR, suiteCfg.namespace, claim, objectv1alpha1.BucketClaimConditionBound)
 				return reason
 			}).WithTimeout(2 * time.Minute).WithPolling(pollInterval).Should(Equal("DeniedByPolicy"))
+
+			By("the BucketAccess itself loses AccessGranted (independent, deny-by-default enforcement)")
+			Eventually(func() string {
+				st, _, _, _ := getCondition(ctx, bucketAccessGVR, suiteCfg.namespace, access, objectv1alpha1.BucketAccessConditionAccessGranted)
+				return st
+			}).WithTimeout(2 * time.Minute).WithPolling(pollInterval).Should(Equal("False"))
 			Expect(waitSecretGone(ctx, suiteCfg.namespace, secret, 2*time.Minute)).To(Succeed())
 		})
 

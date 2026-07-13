@@ -62,6 +62,34 @@ type BucketState struct {
 
 	// BucketName is the effective bucket name created in the backend.
 	BucketName string
+
+	// UnsupportedFeatures lists spec features that were requested on the bucket
+	// but that this backend cannot enforce (e.g. a quota on a backend without
+	// quota support). The reconciler surfaces them on the Bucket as a
+	// FeaturesApplied=False condition so a requested feature never silently
+	// no-ops. An empty slice means every requested feature was applied.
+	UnsupportedFeatures []string
+}
+
+// Bucket spec features that a backend may or may not be able to enforce. Used
+// as the human-readable tokens in BucketState.UnsupportedFeatures.
+const (
+	FeatureQuota      = "spec.quota"
+	FeaturePublicRead = "spec.accessPolicy=PublicRead"
+)
+
+// RequestedFeatures returns the optional, backend-dependent features the bucket
+// asks for. A backend compares this against what it can enforce to populate
+// BucketState.UnsupportedFeatures.
+func RequestedFeatures(bucket *v1alpha1.Bucket) []string {
+	var out []string
+	if bucket.Spec.Quota != nil && (bucket.Spec.Quota.MaxSize != "" || bucket.Spec.Quota.MaxObjects > 0) {
+		out = append(out, FeatureQuota)
+	}
+	if bucket.Spec.AccessPolicy == v1alpha1.AccessPolicyPublicRead {
+		out = append(out, FeaturePublicRead)
+	}
+	return out
 }
 
 // AccessState is the observed state a Driver reports for an

@@ -155,6 +155,14 @@ type BucketStatus struct {
 const (
 	BucketConditionBucketReady = "BucketReady"
 	BucketConditionReady       = "Ready"
+
+	// BucketConditionFeaturesApplied reports whether every optional spec feature
+	// (quota, accessPolicy=PublicRead) was enforced by the backend. It is
+	// informational and does NOT gate Ready: a bucket whose backend cannot honor
+	// a requested feature is still usable, but the condition is False with a
+	// message listing the unenforced features so the request does not silently
+	// no-op. See backend.RequestedFeatures / BucketState.UnsupportedFeatures.
+	BucketConditionFeaturesApplied = "FeaturesApplied"
 )
 
 // BucketKind is the kind constant used for OwnerReferences and

@@ -86,7 +86,7 @@ func TestUserAndSecretNames(t *testing.T) {
 		t.Errorf("BucketDisplayName=%q, want data", got)
 	}
 
-	user := buildCephObjectStoreUser(c, "data-owner")
+	user := buildCephObjectStoreUser(c, "data-owner", nil)
 	if user.GetNamespace() != elasticNamespace {
 		t.Errorf("user namespace=%q", user.GetNamespace())
 	}
@@ -112,4 +112,57 @@ func TestBuildCephObjectStore(t *testing.T) {
 	if repl["size"] != int64(4) {
 		t.Errorf("HighRedundancy dataPool size=%v, want 4", repl["size"])
 	}
+}
+
+func TestBuildCephObjectStoreUserQuotas(t *testing.T) {
+	c := heavy("main", v1alpha1.RedundancyStandard)
+
+	t.Run("no quota omits the block", func(t *testing.T) {
+		user := buildCephObjectStoreUser(c, "data-owner", nil)
+		spec, _ := user.Object["spec"].(map[string]interface{})
+		if _, ok := spec["quotas"]; ok {
+			t.Errorf("expected no quotas block, got %v", spec["quotas"])
+		}
+	})
+
+	t.Run("quota maps to spec.quotas", func(t *testing.T) {
+		q := &v1alpha1.BucketQuota{MaxSize: "10Gi", MaxObjects: 1000}
+		user := buildCephObjectStoreUser(c, "data-owner", q)
+		spec, _ := user.Object["spec"].(map[string]interface{})
+		quotas, ok := spec["quotas"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("expected quotas block, spec=%v", spec)
+		}
+		if quotas["maxSize"] != "10Gi" {
+			t.Errorf("maxSize=%v, want 10Gi", quotas["maxSize"])
+		}
+		if quotas["maxObjects"] != int64(1000) {
+			t.Errorf("maxObjects=%v, want 1000", quotas["maxObjects"])
+		}
+	})
+
+	t.Run("empty quota fields omit the block", func(t *testing.T) {
+		user := buildCephObjectStoreUser(c, "data-owner", &v1alpha1.BucketQuota{})
+		spec, _ := user.Object["spec"].(map[string]interface{})
+		if _, ok := spec["quotas"]; ok {
+			t.Errorf("expected no quotas block for empty quota, got %v", spec["quotas"])
+		}
+	})
+}
+
+func TestCephRGWUnsupported(t *testing.T) {
+	t.Run("quota is enforced, not reported", func(t *testing.T) {
+		b := &v1alpha1.Bucket{Spec: v1alpha1.BucketSpec{Quota: &v1alpha1.BucketQuota{MaxObjects: 5}}}
+		if got := cephRGWUnsupported(b); len(got) != 0 {
+			t.Errorf("unsupported=%v, want empty", got)
+		}
+	})
+
+	t.Run("PublicRead is reported unsupported", func(t *testing.T) {
+		b := &v1alpha1.Bucket{Spec: v1alpha1.BucketSpec{AccessPolicy: v1alpha1.AccessPolicyPublicRead}}
+		got := cephRGWUnsupported(b)
+		if len(got) != 1 || got[0] != backend.FeaturePublicRead {
+			t.Errorf("unsupported=%v, want [%s]", got, backend.FeaturePublicRead)
+		}
+	})
 }

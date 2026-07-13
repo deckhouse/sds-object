@@ -97,18 +97,46 @@ func rgwUserSecretName(cluster *v1alpha1.ObjectStore, uid string) string {
 }
 
 // buildCephObjectStoreUser returns the Rook CephObjectStoreUser with the given
-// RGW user id.
-func buildCephObjectStoreUser(cluster *v1alpha1.ObjectStore, uid string) *unstructured.Unstructured {
+// RGW user id. When quota is non-nil it is translated to the user-level RGW
+// quota (spec.quotas): because a bucket's owner user owns only that one bucket,
+// a user quota effectively bounds the bucket. Access users (no bucket of their
+// own) are created with quota=nil.
+func buildCephObjectStoreUser(cluster *v1alpha1.ObjectStore, uid string, quota *v1alpha1.BucketQuota) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(cephObjectStoreUserGVK)
 	obj.SetName(uid)
 	obj.SetNamespace(elasticNamespace)
 	obj.SetLabels(commonLabels(cluster))
-	obj.Object["spec"] = map[string]interface{}{
+	spec := map[string]interface{}{
 		"store":       storeName(cluster),
 		"displayName": uid,
 	}
+	if q := rookUserQuotas(quota); q != nil {
+		spec["quotas"] = q
+	}
+	obj.Object["spec"] = spec
 	return obj
+}
+
+// rookUserQuotas maps a Bucket quota to the Rook CephObjectStoreUser
+// spec.quotas block (maxSize as a Ceph size string, maxObjects as a count).
+// Returns nil when nothing is limited, so the field is omitted and Rook clears
+// any previously-set quota.
+func rookUserQuotas(quota *v1alpha1.BucketQuota) map[string]interface{} {
+	if quota == nil {
+		return nil
+	}
+	q := map[string]interface{}{}
+	if quota.MaxSize != "" {
+		q["maxSize"] = quota.MaxSize
+	}
+	if quota.MaxObjects > 0 {
+		q["maxObjects"] = quota.MaxObjects
+	}
+	if len(q) == 0 {
+		return nil
+	}
+	return q
 }
 
 // replicatedPool maps the redundancy intent to a Ceph replicated pool spec,

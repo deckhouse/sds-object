@@ -39,6 +39,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -51,7 +52,7 @@ import (
 
 // seaweedfsVersion is the SeaweedFS release this driver targets. Keep it in
 // sync with the upstream tag pinned in images/seaweedfs/werf.inc.yaml.
-const seaweedfsVersion = "3.71"
+const seaweedfsVersion = "4.39"
 
 // adminIdentityName is the IAM identity used by the controller to manage
 // buckets via the S3 API.
@@ -205,7 +206,39 @@ func (d *Driver) EnsureBucket(ctx context.Context, cluster *v1alpha1.ObjectStore
 		return backend.BucketState{}, err
 	}
 
-	return backend.BucketState{Ready: true, Message: "bucket provisioned", BucketName: name}, nil
+	// Apply the size quota via the filer gRPC (SeaweedFS 4.31+ auto-enforces it).
+	// SeaweedFS has a size quota only, so maxObjects is reported unsupported and
+	// PublicRead is not implemented — see seaweedFSUnsupported.
+	if q := bucket.Spec.Quota; q != nil && q.MaxSize != "" {
+		size, perr := resource.ParseQuantity(q.MaxSize)
+		if perr != nil {
+			return backend.BucketState{}, fmt.Errorf("bucket %q quota maxSize %q: %w", name, q.MaxSize, perr)
+		}
+		if err := setBucketQuota(ctx, filerGRPCTarget(cluster, d.namespace, d.clusterDomain), name, size.Value()); err != nil {
+			return backend.BucketState{}, fmt.Errorf("apply quota to bucket %q: %w", name, err)
+		}
+	}
+
+	return backend.BucketState{
+		Ready:               true,
+		Message:             "bucket provisioned",
+		BucketName:          name,
+		UnsupportedFeatures: seaweedFSUnsupported(bucket),
+	}, nil
+}
+
+// seaweedFSUnsupported reports which requested bucket features SeaweedFS does
+// not enforce: PublicRead (not implemented) and the object-count quota
+// (SeaweedFS enforces a size quota only — maxSize is applied, maxObjects is not).
+func seaweedFSUnsupported(bucket *v1alpha1.Bucket) []string {
+	var out []string
+	if bucket.Spec.AccessPolicy == v1alpha1.AccessPolicyPublicRead {
+		out = append(out, backend.FeaturePublicRead)
+	}
+	if q := bucket.Spec.Quota; q != nil && q.MaxObjects > 0 {
+		out = append(out, backend.FeatureQuota)
+	}
+	return out
 }
 
 // DeleteBucket removes the bucket when the reclaim policy is Delete. Access

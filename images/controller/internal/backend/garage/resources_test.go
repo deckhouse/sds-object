@@ -148,15 +148,15 @@ func TestBucketAndKeyNames(t *testing.T) {
 	}
 }
 
-func systemCluster(name string) *v1alpha1.ObjectStore {
+func systemCluster() *v1alpha1.ObjectStore {
 	return &v1alpha1.ObjectStore{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		ObjectMeta: metav1.ObjectMeta{Name: "system"},
 		Spec:       v1alpha1.ObjectStoreSpec{Type: v1alpha1.ClusterTypeSystem},
 	}
 }
 
 func TestDesiredReplicas(t *testing.T) {
-	if got := desiredReplicas(systemCluster("system")); got != systemReplicas {
+	if got := desiredReplicas(systemCluster()); got != systemReplicas {
 		t.Errorf("desiredReplicas(System)=%d, want %d (fixed, master-count independent)", got, systemReplicas)
 	}
 	if got := desiredReplicas(cluster("lw", v1alpha1.RedundancyStandard)); got != 3 {
@@ -174,7 +174,7 @@ func TestDesiredReplicas(t *testing.T) {
 }
 
 func TestBuildSystemStatefulSet(t *testing.T) {
-	sts := buildSystemStatefulSet(systemCluster("system"), "d8-sds-object", "garage:v1", "hash")
+	sts := buildSystemStatefulSet(systemCluster(), "d8-sds-object", "garage:v1", "hash")
 
 	if sts.Spec.Replicas == nil || *sts.Spec.Replicas != systemReplicas {
 		t.Fatalf("replicas=%v, want %d (fixed, independent of master count)", sts.Spec.Replicas, systemReplicas)
@@ -182,8 +182,8 @@ func TestBuildSystemStatefulSet(t *testing.T) {
 	if sts.Spec.PodManagementPolicy != appsv1.ParallelPodManagement {
 		t.Errorf("PodManagementPolicy=%q, want Parallel", sts.Spec.PodManagementPolicy)
 	}
-	if sts.Spec.ServiceName != rpcSvcName(systemCluster("system")) {
-		t.Errorf("ServiceName=%q, want %q", sts.Spec.ServiceName, rpcSvcName(systemCluster("system")))
+	if sts.Spec.ServiceName != rpcSvcName(systemCluster()) {
+		t.Errorf("ServiceName=%q, want %q", sts.Spec.ServiceName, rpcSvcName(systemCluster()))
 	}
 
 	// Node-sticky storage: a per-ordinal PVC on the managed local StorageClass,
@@ -239,8 +239,8 @@ func TestBuildSystemStatefulSet(t *testing.T) {
 	if idVol == nil {
 		t.Fatalf("expected a node-identity volume")
 	}
-	if idVol.Secret == nil || idVol.Secret.SecretName != nodeIdentitySecretName(systemCluster("system")) {
-		t.Errorf("node-identity volume=%+v, want secret %q", idVol.VolumeSource, nodeIdentitySecretName(systemCluster("system")))
+	if idVol.Secret == nil || idVol.Secret.SecretName != nodeIdentitySecretName(systemCluster()) {
+		t.Errorf("node-identity volume=%+v, want secret %q", idVol.VolumeSource, nodeIdentitySecretName(systemCluster()))
 	}
 	if idVol.Secret.Optional == nil || !*idVol.Secret.Optional {
 		t.Errorf("node-identity secret must be optional (first boot has no identity yet)")
@@ -285,7 +285,7 @@ func TestPodOrdinal(t *testing.T) {
 }
 
 func TestBuildSystemLocalPV(t *testing.T) {
-	pv := buildSystemLocalPV(systemCluster("system"), "master-0", 2)
+	pv := buildSystemLocalPV(systemCluster(), "master-0", 2)
 
 	if pv.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
 		t.Errorf("reclaimPolicy=%q, want Retain (never wipe data)", pv.Spec.PersistentVolumeReclaimPolicy)
@@ -314,7 +314,7 @@ func TestBuildSystemLocalPV(t *testing.T) {
 
 func TestDesiredSystemLocalPVs(t *testing.T) {
 	hostnames := []string{"master-0", "master-1", "master-2"}
-	pvs := desiredSystemLocalPVs(systemCluster("system"), hostnames)
+	pvs := desiredSystemLocalPVs(systemCluster(), hostnames)
 
 	want := len(hostnames) * int(systemReplicas)
 	if len(pvs) != want {
