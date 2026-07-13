@@ -103,6 +103,12 @@ func filerEndpoint(cluster *v1alpha1.ObjectStore, namespace, clusterDomain strin
 	return fmt.Sprintf("http://%s.%s.svc.%s:%d", svcName(cluster), namespace, clusterDomain, filerPort)
 }
 
+// filerGRPCTarget is the host:port of the filer gRPC endpoint (no scheme), used
+// to set the per-bucket quota via the SeaweedFiler service.
+func filerGRPCTarget(cluster *v1alpha1.ObjectStore, namespace, clusterDomain string) string {
+	return fmt.Sprintf("%s.%s.svc.%s:%d", svcName(cluster), namespace, clusterDomain, filerGRPC)
+}
+
 // adminSecretName is the Secret (in the module namespace) holding the cluster's
 // S3 admin credentials.
 func adminSecretName(cluster *v1alpha1.ObjectStore) string {

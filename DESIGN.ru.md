@@ -485,14 +485,24 @@ stringData:
 рабочим, но пользователь видит расхождение (drift — расхождение между
 запрошенным и фактическим состоянием).
 
+Версии движков: Garage **v2.3.0**, SeaweedFS **4.39** (обе — последние стабильные).
+
 | Поле | Garage (System/Lightweight) | SeaweedFS (Full) | Ceph RGW (Heavy) |
 |---|---|---|---|
-| `spec.quota.maxSize` / `maxObjects` | ✅ per-bucket quota (admin API, в байтах) | ❌ не применяется → `FeaturesApplied=False` | ✅ через квоту владельца бакета (`CephObjectStoreUser.spec.quotas`) |
+| `spec.quota.maxSize` | ✅ per-bucket quota (admin API v2, в байтах) | ✅ размерная квота на Entry бакета (filer gRPC; auto-enforce с 4.31) | ✅ через квоту владельца бакета (`CephObjectStoreUser.spec.quotas`) |
+| `spec.quota.maxObjects` | ✅ | ❌ не применяется → `FeaturesApplied=False` (у SeaweedFS квота только размерная) | ✅ |
 | `spec.accessPolicy: PublicRead` | ❌ fail-loud | ❌ fail-loud | ❌ fail-loud |
 | `status.capacity` (на `ObjectStore`) | ⚠️ только `total` (номинальная ёмкость layout, **не** фактическое потребление) | ❌ не заполняется | ❌ не заполняется |
 
 Пояснения:
 
+- **SeaweedFS-квота** — размерная (байты), хранится на директории-Entry бакета в
+  filer и выставляется через gRPC `SeaweedFiler` (HTTP/S3-эндпойнта для квоты
+  нет). С версии 4.31 S3-шлюз сам применяет её (фоновый ~1-минутный цикл
+  переводит бакет в read-only при переполнении и обратно), поэтому достаточно
+  выставить положительное значение — отдельный enforce-cron не нужен.
+  Ограничение движка: **`maxObjects` у SeaweedFS нет** → при заданном `maxObjects`
+  поднимается `FeaturesApplied=False`.
 - **`PublicRead`** пока не реализован ни одним бэкендом. Чистого пути нет:
   анонимный read у RGW/SeaweedFS выставляется через bucket-policy /
   `identity.json`, а эти пути сейчас используются для выдачи межпользовательского

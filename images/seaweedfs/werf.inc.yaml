@@ -31,9 +31,10 @@ shell:
   install:
     - git clone --depth 1 --branch {{ $seaweedfsVersion }} $(cat /run/secrets/SOURCE_REPO)/seaweedfs/seaweedfs.git /src
     - cd /src
-    # Bump vulnerable (transitive) deps of SeaweedFS to patched versions so the
-    # resulting `weed` binary passes the CVE scan (see patches/001-fix-cve.patch).
-    - for patchfile in /patches/images/{{ $.ImageName }}/patches/*.patch; do echo "Apply ${patchfile} ..."; git apply ${patchfile} --verbose; done
+    # Apply any CVE/build patches. As of SeaweedFS 4.39 the upstream go.mod
+    # already pins the previously-vulnerable transitive deps at patched versions,
+    # so there is no patch to apply; the loop tolerates an empty patch set.
+    - for patchfile in /patches/images/{{ $.ImageName }}/patches/*.patch; do [ -e "${patchfile}" ] || continue; echo "Apply ${patchfile} ..."; git apply ${patchfile} --verbose; done
     - rm -rf /src/.git
 
 ---

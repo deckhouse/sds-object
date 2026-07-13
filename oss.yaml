@@ -4,11 +4,11 @@
   logo: https://avatars.githubusercontent.com/u/82232597?s=200&v=4
   license: GNU Affero General Public License v3.0
   id: garage
-  version: "1.0.1"
+  version: "2.3.0"
 - name: SeaweedFS
   link: https://github.com/seaweedfs/seaweedfs
   description: SeaweedFS is a fast distributed storage system for blobs, objects, files, and a data lake, with an S3-compatible API. It backs the Full ObjectStore profile.
   logo: https://avatars.githubusercontent.com/u/1163234?s=200&v=4
   license: Apache License 2.0
   id: seaweedfs
-  version: "3.71"
+  version: "4.39"

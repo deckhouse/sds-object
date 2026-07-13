@@ -437,15 +437,17 @@ func buildOSBFeatures(name, objectStoreRef string, reclaim objectv1alpha1.Bucket
 }
 
 // quotaEnforcedByBackend reports whether the backend behind the configured
-// profile enforces spec.quota (Garage and Ceph RGW do; SeaweedFS does not).
-// Kept in sync with the backend drivers' UnsupportedFeatures reporting.
+// profile fully enforces the features spec's quota (both maxSize and
+// maxObjects). Garage and Ceph RGW enforce both; SeaweedFS enforces only the
+// size quota (no maxObjects), so with a quota that also sets maxObjects it
+// reports FeaturesApplied=False. Kept in sync with the drivers' reporting.
 func quotaEnforcedByBackend() bool {
 	switch suiteCfg.oscType {
 	case string(objectv1alpha1.ClusterTypeSystem),
 		string(objectv1alpha1.ClusterTypeLightweight),
 		string(objectv1alpha1.ClusterTypeHeavy):
 		return true
-	default: // Full → SeaweedFS
+	default: // Full → SeaweedFS enforces size only, not the maxObjects in the test quota
 		return false
 	}
 }

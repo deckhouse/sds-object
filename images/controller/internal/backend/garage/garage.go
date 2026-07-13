@@ -46,7 +46,7 @@ import (
 
 // garageVersion is the Garage release this driver targets. Keep it in sync with
 // the upstream tag pinned in images/garage/werf.inc.yaml.
-const garageVersion = "v1.0.1"
+const garageVersion = "v2.3.0"
 
 // Keys in the per-cluster Garage secret.
 const (
