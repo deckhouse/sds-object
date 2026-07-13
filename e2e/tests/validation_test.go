@@ -192,6 +192,22 @@ func validationSpecs() {
 			}()
 			expectDenied(err, "pattern")
 		})
+
+		It("denies a BucketClaim setting both objectStoreRef and existingBucketName (CEL)", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+
+			// greenfield (objectStoreRef) and brownfield (existingBucketName) are
+			// mutually exclusive; setting both must be rejected, not silently
+			// treated as brownfield.
+			claim := buildGreenfieldClaim("e2e-both-fields", suiteCfg.namespace, suiteCfg.oscName, objectv1alpha1.BucketReclaimDelete)
+			claim.Object["spec"].(map[string]interface{})["existingBucketName"] = suiteCfg.bucketName
+			err := createBucketClaim(ctx, claim)
+			defer func() {
+				_ = suiteDyn.Resource(bucketClaimGVR).Namespace(suiteCfg.namespace).Delete(context.Background(), "e2e-both-fields", metav1.DeleteOptions{})
+			}()
+			expectDenied(err, "mutually exclusive")
+		})
 	})
 }
 

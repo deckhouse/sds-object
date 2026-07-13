@@ -45,6 +45,8 @@ spec:
               x-kubernetes-validations:
                 - rule: "(has(self.existingBucketName) && self.existingBucketName != '') || (has(self.objectStoreRef) && self.objectStoreRef != '')"
                   message: "one of spec.objectStoreRef (greenfield) or spec.existingBucketName (brownfield) must be set."
+                - rule: "!((has(self.existingBucketName) && self.existingBucketName != '') && (has(self.objectStoreRef) && self.objectStoreRef != ''))"
+                  message: "spec.objectStoreRef (greenfield) and spec.existingBucketName (brownfield) are mutually exclusive; set exactly one."
                 - rule: "oldSelf == null || (has(self.objectStoreRef) == has(oldSelf.objectStoreRef) && (!has(self.objectStoreRef) || self.objectStoreRef == oldSelf.objectStoreRef))"
                   message: "spec.objectStoreRef is immutable after creation."
                 - rule: "oldSelf == null || (has(self.existingBucketName) == has(oldSelf.existingBucketName) && (!has(self.existingBucketName) || self.existingBucketName == oldSelf.existingBucketName))"
