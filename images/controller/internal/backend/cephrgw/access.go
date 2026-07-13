@@ -137,7 +137,12 @@ func (d *Driver) updateBucketPolicy(ctx context.Context, owner *minio.Client, bu
 	if err != nil {
 		return err
 	}
-	doc := parsePolicy(raw)
+	doc, err := parsePolicy(raw)
+	if err != nil {
+		// Fail closed: never overwrite a policy we could not parse — doing so
+		// would erase statements (grants) written by other users.
+		return fmt.Errorf("bucket %q: refusing to modify an unparseable policy: %w", bucketName, err)
+	}
 	changed := false
 	if actions == nil {
 		changed = doc.remove(uid)

@@ -17,14 +17,17 @@ limitations under the License.
 package cephrgw
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
 )
 
-// bucketPolicy is a minimal AWS/RGW S3 bucket policy document. Each access user
-// gets one statement, keyed by a deterministic Sid derived from its uid, so
-// statements can be upserted and removed independently.
+// bucketPolicy is an AWS/RGW S3 bucket policy document. Each access user gets
+// one statement, keyed by a deterministic Sid derived from its uid, so
+// statements can be upserted and removed independently — without disturbing
+// statements written by anyone else.
 type bucketPolicy struct {
 	Version   string            `json:"Version"`
 	Statement []policyStatement `json:"Statement"`
@@ -34,28 +37,83 @@ type policyStatement struct {
 	Sid       string          `json:"Sid"`
 	Effect    string          `json:"Effect"`
 	Principal policyPrincipal `json:"Principal"`
-	Action    []string        `json:"Action"`
-	Resource  []string        `json:"Resource"`
+	Action    stringOrSlice   `json:"Action"`
+	Resource  stringOrSlice   `json:"Resource"`
 }
 
-type policyPrincipal struct {
-	AWS []string `json:"AWS"`
-}
+// stringOrSlice decodes a JSON value that may be either a single string or an
+// array of strings — both are valid for Action/Resource/Principal.AWS in AWS
+// and RGW policy documents. Without this, a valid external statement using the
+// scalar form would fail to parse.
+type stringOrSlice []string
 
-// parsePolicy decodes an existing policy document; an empty or invalid document
-// yields a fresh policy.
-func parsePolicy(raw string) *bucketPolicy {
-	p := &bucketPolicy{Version: "2012-10-17"}
-	if strings.TrimSpace(raw) == "" {
-		return p
+func (s *stringOrSlice) UnmarshalJSON(data []byte) error {
+	var one string
+	if err := json.Unmarshal(data, &one); err == nil {
+		*s = []string{one}
+		return nil
 	}
+	var many []string
+	if err := json.Unmarshal(data, &many); err != nil {
+		return err
+	}
+	*s = many
+	return nil
+}
+
+// policyPrincipal accepts either the bare wildcard string "*" or an object
+// {"AWS": <string|[]string>} (both valid in RGW/AWS policies), and re-marshals
+// in the same shape it was read.
+type policyPrincipal struct {
+	AWS      stringOrSlice
+	Wildcard bool
+}
+
+func (p *policyPrincipal) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		p.Wildcard = s == "*"
+		if !p.Wildcard && s != "" {
+			p.AWS = stringOrSlice{s}
+		}
+		return nil
+	}
+	var obj struct {
+		AWS stringOrSlice `json:"AWS"`
+	}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return err
+	}
+	p.AWS = obj.AWS
+	return nil
+}
+
+func (p policyPrincipal) MarshalJSON() ([]byte, error) {
+	if p.Wildcard {
+		return []byte(`"*"`), nil
+	}
+	return json.Marshal(struct {
+		AWS stringOrSlice `json:"AWS"`
+	}{AWS: p.AWS})
+}
+
+// parsePolicy decodes an existing policy document. An empty document yields a
+// fresh policy. A non-empty document that fails to parse returns an error so the
+// caller can fail closed: it must never overwrite (and thereby erase) a policy
+// it could not fully understand — statements written by other users must be
+// preserved.
+func parsePolicy(raw string) (*bucketPolicy, error) {
+	if strings.TrimSpace(raw) == "" {
+		return &bucketPolicy{Version: "2012-10-17"}, nil
+	}
+	p := &bucketPolicy{}
 	if err := json.Unmarshal([]byte(raw), p); err != nil {
-		return &bucketPolicy{Version: "2012-10-17"}
+		return nil, fmt.Errorf("parse bucket policy: %w", err)
 	}
 	if p.Version == "" {
 		p.Version = "2012-10-17"
 	}
-	return p
+	return p, nil
 }
 
 // upsert inserts or replaces the statement for the given uid. Returns true when
@@ -64,9 +122,9 @@ func (p *bucketPolicy) upsert(uid, bucket string, actions []string) bool {
 	stmt := policyStatement{
 		Sid:       sid(uid),
 		Effect:    "Allow",
-		Principal: policyPrincipal{AWS: []string{principalARN(uid)}},
-		Action:    actions,
-		Resource: []string{
+		Principal: policyPrincipal{AWS: stringOrSlice{principalARN(uid)}},
+		Action:    stringOrSlice(actions),
+		Resource: stringOrSlice{
 			fmt.Sprintf("arn:aws:s3:::%s", bucket),
 			fmt.Sprintf("arn:aws:s3:::%s/*", bucket),
 		},
@@ -114,14 +172,12 @@ func (p *bucketPolicy) marshal() string {
 }
 
 func statementEqual(a, b policyStatement) bool {
-	if a.Sid != b.Sid || a.Effect != b.Effect || !slicesEqual(a.Action, b.Action) ||
-		!slicesEqual(a.Resource, b.Resource) || !slicesEqual(a.Principal.AWS, b.Principal.AWS) {
-		return false
-	}
-	return true
+	return a.Sid == b.Sid && a.Effect == b.Effect &&
+		slicesEqual(a.Action, b.Action) && slicesEqual(a.Resource, b.Resource) &&
+		slicesEqual(a.Principal.AWS, b.Principal.AWS) && a.Principal.Wildcard == b.Principal.Wildcard
 }
 
-func slicesEqual(a, b []string) bool {
+func slicesEqual(a, b stringOrSlice) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -133,16 +189,14 @@ func slicesEqual(a, b []string) bool {
 	return true
 }
 
-// sid is a stable, alphanumeric statement id derived from the uid (S3 policy
-// Sids must be alphanumeric).
+// sid is a stable, alphanumeric, collision-free statement id derived from the
+// uid. It hashes the uid rather than stripping non-alphanumeric characters:
+// stripping would collapse distinct uids (e.g. "ns.name" and "nsname") to the
+// same Sid, causing one tenant's statement to overwrite another's. S3 policy
+// Sids must be alphanumeric, and a hex digest is.
 func sid(uid string) string {
-	var b strings.Builder
-	for _, r := range uid {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-		}
-	}
-	return "osba" + b.String()
+	sum := sha256.Sum256([]byte(uid))
+	return "osba" + hex.EncodeToString(sum[:16])
 }
 
 // principalARN is the RGW/AWS principal ARN for a user id.
