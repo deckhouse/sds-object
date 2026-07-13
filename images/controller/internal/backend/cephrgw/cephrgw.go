@@ -31,6 +31,7 @@ package cephrgw
 import (
 	"context"
 	"fmt"
+	"reflect"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -168,8 +169,24 @@ func (d *Driver) ensureObjectStore(ctx context.Context, cluster *v1alpha1.Object
 		return err
 	}
 
+	// Update only when something we manage actually changed. An unconditional
+	// Update every reconcile re-stamps the spec, bumps the object's generation
+	// and makes Rook re-sync — an endless churn loop.
+	if !unstructuredManagedFieldsChanged(existing, desired) {
+		return nil
+	}
 	existing.Object["spec"] = desired.Object["spec"]
 	existing.SetLabels(desired.GetLabels())
 	existing.SetOwnerReferences(desired.GetOwnerReferences())
 	return d.client.Update(ctx, existing)
+}
+
+// unstructuredManagedFieldsChanged reports whether the fields this controller
+// manages (spec, labels, ownerReferences) differ between the live object and the
+// desired one — used to make ensure* idempotent (skip no-op Updates that would
+// otherwise churn Rook).
+func unstructuredManagedFieldsChanged(existing, desired *unstructured.Unstructured) bool {
+	return !reflect.DeepEqual(existing.Object["spec"], desired.Object["spec"]) ||
+		!reflect.DeepEqual(existing.GetLabels(), desired.GetLabels()) ||
+		!reflect.DeepEqual(existing.GetOwnerReferences(), desired.GetOwnerReferences())
 }

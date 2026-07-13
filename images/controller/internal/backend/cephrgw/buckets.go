@@ -132,6 +132,10 @@ func (d *Driver) ensureUser(ctx context.Context, cluster *v1alpha1.ObjectStore, 
 		}
 		return err
 	}
+	// Skip a no-op Update: re-stamping an unchanged user churns Rook.
+	if !unstructuredManagedFieldsChanged(existing, desired) {
+		return nil
+	}
 	existing.Object["spec"] = desired.Object["spec"]
 	existing.SetLabels(desired.GetLabels())
 	existing.SetOwnerReferences(desired.GetOwnerReferences())
