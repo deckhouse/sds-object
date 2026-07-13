@@ -89,25 +89,31 @@ func cephRGWUnsupported(bucket *v1alpha1.Bucket) []string {
 	return out
 }
 
-// DeleteBucket removes the bucket (when reclaimPolicy=Delete) and the owner
-// CephObjectStoreUser. Idempotent.
+// DeleteBucket removes the bucket and its owner CephObjectStoreUser only when
+// reclaimPolicy=Delete. Under Retain both the bucket and its owner user are
+// kept: the owner user owns the bucket, so removing it would orphan the
+// retained bucket (leave it inaccessible). Idempotent.
 func (d *Driver) DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStore, bucket *v1alpha1.Bucket) error {
-	if bucket.Spec.ReclaimPolicy == v1alpha1.BucketReclaimDelete {
-		accessKey, secretKey, err := d.userKeys(ctx, cluster, ownerUID(bucket))
+	if bucket.Spec.ReclaimPolicy != v1alpha1.BucketReclaimDelete {
+		// Retain: preserve the bucket and its owner user.
+		return nil
+	}
+
+	accessKey, secretKey, err := d.userKeys(ctx, cluster, ownerUID(bucket))
+	if err != nil {
+		return err
+	}
+	if accessKey != "" && secretKey != "" {
+		mc, err := s3util.NewClient(rgwHostPort(cluster, d.clusterDomain), accessKey, secretKey)
 		if err != nil {
-			return err
+			return fmt.Errorf("build S3 client: %w", err)
 		}
-		if accessKey != "" && secretKey != "" {
-			mc, err := s3util.NewClient(rgwHostPort(cluster, d.clusterDomain), accessKey, secretKey)
-			if err != nil {
-				return fmt.Errorf("build S3 client: %w", err)
-			}
-			if err := s3util.DeleteBucket(ctx, mc, backend.BucketDisplayName(bucket)); err != nil {
-				return err
-			}
+		if err := s3util.DeleteBucket(ctx, mc, backend.BucketDisplayName(bucket)); err != nil {
+			return err
 		}
 	}
 
+	// Delete: the bucket is gone, so remove its owner user too.
 	return d.deleteUser(ctx, ownerUID(bucket))
 }
 
