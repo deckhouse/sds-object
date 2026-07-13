@@ -59,11 +59,15 @@ import (
 //	    namespace. A change to the storage.deckhouse.io/rotate annotation triggers
 //	    a fresh key pair.
 type BucketAccessReconciler struct {
-	Client   client.Client
-	Scheme   *runtime.Scheme
-	Log      *logger.Logger
-	Cfg      *config.Options
-	Registry *backend.Registry
+	Client client.Client
+	// APIReader is an uncached reader used for the independent deny-by-default
+	// authorization re-check (a security boundary), so the decision is not
+	// subject to informer-cache lag.
+	APIReader client.Reader
+	Scheme    *runtime.Scheme
+	Log       *logger.Logger
+	Cfg       *config.Options
+	Registry  *backend.Registry
 }
 
 var bucketAccessStageOrder = []string{
@@ -89,11 +93,12 @@ type accessObserved struct {
 // re-reconciles every access that references it in the same namespace.
 func AddBucketAccessReconcilerToManager(mgr manager.Manager, cfg *config.Options, log *logger.Logger, reg *backend.Registry) error {
 	r := &BucketAccessReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Log:      log,
-		Cfg:      cfg,
-		Registry: reg,
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+		Scheme:    mgr.GetScheme(),
+		Log:       log,
+		Cfg:       cfg,
+		Registry:  reg,
 	}
 
 	// Reconcile on spec changes and on rotation-annotation changes.
@@ -107,8 +112,57 @@ func AddBucketAccessReconcilerToManager(mgr manager.Manager, cfg *config.Options
 		For(&v1alpha1.BucketAccess{}, builder.WithPredicates(accessPredicate)).
 		Watches(&v1alpha1.BucketClaim{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueByClaim)).
+		// Defense-in-depth: react directly to a BucketClaimPolicy change instead of
+		// relying solely on the BucketClaim controller flipping Bound first, so a
+		// revocation reaches the access even if that hop lags.
+		Watches(&v1alpha1.BucketClaimPolicy{},
+			handler.EnqueueRequestsFromMapFunc(r.enqueueByPolicy)).
 		WithOptions(controller.Options{MaxConcurrentReconciles: cfg.MaxConcurrentReconciles}).
 		Complete(r)
+}
+
+// enqueueByPolicy maps a BucketClaimPolicy event to every BucketAccess whose
+// bound bucket is the policy's target: it finds the (brownfield) claims for the
+// policy's bucket, then the accesses referencing those claims. Uses the cached
+// client (enqueue is best-effort; the authoritative re-check reads APIReader).
+func (r *BucketAccessReconciler) enqueueByPolicy(ctx context.Context, o client.Object) []reconcile.Request {
+	policy, ok := o.(*v1alpha1.BucketClaimPolicy)
+	if !ok {
+		return nil
+	}
+	claims := &v1alpha1.BucketClaimList{}
+	if err := r.Client.List(ctx, claims); err != nil {
+		r.Log.Error(err, "[enqueueByPolicy] list claims failed")
+		return nil
+	}
+	type claimKey struct{ ns, name string }
+	matched := map[claimKey]bool{}
+	for i := range claims.Items {
+		c := &claims.Items[i]
+		bound := ""
+		if c.Status != nil {
+			bound = c.Status.BoundBucketName
+		}
+		if c.Spec.ExistingBucketName == policy.Spec.BucketRef || bound == policy.Spec.BucketRef {
+			matched[claimKey{c.Namespace, c.Name}] = true
+		}
+	}
+	if len(matched) == 0 {
+		return nil
+	}
+	accesses := &v1alpha1.BucketAccessList{}
+	if err := r.Client.List(ctx, accesses); err != nil {
+		r.Log.Error(err, "[enqueueByPolicy] list accesses failed")
+		return nil
+	}
+	out := make([]reconcile.Request, 0)
+	for i := range accesses.Items {
+		a := &accesses.Items[i]
+		if matched[claimKey{a.Namespace, a.Spec.BucketClaimName}] {
+			out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: a.Namespace, Name: a.Name}})
+		}
+	}
+	return out
 }
 
 // enqueueByClaim maps a BucketClaim event to every access in the claim's
@@ -214,9 +268,27 @@ func (r *BucketAccessReconciler) reconcileNormal(ctx context.Context, access *v1
 		bucket, cluster = r.resolveBound(ctx, boundName)
 	}
 
-	// Gate on the claim being Bound to a Ready bucket.
-	if !claimBound(claim) || bucket == nil || cluster == nil || bucketReadyState(bucket) != string(metav1.ConditionTrue) {
-		// The claim is not usable: enforce revocation of any prior grant.
+	// Independently re-check authorization (defense-in-depth): do not rely solely
+	// on the claim's Bound condition, which is written by another reconciler and
+	// may be stale. For a Shared bucket the access's namespace must be granted by
+	// a BucketClaimPolicy (deny-by-default, read via the uncached APIReader); a
+	// greenfield bucket is private to its owning claim's namespace.
+	authorized, authzReason := true, ""
+	if bucket != nil {
+		ok, reason, aerr := r.accessAuthorized(ctx, bucket, access.Namespace)
+		if aerr != nil {
+			status.setCondition(v1alpha1.BucketAccessConditionAccessGranted, metav1.ConditionFalse, reasonError, aerr.Error())
+			gateAfter(status, bucketAccessStageOrder, v1alpha1.BucketAccessConditionAccessGranted)
+			return r.finish(ctx, access, status, observed, aerr)
+		}
+		authorized, authzReason = ok, reason
+	}
+
+	// Gate on the claim being Bound to a Ready bucket AND on the independent
+	// authorization check.
+	if !claimBound(claim) || bucket == nil || cluster == nil || bucketReadyState(bucket) != string(metav1.ConditionTrue) || !authorized {
+		// The claim is not usable (or access is no longer authorized): enforce
+		// revocation of any prior grant.
 		if access.Status != nil && access.Status.AccessKeyID != "" {
 			if bucket != nil && cluster != nil {
 				if driver, derr := r.Registry.For(cluster); derr == nil {
@@ -233,8 +305,12 @@ func (r *BucketAccessReconciler) reconcileNormal(ctx context.Context, access *v1
 			}
 			observed.revoked = true
 		}
-		status.setCondition(v1alpha1.BucketAccessConditionAccessGranted, metav1.ConditionFalse, "WaitingForClaim",
-			fmt.Sprintf("BucketClaim %q is not Bound to a Ready bucket", access.Spec.BucketClaimName))
+		reason, message := "WaitingForClaim", fmt.Sprintf("BucketClaim %q is not Bound to a Ready bucket", access.Spec.BucketClaimName)
+		if !authorized && bucket != nil && cluster != nil && bucketReadyState(bucket) == string(metav1.ConditionTrue) && claimBound(claim) {
+			// The only failing gate is authorization: report it explicitly.
+			reason, message = "DeniedByPolicy", authzReason
+		}
+		status.setCondition(v1alpha1.BucketAccessConditionAccessGranted, metav1.ConditionFalse, reason, message)
 		gateAfter(status, bucketAccessStageOrder, v1alpha1.BucketAccessConditionAccessGranted)
 		return r.finish(ctx, access, status, observed, nil)
 	}
@@ -422,6 +498,24 @@ func (r *BucketAccessReconciler) ensureCredentialsSecret(
 	return secret.Name, nil
 }
 
+// accessAuthorized independently re-checks whether the access's namespace may
+// use the bound bucket, so enforcement does not rely solely on the claim's
+// Bound condition (defense-in-depth). A greenfield bucket (origin=BucketClaim)
+// is private to its owning claim's namespace; any other bucket is treated as
+// Shared and gated by BucketClaimPolicy (deny-by-default), read through the
+// uncached APIReader so a just-revoked policy is not masked by cache lag. The
+// returned string explains a denial for the access status.
+func (r *BucketAccessReconciler) accessAuthorized(ctx context.Context, bucket *v1alpha1.Bucket, namespace string) (bool, string, error) {
+	if bucket.Labels[v1alpha1.LabelBucketOrigin] == v1alpha1.BucketOriginBucketClaim {
+		owner := bucket.Labels[v1alpha1.LabelOwnedByClaimNamespace]
+		if owner != namespace {
+			return false, fmt.Sprintf("bucket %q is private to namespace %q", bucket.Name, owner), nil
+		}
+		return true, "", nil
+	}
+	return namespaceAllowedForBucket(ctx, r.APIReader, bucket.Name, namespace)
+}
+
 // claimBound reports whether the claim's Bound condition is True.
 func claimBound(c *v1alpha1.BucketClaim) bool {
 	if c == nil || c.Status == nil {
@@ -460,7 +554,11 @@ func (r *BucketAccessReconciler) finish(
 		return ctrl.Result{}, reconcileErr
 	}
 	if aggregateReady(status) {
-		return ctrl.Result{}, nil
+		// Re-drive even when Ready so a granted access periodically re-checks its
+		// authorization (deny-by-default). A missed policy/claim watch event thus
+		// self-heals within minutes instead of persisting as a dangling grant
+		// until the ~10h informer resync.
+		return ctrl.Result{RequeueAfter: r.Cfg.SecurityResyncInterval}, nil
 	}
 	return ctrl.Result{RequeueAfter: r.Cfg.RequeueInterval}, nil
 }

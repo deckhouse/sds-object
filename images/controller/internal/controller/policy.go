@@ -31,7 +31,12 @@ import (
 // when at least one BucketClaimPolicy for the bucket matches the
 // namespace (by exact name or by a regexp pattern). The returned string
 // explains the decision for surfacing in the access status.
-func namespaceAllowedForBucket(ctx context.Context, c client.Client, bucketName, namespace string) (bool, string, error) {
+//
+// It takes a client.Reader so callers can pass an uncached APIReader: this is a
+// security-boundary decision, and reading policies through the informer cache
+// risks a TOCTOU where a just-deleted/edited policy still grants access. Pass
+// mgr.GetAPIReader() to read the authoritative state.
+func namespaceAllowedForBucket(ctx context.Context, c client.Reader, bucketName, namespace string) (bool, string, error) {
 	list := &v1alpha1.BucketClaimPolicyList{}
 	if err := c.List(ctx, list); err != nil {
 		return false, "", fmt.Errorf("list BucketPolicies: %w", err)

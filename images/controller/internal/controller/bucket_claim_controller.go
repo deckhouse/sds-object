@@ -63,9 +63,12 @@ import (
 // it anymore.
 type BucketClaimReconciler struct {
 	Client client.Client
-	Scheme *runtime.Scheme
-	Log    *logger.Logger
-	Cfg    *config.Options
+	// APIReader is an uncached reader used only for the deny-by-default policy
+	// decision (a security boundary), so it is not subject to informer-cache lag.
+	APIReader client.Reader
+	Scheme    *runtime.Scheme
+	Log       *logger.Logger
+	Cfg       *config.Options
 }
 
 var bucketClaimStageOrder = []string{
@@ -84,10 +87,11 @@ type claimObserved struct {
 // BucketClaimPolicy (a policy change re-evaluates brownfield claims for its bucket).
 func AddBucketClaimReconcilerToManager(mgr manager.Manager, cfg *config.Options, log *logger.Logger) error {
 	r := &BucketClaimReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Log:    log,
-		Cfg:    cfg,
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+		Scheme:    mgr.GetScheme(),
+		Log:       log,
+		Cfg:       cfg,
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
@@ -282,7 +286,7 @@ func (r *BucketClaimReconciler) ensureBrownfield(
 		return "", true, nil
 	}
 
-	allowed, reason, err := namespaceAllowedForBucket(ctx, r.Client, name, claim.Namespace)
+	allowed, reason, err := namespaceAllowedForBucket(ctx, r.APIReader, name, claim.Namespace)
 	if err != nil {
 		return "", false, err
 	}
@@ -401,7 +405,11 @@ func (r *BucketClaimReconciler) finish(
 		return ctrl.Result{}, reconcileErr
 	}
 	if aggregateReady(status) {
-		return ctrl.Result{}, nil
+		// Re-drive even when Ready: a policy change reaches this claim via a watch,
+		// but a missed event must not leave a stale Bound decision indefinitely.
+		// The periodic re-check re-evaluates the policy (deny-by-default) and flips
+		// Bound if access was revoked, so a dangling grant self-heals within minutes.
+		return ctrl.Result{RequeueAfter: r.Cfg.SecurityResyncInterval}, nil
 	}
 	return ctrl.Result{RequeueAfter: r.Cfg.RequeueInterval}, nil
 }

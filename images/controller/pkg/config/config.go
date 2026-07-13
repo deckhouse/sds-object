@@ -31,6 +31,7 @@ const (
 	HealthProbeBindAddressEnv  = "HEALTH_PROBE_BIND_ADDRESS"
 	MaxConcurrentReconcilesEnv = "MAX_CONCURRENT_RECONCILES"
 	RequeueIntervalEnv         = "REQUEUE_INTERVAL_SECONDS"
+	SecurityResyncIntervalEnv  = "SECURITY_RESYNC_INTERVAL_SECONDS"
 	GarageImageEnv             = "GARAGE_IMAGE"
 	SeaweedFSImageEnv          = "SEAWEEDFS_IMAGE"
 	ClusterDomainEnv           = "CLUSTER_DOMAIN"
@@ -41,6 +42,11 @@ const (
 	DefaultRequeueIntervalSeconds  = 30
 	DefaultMaxConcurrentReconciles = 1
 	DefaultClusterDomain           = "cluster.local"
+	// DefaultSecurityResyncIntervalSeconds bounds how long an already-Ready
+	// BucketClaim/BucketAccess can carry a stale authorization (e.g. a dangling
+	// grant after a missed watch event) before the reconciler re-drives it and
+	// re-checks the policy. Cheap safety net under the watch chain (300s = 5m).
+	DefaultSecurityResyncIntervalSeconds = 300
 )
 
 type Options struct {
@@ -49,6 +55,11 @@ type Options struct {
 	ControllerNamespace     string
 	MaxConcurrentReconciles int
 	RequeueInterval         time.Duration
+	// SecurityResyncInterval is the requeue cadence for already-Ready
+	// BucketClaim/BucketAccess objects, so a missed watch event on the
+	// deny-by-default revocation chain self-heals within minutes instead of
+	// waiting for the ~10h informer resync.
+	SecurityResyncInterval time.Duration
 	// GarageImage is the module registry reference for the Garage server
 	// image, injected via the GARAGE_IMAGE env var from Helm.
 	GarageImage string
@@ -97,6 +108,13 @@ func NewConfig() *Options {
 	if v := os.Getenv(RequeueIntervalEnv); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			opts.RequeueInterval = time.Duration(n) * time.Second
+		}
+	}
+
+	opts.SecurityResyncInterval = time.Duration(DefaultSecurityResyncIntervalSeconds) * time.Second
+	if v := os.Getenv(SecurityResyncIntervalEnv); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			opts.SecurityResyncInterval = time.Duration(n) * time.Second
 		}
 	}
 
