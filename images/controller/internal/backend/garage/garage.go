@@ -124,6 +124,13 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 		if err := d.ensureSystemLocalPVs(ctx, cluster); err != nil {
 			return state, fmt.Errorf("ensure system local PVs: %w", err)
 		}
+		// Persist each replica's Garage node identity before any placement move, so
+		// a recycled replica (fresh empty PV on another master) rejoins with its
+		// stable node ID instead of generating a new one (which strands the old ID
+		// as a dead node and churns the layout beyond recovery on consolidate).
+		if err := d.ensureNodeIdentities(ctx, cluster); err != nil {
+			return state, fmt.Errorf("ensure node identities: %w", err)
+		}
 		// Converge replica placement onto the target topology as the master count
 		// changes (spread across 3 masters, consolidate onto 1). One health-gated
 		// PVC recycle per reconcile; when it acts, report progress and requeue so

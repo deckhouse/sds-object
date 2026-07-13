@@ -226,6 +226,62 @@ func TestBuildSystemStatefulSet(t *testing.T) {
 	if len(pref) != 1 || pref[0].PodAffinityTerm.TopologyKey != hostnameTopologyKey {
 		t.Errorf("preferred anti-affinity term=%+v, want topologyKey %q", pref, hostnameTopologyKey)
 	}
+
+	// Stable node identity: an optional identity-Secret volume plus a
+	// restore-node-key initContainer that mounts both the data volume and the
+	// identity Secret (so it can restore node_key before Garage starts).
+	var idVol *corev1.Volume
+	for i := range spec.Volumes {
+		if spec.Volumes[i].Name == "node-identity" {
+			idVol = &spec.Volumes[i]
+		}
+	}
+	if idVol == nil {
+		t.Fatalf("expected a node-identity volume")
+	}
+	if idVol.Secret == nil || idVol.Secret.SecretName != nodeIdentitySecretName(systemCluster("system")) {
+		t.Errorf("node-identity volume=%+v, want secret %q", idVol.VolumeSource, nodeIdentitySecretName(systemCluster("system")))
+	}
+	if idVol.Secret.Optional == nil || !*idVol.Secret.Optional {
+		t.Errorf("node-identity secret must be optional (first boot has no identity yet)")
+	}
+	if len(spec.InitContainers) != 1 || spec.InitContainers[0].Name != "restore-node-key" {
+		t.Fatalf("expected one restore-node-key initContainer, got %+v", spec.InitContainers)
+	}
+	init := spec.InitContainers[0]
+	if init.Image != "garage:v1" {
+		t.Errorf("initContainer image=%q, want garage:v1", init.Image)
+	}
+	mounts := map[string]string{}
+	for _, m := range init.VolumeMounts {
+		mounts[m.Name] = m.MountPath
+	}
+	if mounts["data"] != dataMountPath {
+		t.Errorf("initContainer must mount data at %q, got %q", dataMountPath, mounts["data"])
+	}
+	if mounts["node-identity"] != nodeIdentityMountPath {
+		t.Errorf("initContainer must mount node-identity at %q, got %q", nodeIdentityMountPath, mounts["node-identity"])
+	}
+}
+
+func TestPodOrdinal(t *testing.T) {
+	cases := []struct {
+		name string
+		want int32
+		ok   bool
+	}{
+		{"system-garage-0", 0, true},
+		{"system-garage-12", 12, true},
+		{"system-garage", 0, false},
+		{"system-garage-", 0, false},
+		{"system-garage-x", 0, false},
+	}
+	for _, c := range cases {
+		got, ok := podOrdinal(c.name)
+		if ok != c.ok || got != c.want {
+			t.Errorf("podOrdinal(%q)=(%d,%v), want (%d,%v)", c.name, got, ok, c.want, c.ok)
+		}
+	}
 }
 
 func TestBuildSystemLocalPV(t *testing.T) {

@@ -20,7 +20,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
@@ -31,50 +30,39 @@ import (
 	v1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 )
 
-// skipDeadNodes forces Garage to stop waiting for removed-but-dead nodes to
-// drain their data, so a layout change that dropped such a node can finalize and
-// the cluster returns to healthy. Removing a node normally triggers a graceful
-// drain, but a dead node (a replica whose master was removed or which was
-// recycled) can never confirm it, leaving the cluster "degraded" indefinitely.
-// The Garage v1 admin API exposes no equivalent, so this runs the
-// `garage layout skip-dead-nodes` CLI inside a Running Garage pod. version is the
-// layout version to assume current (the one just applied). Best-effort: the
-// caller logs failures without failing the reconcile.
-func (d *Driver) skipDeadNodes(ctx context.Context, cluster *v1alpha1.ObjectStore, version int) error {
-	if d.restConfig == nil {
-		return fmt.Errorf("no rest config configured for exec")
-	}
-	pod, err := d.runningGaragePod(ctx, cluster)
-	if err != nil {
-		return err
-	}
-	cmd := []string{"/garage", "layout", "skip-dead-nodes", "--version", strconv.Itoa(version), "--allow-missing-data"}
-	return d.execInPod(ctx, pod, "garage", cmd)
-}
-
-// runningGaragePod returns the name of one Running Garage pod for the cluster.
-func (d *Driver) runningGaragePod(ctx context.Context, cluster *v1alpha1.ObjectStore) (string, error) {
+// runningGaragePods returns the names of the Running Garage pods for the cluster,
+// keyed by their StatefulSet ordinal (parsed from the pod name suffix). Used to
+// capture each replica's node identity for persistence.
+func (d *Driver) runningGaragePods(ctx context.Context, cluster *v1alpha1.ObjectStore) (map[int32]string, error) {
 	pods := &corev1.PodList{}
 	if err := d.apiReader.List(ctx, pods,
 		client.InNamespace(d.namespace),
 		client.MatchingLabels(commonLabels(cluster)),
 	); err != nil {
-		return "", err
+		return nil, err
 	}
+	out := map[int32]string{}
 	for i := range pods.Items {
-		if pods.Items[i].Status.Phase == corev1.PodRunning {
-			return pods.Items[i].Name, nil
+		p := &pods.Items[i]
+		if p.Status.Phase != corev1.PodRunning {
+			continue
+		}
+		if ord, ok := podOrdinal(p.Name); ok {
+			out[ord] = p.Name
 		}
 	}
-	return "", fmt.Errorf("no Running Garage pod to exec into")
+	return out, nil
 }
 
-// execInPod runs cmd in a container of a pod, returning an error that carries
-// stderr on failure.
-func (d *Driver) execInPod(ctx context.Context, pod, container string, cmd []string) error {
+// execInPod runs cmd in a container of a pod, returning its stdout bytes. On
+// failure the error carries stderr.
+func (d *Driver) execInPod(ctx context.Context, pod, container string, cmd []string) ([]byte, error) {
+	if d.restConfig == nil {
+		return nil, fmt.Errorf("no rest config configured for exec")
+	}
 	cs, err := kubernetes.NewForConfig(d.restConfig)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req := cs.CoreV1().RESTClient().Post().
 		Resource("pods").Name(pod).Namespace(d.namespace).SubResource("exec").
@@ -86,11 +74,11 @@ func (d *Driver) execInPod(ctx context.Context, pod, container string, cmd []str
 		}, scheme.ParameterCodec)
 	executor, err := remotecommand.NewSPDYExecutor(d.restConfig, "POST", req.URL())
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var stdout, stderr bytes.Buffer
 	if err := executor.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &stdout, Stderr: &stderr}); err != nil {
-		return fmt.Errorf("exec %v in %s: %w (stderr: %s)", cmd, pod, err, stderr.String())
+		return nil, fmt.Errorf("exec %v in %s: %w (stderr: %s)", cmd, pod, err, stderr.String())
 	}
-	return nil
+	return stdout.Bytes(), nil
 }

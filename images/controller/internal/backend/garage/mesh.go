@@ -107,21 +107,6 @@ func (d *Driver) ensureMeshAndLayout(ctx context.Context, cluster *v1alpha1.Obje
 	if err != nil {
 		return meshResult{msg: fmt.Sprintf("reading health: %v", err)}, nil
 	}
-	// A removed replica whose master is gone stays a dead node Garage keeps
-	// waiting to drain, pinning the cluster at "degraded" (fewer storage nodes ok
-	// than known) forever — which blocks ObjectStore readiness and the next
-	// placement move. The v1 admin API has no skip-dead-nodes, so force progress
-	// via the CLI, then re-read health. Runs every reconcile while stuck, so a
-	// transient exec failure just retries.
-	if health.Status != "healthy" && health.StorageNodes > health.StorageNodesOk {
-		if lv, lerr := svc.layout(ctx); lerr == nil {
-			if serr := d.skipDeadNodes(ctx, cluster, lv.Version); serr != nil {
-				d.log.Error(serr, "skip dead nodes")
-			} else if h2, herr := svc.health(ctx); herr == nil {
-				health = h2
-			}
-		}
-	}
 	total := layoutTotalCapacity(layout)
 	if health.Status != "healthy" {
 		return meshResult{msg: fmt.Sprintf("Garage cluster health is %q (%d/%d storage nodes ok)", health.Status, health.StorageNodesOk, health.StorageNodes), total: total}, nil
@@ -171,15 +156,16 @@ func (d *Driver) discoverPeers(ctx context.Context, cluster *v1alpha1.ObjectStor
 // onto the currently-live Garage peers:
 //
 //   - every live peer not yet in the layout is assigned a role (single zone,
-//     per-node capacity), so a rejoining or freshly-scheduled pod starts holding
-//     data and Garage re-replicates onto it;
+//     per-node capacity), so a freshly-scheduled pod starts holding data and
+//     Garage re-replicates onto it;
 //   - a role whose node is no longer live is removed — but only once the full
-//     replica complement (expected) is live. A System pod that moves to another
-//     master comes back under a NEW node identity over an empty hostPath; the
-//     stale role must be dropped so Garage stops expecting the vanished node and
-//     the layout returns to healthy. Gating removal on a full complement avoids
-//     churning the layout (and triggering rebalances) during a transient
-//     reschedule when a pod is briefly absent.
+//     replica complement (expected) is live. With stable node identity a System
+//     pod recycled onto another master rejoins with its ORIGINAL node ID (the
+//     restore-node-key initContainer restores node_key), so the common case adds
+//     and removes nothing and Garage re-syncs the empty PV via anti-entropy. This
+//     removal path is the defensive fallback for a node ID that genuinely never
+//     returns (e.g. an identity lost before it was captured); gating it on a full
+//     complement avoids churning the layout during a transient reschedule.
 //
 // capacity is the per-node storage capacity in bytes.
 func layoutRoleChanges(layout *clusterLayout, peers []nodePeer, expected int32, capacity int64) []roleChange {

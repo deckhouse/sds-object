@@ -66,6 +66,11 @@ const (
 	// System profile's node-sticky local PVs belong to.
 	systemLocalStorageClass = "sds-object-system-local"
 
+	// nodeIdentityMountPath is where the per-ordinal Garage node identity Secret
+	// is mounted into the System pods; the restore-node-key initContainer copies
+	// the matching key into the metadata dir before Garage starts.
+	nodeIdentityMountPath = "/etc/garage-node-identity"
+
 	// annConfigHash carries a short hash of garage.toml on the pod template so
 	// the workload rolls (and every node converges to the same config) when the
 	// config changes.
@@ -405,6 +410,37 @@ func podSpec(cluster *v1alpha1.ObjectStore, image string) corev1.PodSpec {
 }
 
 func ptrInt64(v int64) *int64 { return &v }
+func ptrBool(v bool) *bool    { return &v }
+
+// nodeIdentitySecretName is the Secret holding each System replica's persisted
+// Garage node identity (keys node-<ord> and node-<ord>.pub), so a replica
+// recycled onto another master keeps its stable node ID instead of generating a
+// fresh one (which would strand the old ID as a dead node and churn the layout).
+func nodeIdentitySecretName(cluster *v1alpha1.ObjectStore) string {
+	return resourceName(cluster) + "-node-identity"
+}
+
+// restoreNodeKeyScript runs in the System pods' restore-node-key initContainer.
+// It restores this ordinal's persisted Garage node identity (node_key /
+// node_key.pub) from the mounted identity Secret into the metadata dir before
+// Garage starts, so a replica recycled onto another master (fresh empty PV)
+// rejoins with its stable node ID and re-syncs via anti-entropy. The Secret is
+// optional: on the very first boot no key exists yet, so Garage generates one
+// (which the controller then captures into the Secret).
+var restoreNodeKeyScript = fmt.Sprintf(`set -eu
+ord="${HOSTNAME##*-}"
+meta="%s/meta"
+src="%s/node-${ord}"
+mkdir -p "$meta"
+if [ -s "$src" ] && [ -s "${src}.pub" ]; then
+  cp "$src" "$meta/node_key"
+  cp "${src}.pub" "$meta/node_key.pub"
+  chmod 0600 "$meta/node_key"
+  echo "restored garage node identity for ordinal ${ord}"
+else
+  echo "no persisted identity for ordinal ${ord}; garage will generate one"
+fi
+`, dataMountPath, nodeIdentityMountPath)
 
 // buildStatefulSet returns the StatefulSet for the Lightweight/Full profiles
 // (PVC-backed). Full currently reuses the Garage layout until the SeaweedFS
@@ -489,6 +525,35 @@ func buildSystemStatefulSet(cluster *v1alpha1.ObjectStore, namespace, image, cfg
 			}},
 		},
 	}
+
+	// Persist each replica's Garage node identity. When placement recycles a
+	// replica onto another master its PVC is recreated empty, so without this the
+	// pod would generate a brand-new node ID — stranding the old one as a dead
+	// node and churning the layout (multi-version migrations that Garage cannot
+	// always recover from). The initContainer restores node_key from the
+	// per-ordinal identity Secret before Garage starts, so the replica rejoins
+	// with its stable ID and Garage re-syncs the data via anti-entropy. The
+	// Secret is Optional so the first boot (before any identity is captured) just
+	// lets Garage generate one, which the controller then captures.
+	spec.Volumes = append(spec.Volumes, corev1.Volume{
+		Name: "node-identity",
+		VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: nodeIdentitySecretName(cluster),
+				Optional:   ptrBool(true),
+			},
+		},
+	})
+	spec.InitContainers = []corev1.Container{{
+		Name:    "restore-node-key",
+		Image:   image,
+		Command: []string{"sh", "-c", restoreNodeKeyScript},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "data", MountPath: dataMountPath},
+			{Name: "node-identity", MountPath: nodeIdentityMountPath, ReadOnly: true},
+		},
+		SecurityContext: &corev1.SecurityContext{RunAsUser: ptrInt64(0), RunAsGroup: ptrInt64(0)},
+	}}
 
 	replicas := systemReplicas
 	sc := systemLocalStorageClass
