@@ -23,9 +23,10 @@ limitations under the License.
 // deploys the RGW. sds-elastic vendors Rook under the renamed API group
 // internal.sdselastic.deckhouse.io, which is what this driver addresses.
 //
-// Scope of the current milestone: EnsureCluster (the CephObjectStore + endpoint
-// reporting), gated on the referenced ElasticCluster being Ready. Bucket/user
-// provisioning (CephObjectStoreUser) is a follow-up.
+// The driver implements the full backend.Driver: EnsureCluster (the
+// CephObjectStore + endpoint reporting, gated on the referenced ElasticCluster
+// being Ready), bucket provisioning via the per-bucket owner CephObjectStoreUser
+// (buckets.go), and per-access users + bucket policy (access.go, policy.go).
 package cephrgw
 
 import (

@@ -214,5 +214,5 @@ func (d *Driver) garageHealthy(ctx context.Context, cluster *v1alpha1.ObjectStor
 	if err != nil {
 		return false
 	}
-	return h.Status == "healthy"
+	return h.Status == garageStatusHealthy
 }

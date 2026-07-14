@@ -34,6 +34,11 @@ import (
 // the process level until masters allow spreading — is documented in DESIGN.
 const layoutZone = "dc1"
 
+// garageStatusHealthy is the value Garage's admin GET /v2/GetClusterHealth
+// reports in `status` when the cluster is fully healthy (the other values are
+// "degraded" and "unavailable").
+const garageStatusHealthy = "healthy"
+
 // meshResult is the outcome of a meshing+layout reconcile pass.
 type meshResult struct {
 	ready bool
@@ -108,7 +113,7 @@ func (d *Driver) ensureMeshAndLayout(ctx context.Context, cluster *v1alpha1.Obje
 		return meshResult{msg: fmt.Sprintf("reading health: %v", err)}, nil
 	}
 	total := layoutTotalCapacity(layout)
-	if health.Status != "healthy" {
+	if health.Status != garageStatusHealthy {
 		return meshResult{msg: fmt.Sprintf("Garage cluster health is %q (%d/%d storage nodes ok)", health.Status, health.StorageNodesOk, health.StorageNodes), total: total}, nil
 	}
 

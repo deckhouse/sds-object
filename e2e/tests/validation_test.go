@@ -208,6 +208,27 @@ func validationSpecs() {
 			}()
 			expectDenied(err, "mutually exclusive")
 		})
+
+		It("denies a Full ObjectStore whose storage.nodes cannot satisfy replication", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+
+			// Full + High needs >=3 volume servers (replication 002); nodes=1 can
+			// never satisfy replication, so admission must reject it.
+			osc := newOSC("e2e-full-nodes", map[string]interface{}{
+				"type":       "Full",
+				"redundancy": "High",
+				"storage": map[string]interface{}{
+					"class": "any-storage-class",
+					"nodes": int64(1),
+				},
+			})
+			err := createOSC(ctx, osc)
+			defer func() {
+				_ = suiteDyn.Resource(objectStoreGVR).Delete(context.Background(), "e2e-full-nodes", metav1.DeleteOptions{})
+			}()
+			expectDenied(err, "replication")
+		})
 	})
 }
 

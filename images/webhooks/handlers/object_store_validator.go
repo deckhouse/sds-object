@@ -72,6 +72,35 @@ func (v *Validator) ObjectStoreValidate(ctx context.Context, _ *model.AdmissionR
 		}
 	}
 
+	// Full (SeaweedFS): spec.storage.nodes overrides the volume-server count but
+	// must still be able to satisfy the redundancy's replication code (which
+	// spreads copies across servers), or writes would never meet replication.
+	if clusterType == "Full" {
+		if nodes, found, _ := unstructured.NestedInt64(u.Object, "spec", "storage", "nodes"); found && nodes > 0 {
+			redundancy, _, _ := unstructured.NestedString(u.Object, "spec", "redundancy")
+			if minNodes := minVolumeNodes(redundancy); nodes < minNodes {
+				return reject(fmt.Sprintf(
+					"spec.storage.nodes=%d is too low for redundancy %q: it needs at least %d volume server(s) to satisfy replication",
+					nodes, redundancy, minNodes)), nil
+			}
+		}
+	}
+
 	klog.Infof("ObjectStore %s admitted (warnings: %d)", name, len(warnings))
 	return &kwhvalidating.ValidatorResult{Valid: true, Warnings: warnings}, nil
+}
+
+// minVolumeNodes is the minimum SeaweedFS volume-server count that can satisfy a
+// redundancy's replication code: None (000, no extra copies) needs 1, Standard
+// (001, a copy on another server) needs 2, High (002, two copies on other
+// servers) needs 3.
+func minVolumeNodes(redundancy string) int64 {
+	switch redundancy {
+	case "None":
+		return 1
+	case "High":
+		return 3
+	default: // Standard or unset
+		return 2
+	}
 }

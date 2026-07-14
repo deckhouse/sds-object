@@ -372,6 +372,10 @@ status:
   предупреждает, если задан.
 - Рекомендуется не более одного кластера `type: System` (имя по соглашению
   `system`), т. к. на него ссылаются платформенные модули.
+- `type == Full`: `spec.storage.nodes` (если задан) должен позволять
+  удовлетворить репликацию redundancy — минимум volume-серверов None=1,
+  Standard=2, High=3; меньше — webhook отклоняет (иначе запись не сойдётся с
+  фактором репликации).
 
 ### 3.5 Printer columns
 
@@ -474,7 +478,10 @@ stringData:
 - `spec.clusterRef`/`spec.bucketRef` — immutable; ссылки должны существовать
   (иначе `Pending`, пока не появятся / не станут Ready).
 - `spec.bucketName` (или `metadata.name`) — правила именования S3; immutable.
-  Бакет уникален в рамках `(clusterRef, bucketName)`.
+  Бакет уникален в рамках `(clusterRef, bucketName)`. Проверка уникальности —
+  **fail-closed**: если webhook не смог её выполнить (ошибка LIST), запрос
+  отклоняется, а не пропускается с предупреждением (иначе два `Bucket` CR могли
+  бы указать на один backend-бакет).
 - `BucketClaimPolicy.spec.allowedNamespaces.patterns` — валидные RE2
   (webhook отклоняет некомпилируемые); доступ deny-by-default.
 - `BucketClaim`: greenfield (`spec.objectStoreRef`) и brownfield
