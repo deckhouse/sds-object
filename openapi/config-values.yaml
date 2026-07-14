@@ -25,7 +25,7 @@ properties:
       - DEBUG
       - TRACE
     description: Module log verbosity level.
-    default: DEBUG
+    default: INFO
   nodeSelector:
     type: object
     additionalProperties:

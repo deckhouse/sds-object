@@ -25,13 +25,16 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 	"github.com/deckhouse/sds-object/images/controller/pkg/config"
@@ -57,8 +60,29 @@ func AddBucketClaimPolicyReconcilerToManager(mgr manager.Manager, cfg *config.Op
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("bucket-policy").
 		For(&v1alpha1.BucketClaimPolicy{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		// Re-reconcile policies when their referenced Bucket appears/changes, so a
+		// policy created before its bucket leaves Pending instead of sticking there
+		// until the next full resync.
+		Watches(&v1alpha1.Bucket{}, handler.EnqueueRequestsFromMapFunc(r.enqueueByBucket)).
 		WithOptions(controller.Options{MaxConcurrentReconciles: cfg.MaxConcurrentReconciles}).
 		Complete(r)
+}
+
+// enqueueByBucket maps a Bucket event to every BucketClaimPolicy that references
+// it by name.
+func (r *BucketClaimPolicyReconciler) enqueueByBucket(ctx context.Context, o client.Object) []reconcile.Request {
+	list := &v1alpha1.BucketClaimPolicyList{}
+	if err := r.Client.List(ctx, list); err != nil {
+		r.Log.Error(err, "[enqueueByBucket] list failed")
+		return nil
+	}
+	out := make([]reconcile.Request, 0)
+	for i := range list.Items {
+		if list.Items[i].Spec.BucketRef == o.GetName() {
+			out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{Name: list.Items[i].Name}})
+		}
+	}
+	return out
 }
 
 func (r *BucketClaimPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {

@@ -17,6 +17,9 @@ limitations under the License.
 package handlers
 
 import (
+	"strings"
+
+	"github.com/slok/kubewebhook/v2/pkg/model"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
@@ -41,7 +44,20 @@ const (
 	reservedBucketNamePrefix = "claim-"
 	labelBucketOrigin        = "storage.deckhouse.io/bucket-origin"
 	bucketOriginBucketClaim  = "BucketClaim"
+
+	// moduleServiceAccountPrefix is the username prefix of the module's own
+	// service accounts (controller/webhooks/hooks run in this namespace). Used to
+	// authoritatively identify controller-originated requests instead of trusting
+	// user-settable labels.
+	moduleServiceAccountPrefix = "system:serviceaccount:d8-sds-object:"
 )
+
+// isModuleServiceAccount reports whether the admission request was made by one
+// of the module's own service accounts (i.e. the controller), as opposed to an
+// administrator or any other user.
+func isModuleServiceAccount(ar *model.AdmissionReview) bool {
+	return ar != nil && strings.HasPrefix(ar.UserInfo.Username, moduleServiceAccountPrefix)
+}
 
 // GroupVersionResources the validators query.
 var (

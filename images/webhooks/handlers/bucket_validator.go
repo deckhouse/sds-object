@@ -40,7 +40,7 @@ import (
 //     collide (hard deny);
 //   - the referenced ObjectStore should already exist (soft warning — the
 //     bucket reconciles to Pending until it does).
-func (v *Validator) BucketValidate(ctx context.Context, _ *model.AdmissionReview, obj metav1.Object) (*kwhvalidating.ValidatorResult, error) {
+func (v *Validator) BucketValidate(ctx context.Context, ar *model.AdmissionReview, obj metav1.Object) (*kwhvalidating.ValidatorResult, error) {
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok {
 		return &kwhvalidating.ValidatorResult{Valid: true}, nil
@@ -51,9 +51,11 @@ func (v *Validator) BucketValidate(ctx context.Context, _ *model.AdmissionReview
 	bucketName := effectiveBucketName(u)
 	var warnings []string
 
-	// Reserved-prefix guard: administrators may not use the greenfield prefix.
-	if strings.HasPrefix(name, reservedBucketNamePrefix) &&
-		u.GetLabels()[labelBucketOrigin] != bucketOriginBucketClaim {
+	// Reserved-prefix guard: only the module's own controller (its service
+	// account) may create greenfield buckets under the reserved prefix. The
+	// bucket-origin label is user-settable and MUST NOT be trusted for this
+	// decision — an administrator could otherwise set it and bypass the guard.
+	if strings.HasPrefix(name, reservedBucketNamePrefix) && !isModuleServiceAccount(ar) {
 		return reject(fmt.Sprintf(
 			"Bucket name %q uses the reserved prefix %q, which is reserved for controller-provisioned greenfield buckets",
 			name, reservedBucketNamePrefix)), nil
