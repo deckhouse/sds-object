@@ -78,10 +78,10 @@ func (v *Validator) ObjectStoreValidate(ctx context.Context, _ *model.AdmissionR
 	if clusterType == "Full" {
 		if nodes, found, _ := unstructured.NestedInt64(u.Object, "spec", "storage", "nodes"); found && nodes > 0 {
 			redundancy, _, _ := unstructured.NestedString(u.Object, "spec", "redundancy")
-			if min := minVolumeNodes(redundancy); nodes < min {
+			if minNodes := minVolumeNodes(redundancy); nodes < minNodes {
 				return reject(fmt.Sprintf(
 					"spec.storage.nodes=%d is too low for redundancy %q: it needs at least %d volume server(s) to satisfy replication",
-					nodes, redundancy, min)), nil
+					nodes, redundancy, minNodes)), nil
 			}
 		}
 	}
