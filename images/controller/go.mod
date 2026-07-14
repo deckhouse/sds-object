@@ -1,6 +1,6 @@
 module github.com/deckhouse/sds-object/images/controller
 
-go 1.26.5
+go 1.26.4
 
 require (
 	github.com/deckhouse/sds-object/api v0.0.0

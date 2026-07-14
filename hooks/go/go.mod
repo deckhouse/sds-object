@@ -1,6 +1,6 @@
 module github.com/deckhouse/sds-object/hooks/go
 
-go 1.26.5
+go 1.26.4
 
 require (
 	github.com/deckhouse/module-sdk v0.7.0
