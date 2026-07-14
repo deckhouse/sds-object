@@ -141,3 +141,12 @@ func TestIsModuleServiceAccount(t *testing.T) {
 		t.Errorf("nil review must not be treated as the module SA")
 	}
 }
+
+func TestMinVolumeNodes(t *testing.T) {
+	cases := map[string]int64{"None": 1, "Standard": 2, "High": 3, "": 2, "weird": 2}
+	for r, want := range cases {
+		if got := minVolumeNodes(r); got != want {
+			t.Errorf("minVolumeNodes(%q)=%d, want %d", r, got, want)
+		}
+	}
+}
