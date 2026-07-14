@@ -1,6 +1,6 @@
 module github.com/deckhouse/sds-object/images/webhooks
 
-go 1.26.4
+go 1.26.5
 
 require (
 	github.com/sirupsen/logrus v1.9.3
