@@ -63,21 +63,23 @@ func (v *Validator) BucketValidate(ctx context.Context, ar *model.AdmissionRevie
 
 	list, err := v.dyn.Resource(bucketGVR).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		warnings = append(warnings, fmt.Sprintf("could not verify bucket name uniqueness: %v", err))
-	} else {
-		for i := range list.Items {
-			other := &list.Items[i]
-			if other.GetName() == name {
-				continue
-			}
-			if ref, _, _ := unstructured.NestedString(other.Object, "spec", "objectStoreRef"); ref != objectStoreRef {
-				continue
-			}
-			if effectiveBucketName(other) == bucketName {
-				return reject(fmt.Sprintf(
-					"bucket name %q on object store %q is already claimed by Bucket %q",
-					bucketName, objectStoreRef, other.GetName())), nil
-			}
+		// Fail closed: a name collision on the same store would make two Bucket
+		// CRs point at one backend bucket, so we must not admit when we could not
+		// verify uniqueness (rather than warn and allow a possible duplicate).
+		return reject(fmt.Sprintf("could not verify bucket name uniqueness: %v", err)), nil
+	}
+	for i := range list.Items {
+		other := &list.Items[i]
+		if other.GetName() == name {
+			continue
+		}
+		if ref, _, _ := unstructured.NestedString(other.Object, "spec", "objectStoreRef"); ref != objectStoreRef {
+			continue
+		}
+		if effectiveBucketName(other) == bucketName {
+			return reject(fmt.Sprintf(
+				"bucket name %q on object store %q is already claimed by Bucket %q",
+				bucketName, objectStoreRef, other.GetName())), nil
 		}
 	}
 
