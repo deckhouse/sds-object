@@ -621,6 +621,26 @@ func statefulSetReadyReplicas(ctx context.Context, storeName string) (desired, r
 	return desired, sts.Status.ReadyReplicas, nil
 }
 
+// snapshotCredentials copies a credentials Secret into a plain Secret the module
+// does not own, so a spec can keep using (or rather, try to use) the credentials
+// after the controller has revoked the original.
+func snapshotCredentials(ctx context.Context, ns, from, to string) error {
+	src, err := suiteClientset.CoreV1().Secrets(ns).Get(ctx, from, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("read credentials Secret %s: %w", formatRef(ns, from), err)
+	}
+	copied := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: to, Namespace: ns},
+		Type:       corev1.SecretTypeOpaque,
+		Data:       src.Data,
+	}
+	_ = suiteClientset.CoreV1().Secrets(ns).Delete(ctx, to, metav1.DeleteOptions{})
+	if _, err := suiteClientset.CoreV1().Secrets(ns).Create(ctx, copied, metav1.CreateOptions{}); err != nil {
+		return fmt.Errorf("copy credentials into %s: %w", formatRef(ns, to), err)
+	}
+	return nil
+}
+
 // containerLog fetches the (current instance's) log of one container in a pod —
 // used to confirm the restore-node-key initContainer actually restored a persisted
 // Garage identity.
@@ -967,6 +987,38 @@ func s3AssertMarkerContent(ctx context.Context, jobName, ns, secretName, object,
 	}, "\n")
 
 	return runS3ScriptJob(ctx, jobName, ns, secretName, 10, script)
+}
+
+// s3AssertCredentialsRejected succeeds only when the given credentials are
+// REFUSED by the backend, and refused for an authentication reason. Revocation
+// asserted at the Kubernetes level (the Secret is gone, the condition is False)
+// says nothing about the backend still honouring the key, which is the half that
+// matters; this closes it.
+//
+// The alias is configured through MC_HOST_<alias> rather than `mc alias set`,
+// which validates the credentials up front — a failure there would abort the
+// script before it could tell "rejected" from "misconfigured".
+func s3AssertCredentialsRejected(ctx context.Context, jobName, ns, secretName string) error {
+	script := strings.Join([]string{
+		"set -e",
+		fmt.Sprintf("host=${%s#*://}", objectv1alpha1.SecretKeyS3Endpoint),
+		fmt.Sprintf("export MC_HOST_%s=\"http://$%s:$%s@$host\"",
+			probeAlias, objectv1alpha1.SecretKeyAccessKeyID, objectv1alpha1.SecretKeySecretAccessID),
+		fmt.Sprintf("if out=$(mc ls \"%s/$%s\" 2>&1); then", probeAlias, objectv1alpha1.SecretKeyS3Bucket),
+		"  echo \"ERROR: the revoked credentials still work: $out\"",
+		"  exit 1",
+		"fi",
+		"echo \"--- refusal: $out ---\"",
+		"echo \"$out\" | grep -Eqi 'invalidaccesskeyid|access ?denied|signature|forbidden|not authorized' || {",
+		"  echo \"ERROR: the request failed, but not with an authentication error\"",
+		"  exit 1",
+		"}",
+		"echo CREDENTIALS REJECTED",
+	}, "\n")
+
+	// A revoked key must be refused immediately; retries would only mask a
+	// backend that keeps honouring it for a while.
+	return runS3ScriptJob(ctx, jobName, ns, secretName, 1, script)
 }
 
 // s3AssertMarkerAbsent succeeds only when the credentials work, the bucket is
