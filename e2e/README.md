@@ -59,7 +59,7 @@ profile so CI needs no extra storage modules:
 
 | `E2E_OSC_TYPE` | Backend | Extra requirements |
 |----------------|---------|--------------------|
-| `System` (default) | Garage (StatefulSet, fixed 3 replicas on control-plane, node-sticky local PV) | none |
+| `System` (default) | Garage (StatefulSet on control-plane, node-sticky local PV; 3 replicas, or 1 with `systemBucket.singleReplica`) | none |
 | `Lightweight` | Garage (StatefulSet + PVC) | `E2E_STORAGE_CLASS` + a CSI/local-volume module enabled in `cluster_config.yml` |
 | `Full` | SeaweedFS | `E2E_STORAGE_CLASS` + `managed-postgres` module |
 | `Heavy` | Ceph RGW | `sds-elastic` module + a Ready `ElasticCluster` (`E2E_ELASTIC_CLUSTER_REF`) |
@@ -74,8 +74,9 @@ The validation and delete specs build on the cluster and bucket created by the
 first specs, so the suite uses a **single shared `ObjectStore`** inside
 one `Describe(..., Ordered)`. Spec registration goes through builder functions
 called in explicit order from the root container
-(`createSpecs → validationSpecs → deleteSpecs`); the deletion specs run last.
-`RandomizeAllSpecs` stays **off**.
+(`createSpecs → validationSpecs → … → deleteSpecs → systemSingleReplicaSpecs`);
+the deletion specs run near the end, and the destructive `system-single-replica`
+switch runs after them. `RandomizeAllSpecs` stays **off**.
 
 ## Requirements
 
@@ -126,7 +127,8 @@ called in explicit order from the root container
 
 - `E2E_OSC_NAME`: name of the shared `ObjectStore`, defaults to `e2e-osc`.
 - `E2E_OSC_TYPE`: profile, one of `System` (default) / `Lightweight` / `Full` / `Heavy`.
-- `E2E_REDUNDANCY`: `Single` (default) / `Replicated` / `HighRedundancy`.
+- `E2E_REDUNDANCY`: `None` (default) / `Standard` / `High`. Ignored for `System`,
+  whose replica count comes from the module setting `systemBucket.singleReplica`.
 - `E2E_STORAGE_CLASS`: StorageClass for the PVCs; **required** for `Lightweight`/`Full`.
 - `E2E_OSC_SIZE`: cluster storage size, defaults to `5Gi`.
 - `E2E_ELASTIC_CLUSTER_REF`: `ElasticCluster` name; **required** for `Heavy`.
@@ -138,6 +140,11 @@ called in explicit order from the root container
 - `E2E_PROBE_JOB_TIMEOUT`: Go duration bounding the probe Job, defaults to 5m.
 - `E2E_KEEP_CLUSTER_ON_FAILURE`: when truthy and at least one spec failed, the
   nested cluster is **not** torn down in `AfterSuite`, so you can inspect it.
+- `E2E_SKIP_SYSTEM_RECREATE`: when truthy, skips the `system-single-replica`
+  specs. They toggle `systemBucket.singleReplica` through the ModuleConfig, which
+  **recreates the system store empty** in both directions (that is the setting's
+  documented behaviour) and takes two recreates' worth of time. They run last in
+  the suite, so nothing else depends on the system store's data.
 
 ## Quick start
 

@@ -23,6 +23,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
@@ -57,7 +58,10 @@ func (d *Driver) teardownSystemDataPlane(ctx context.Context, cluster *v1alpha1.
 	switch {
 	case err == nil:
 		remaining++
-		if err := d.deleteIfNotDeleting(ctx, sts); err != nil {
+		// Background propagation explicitly: the pods must go for the replica PVCs
+		// to lose their protection finalizer, so orphaning them would stall the
+		// teardown.
+		if err := d.deleteIfNotDeleting(ctx, sts, client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil {
 			return false, "", fmt.Errorf("delete statefulset: %w", err)
 		}
 	case !apierrors.IsNotFound(err):
@@ -120,11 +124,11 @@ func (d *Driver) teardownSystemDataPlane(ctx context.Context, cluster *v1alpha1.
 // deleteIfNotDeleting issues a delete unless the object is already terminating,
 // tolerating a concurrent removal. Re-issuing a delete on a terminating object is
 // harmless but pointless: the teardown just waits for it to disappear.
-func (d *Driver) deleteIfNotDeleting(ctx context.Context, obj client.Object) error {
+func (d *Driver) deleteIfNotDeleting(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
 	if obj.GetDeletionTimestamp() != nil {
 		return nil
 	}
-	if err := d.client.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+	if err := d.client.Delete(ctx, obj, opts...); err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}
 	return nil

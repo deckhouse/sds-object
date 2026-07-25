@@ -55,20 +55,54 @@ func validationSpecs() {
 			expectDenied(err, "must be named 'system'")
 		})
 
-		It("denies spec.redundancy on a System ObjectStore (CEL)", func() {
+		It("denies a configurable spec.redundancy on a System ObjectStore (CEL)", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 
-			// Use name 'system' so the name rule passes and the redundancy rule is
-			// the sole CEL failure. CEL runs on the submitted object at admission
-			// (before persistence), so nothing is ever created — no cleanup, and no
-			// risk of touching the shipped `system` store.
-			bad := newOSC("system", map[string]interface{}{
-				"type":       string(objectv1alpha1.ClusterTypeSystem),
-				"redundancy": string(objectv1alpha1.RedundancyStandard),
-			})
-			err := createOSC(ctx, bad)
-			expectDenied(err, "redundancy must not be set")
+			// System takes either no redundancy (3 replicas) or None (single
+			// replica); Standard/High are not configurable there. Use name 'system'
+			// so the name rule passes and the redundancy rule is the sole CEL
+			// failure. CEL runs on the submitted object at admission (before
+			// persistence), so nothing is ever created — no cleanup, and no risk of
+			// touching the shipped `system` store.
+			for _, redundancy := range []objectv1alpha1.RedundancyMode{
+				objectv1alpha1.RedundancyStandard,
+				objectv1alpha1.RedundancyHigh,
+			} {
+				bad := newOSC("system", map[string]interface{}{
+					"type":       string(objectv1alpha1.ClusterTypeSystem),
+					"redundancy": string(redundancy),
+				})
+				expectDenied(createOSC(ctx, bad), "not configurable")
+			}
+		})
+
+		It("admits redundancy None on the System store and keeps it mutable (dry-run)", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+
+			// The counterpart of the deny case: None IS accepted for System (it is
+			// what sdsObject.systemBucket.singleReplica renders), and — uniquely for
+			// System — redundancy may change on a live store, since the controller
+			// answers with a recreate instead of an in-place factor change. Dry-run
+			// so the shipped store is not actually switched here (the destructive
+			// switch is covered end to end by system_single_replica_test.go).
+			exists, err := oscExists(ctx, "system")
+			Expect(err).NotTo(HaveOccurred())
+			if !exists {
+				Skip("system ObjectStore not present (sdsObject.systemBucket.enabled is false)")
+			}
+
+			patch := []byte(`{"spec":{"redundancy":"` + string(objectv1alpha1.RedundancyNone) + `"}}`)
+			_, err = suiteDyn.Resource(objectStoreGVR).Patch(ctx, "system", types.MergePatchType, patch,
+				metav1.PatchOptions{DryRun: []string{metav1.DryRunAll}})
+			Expect(err).NotTo(HaveOccurred(), "redundancy None must be admitted on a live System store")
+
+			By("still rejecting a switch to a configurable redundancy on the live store")
+			bad := []byte(`{"spec":{"redundancy":"` + string(objectv1alpha1.RedundancyStandard) + `"}}`)
+			_, err = suiteDyn.Resource(objectStoreGVR).Patch(ctx, "system", types.MergePatchType, bad,
+				metav1.PatchOptions{DryRun: []string{metav1.DryRunAll}})
+			expectDenied(err, "not configurable")
 		})
 
 		It("denies spec.storage.sizePerNode on a System ObjectStore (CEL)", func() {

@@ -34,6 +34,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	clientgokube "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -62,6 +63,12 @@ const (
 	// envKeepClusterOnFailure, when truthy, skips nested-cluster teardown if any
 	// spec failed, leaving the cluster live for manual debugging.
 	envKeepClusterOnFailure = "E2E_KEEP_CLUSTER_ON_FAILURE"
+
+	// envSkipSystemRecreate, when truthy, skips the singleReplica switch specs.
+	// They are DESTRUCTIVE by design (toggling the setting recreates the system
+	// store empty) and slow (two recreates), so a run that wants the system store
+	// left intact can opt out.
+	envSkipSystemRecreate = "E2E_SKIP_SYSTEM_RECREATE"
 )
 
 const (
@@ -155,6 +162,10 @@ type e2eConfig struct {
 	// keepClusterOnFailure, when true, makes cleanupSuite skip nested-cluster
 	// teardown if any spec failed (E2E_KEEP_CLUSTER_ON_FAILURE).
 	keepClusterOnFailure bool
+
+	// skipSystemRecreate, when true, skips the destructive singleReplica switch
+	// specs (E2E_SKIP_SYSTEM_RECREATE).
+	skipSystemRecreate bool
 }
 
 var (
@@ -219,6 +230,7 @@ func loadConfig() e2eConfig {
 	cfg.probeJobTimeout = parseDuration(os.Getenv(envProbeJobTimeout), defaultProbeJobTO)
 
 	cfg.keepClusterOnFailure = envBool(os.Getenv(envKeepClusterOnFailure))
+	cfg.skipSystemRecreate = envBool(os.Getenv(envSkipSystemRecreate))
 
 	return cfg
 }
@@ -388,8 +400,15 @@ func credsSecretName(access string) string { return access + "-s3-credentials" }
 // CEL "only allowed when ..." rules are satisfied.
 func buildOSC(name string) *unstructured.Unstructured {
 	spec := map[string]interface{}{
-		"type":       suiteCfg.oscType,
-		"redundancy": suiteCfg.redundancy,
+		"type": suiteCfg.oscType,
+	}
+	// System does not take its redundancy from E2E_REDUNDANCY: the profile only
+	// accepts None, which selects the single-replica mode owned by the
+	// sdsObject.systemBucket.singleReplica module setting (exercised by
+	// systemSingleReplicaSpecs). Leaving it unset keeps a suite-created System
+	// store on the default 3-replica profile the System specs assert.
+	if !suiteCfg.isSystem() {
+		spec["redundancy"] = suiteCfg.redundancy
 	}
 	if suiteCfg.needsStorageClass() {
 		spec["storage"] = map[string]interface{}{
@@ -500,6 +519,57 @@ func garageReplicationFactor(ctx context.Context, storeName string) (int, error)
 		return 0, fmt.Errorf("replication_factor not found in %s-garage-config", storeName)
 	}
 	return strconv.Atoi(m[1])
+}
+
+// systemIncarnationKey mirrors the controller's ConfigMap key recording the
+// System data-plane incarnation (bumped on every recreate).
+const systemIncarnationKey = "system-incarnation"
+
+// garageSystemIncarnation reads the System data-plane incarnation from the same
+// ConfigMap. A cluster that was never recreated reports 1 (the controller omits
+// the key on clusters provisioned before the counter existed).
+func garageSystemIncarnation(ctx context.Context, storeName string) (int, error) {
+	cm, err := suiteClientset.CoreV1().ConfigMaps(moduleNS).Get(ctx, storeName+"-garage-config", metav1.GetOptions{})
+	if err != nil {
+		return 0, err
+	}
+	raw, ok := cm.Data[systemIncarnationKey]
+	if !ok {
+		return 1, nil
+	}
+	return strconv.Atoi(raw)
+}
+
+// moduleConfigGVR is the Deckhouse ModuleConfig resource (cluster-scoped); the
+// suite patches spec.settings on it to drive module-level knobs the way an
+// operator would.
+var moduleConfigGVR = schema.GroupVersionResource{
+	Group: "deckhouse.io", Version: "v1alpha1", Resource: "moduleconfigs",
+}
+
+// setSystemSingleReplica flips sdsObject.systemBucket.singleReplica in the
+// module's ModuleConfig, i.e. the real operator-facing path: Deckhouse re-renders
+// the chart, which sets/removes spec.redundancy: None on the shipped system
+// ObjectStore, which makes the controller recreate the store.
+func setSystemSingleReplica(ctx context.Context, enabled bool) error {
+	patch := fmt.Sprintf(`{"spec":{"settings":{"systemBucket":{"singleReplica":%t}}}}`, enabled)
+	_, err := suiteDyn.Resource(moduleConfigGVR).Patch(ctx, moduleName, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
+	if err != nil {
+		return fmt.Errorf("patch ModuleConfig %s (singleReplica=%t): %w", moduleName, enabled, err)
+	}
+	return nil
+}
+
+// storeRedundancy returns spec.redundancy of an ObjectStore and whether the field
+// is present at all (unset is meaningful: it is the System profile's default
+// 3-replica mode).
+func storeRedundancy(ctx context.Context, name string) (string, bool, error) {
+	u, err := suiteDyn.Resource(objectStoreGVR).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return "", false, err
+	}
+	value, found, err := unstructured.NestedString(u.Object, "spec", "redundancy")
+	return value, found, err
 }
 
 // buildOSBPolicy renders a cluster-scoped BucketClaimPolicy that allows
@@ -702,8 +772,7 @@ func waitSecretGone(ctx context.Context, ns, name string, timeout time.Duration)
 // waits for it to succeed. The Job body mirrors testing/*.yaml.
 func runS3ProbeJob(ctx context.Context, jobName, ns, secretName string) error {
 	script := strings.Join([]string{
-		"set -e",
-		fmt.Sprintf("mc alias set %s \"$%s\" \"$%s\" \"$%s\"", probeAlias, objectv1alpha1.SecretKeyS3Endpoint, objectv1alpha1.SecretKeyAccessKeyID, objectv1alpha1.SecretKeySecretAccessID),
+		s3AliasLine(),
 		fmt.Sprintf("echo \"hello from sds-object e2e\" | mc pipe \"%s/$%s/hello.txt\"", probeAlias, objectv1alpha1.SecretKeyS3Bucket),
 		fmt.Sprintf("echo '--- listing ---'; mc ls \"%s/$%s\"", probeAlias, objectv1alpha1.SecretKeyS3Bucket),
 		fmt.Sprintf("got=$(mc cat \"%s/$%s/hello.txt\")", probeAlias, objectv1alpha1.SecretKeyS3Bucket),
@@ -712,7 +781,55 @@ func runS3ProbeJob(ctx context.Context, jobName, ns, secretName string) error {
 		"echo S3 OK",
 	}, "\n")
 
-	backoff := int32(10)
+	return runS3ScriptJob(ctx, jobName, ns, secretName, 10, script)
+}
+
+// s3AliasLine is the shell prologue every probe script shares: fail on the first
+// error and register the `mc` alias from the credentials Secret's env.
+func s3AliasLine() string {
+	return "set -e\n" + fmt.Sprintf("mc alias set %s \"$%s\" \"$%s\" \"$%s\"",
+		probeAlias, objectv1alpha1.SecretKeyS3Endpoint, objectv1alpha1.SecretKeyAccessKeyID, objectv1alpha1.SecretKeySecretAccessID)
+}
+
+// s3PutMarker writes a marker object with known content into the bucket, so a
+// later spec can prove whether the stored data survived an operation.
+func s3PutMarker(ctx context.Context, jobName, ns, secretName, object, content string) error {
+	script := strings.Join([]string{
+		s3AliasLine(),
+		fmt.Sprintf("printf '%%s' %q | mc pipe \"%s/$%s/%s\"", content, probeAlias, objectv1alpha1.SecretKeyS3Bucket, object),
+		fmt.Sprintf("got=$(mc cat \"%s/$%s/%s\")", probeAlias, objectv1alpha1.SecretKeyS3Bucket, object),
+		fmt.Sprintf("test \"$got\" = %q", content),
+		"echo MARKER WRITTEN",
+	}, "\n")
+
+	return runS3ScriptJob(ctx, jobName, ns, secretName, 10, script)
+}
+
+// s3AssertMarkerAbsent succeeds only when the credentials work, the bucket is
+// listable AND the marker object is gone. Listing first is what makes the
+// assertion trustworthy: a job that merely failed to authenticate (e.g. the key
+// has not been re-issued yet) errors out and is retried instead of being read as
+// "the object is gone".
+func s3AssertMarkerAbsent(ctx context.Context, jobName, ns, secretName, object string) error {
+	script := strings.Join([]string{
+		s3AliasLine(),
+		fmt.Sprintf("echo '--- listing ---'; mc ls \"%s/$%s\"", probeAlias, objectv1alpha1.SecretKeyS3Bucket),
+		fmt.Sprintf("if mc stat \"%s/$%s/%s\" >/dev/null 2>&1; then", probeAlias, objectv1alpha1.SecretKeyS3Bucket, object),
+		fmt.Sprintf("  echo \"ERROR: %s still exists; the store was NOT recreated from scratch\"", object),
+		"  exit 1",
+		"fi",
+		"echo MARKER GONE",
+	}, "\n")
+
+	// A low backoff keeps a genuine "the object survived" failure fast, while
+	// still tolerating a few retries for a bucket or key that is mid-reprovision.
+	return runS3ScriptJob(ctx, jobName, ns, secretName, 4, script)
+}
+
+// runS3ScriptJob runs an arbitrary `mc` script as a one-shot Job with the bucket
+// credentials Secret in its environment and waits for it to succeed.
+func runS3ScriptJob(ctx context.Context, jobName, ns, secretName string, backoffLimit int32, script string) error {
+	backoff := backoffLimit
 	var ttl int32 = 600
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: ns},

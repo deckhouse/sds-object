@@ -91,6 +91,10 @@ var _ = Describe("sds-object e2e", Ordered, ContinueOnFailure, func() {
 	fullHighRedundancySpecs() // full_test.go: Full High (SeaweedFS multi-filer HA + managed-postgres)
 	heavySpecs()              // heavy_test.go: Heavy (Ceph RGW on sds-elastic ElasticCluster) bring-up -> create -> bucket -> round-trip -> delete
 	deleteSpecs()             // delete_test.go: OB delete (+ creds Secret + reclaim), OSC delete
+	// Last on purpose: switching sdsObject.systemBucket.singleReplica recreates the
+	// system store EMPTY (both ways), so it must not run before specs that rely on
+	// the shipped system cluster or its data. Opt out with E2E_SKIP_SYSTEM_RECREATE.
+	systemSingleReplicaSpecs() // system_single_replica_test.go: singleReplica on -> recreate -> off
 })
 
 func prepareSuite() {

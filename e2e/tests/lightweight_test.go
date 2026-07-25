@@ -24,6 +24,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	objectv1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 )
@@ -100,6 +101,19 @@ func lightweightSpecs() {
 
 			By("asserting the pod template carries a config-hash annotation")
 			Expect(sts.Spec.Template.Annotations).To(HaveKey("storage.deckhouse.io/config-hash"))
+		})
+
+		It("rejects changing spec.redundancy on a non-System cluster (CEL, dry-run)", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+
+			// redundancy is mutable for System only, where a switch is answered with a
+			// recreate. The other profiles have no such path — Garage cannot change
+			// replication_factor in place — so the immutability rule must still bite.
+			patch := []byte(`{"spec":{"redundancy":"` + string(objectv1alpha1.RedundancyNone) + `"}}`)
+			_, err := suiteDyn.Resource(objectStoreGVR).Patch(ctx, oscName, types.MergePatchType, patch,
+				metav1.PatchOptions{DryRun: []string{metav1.DryRunAll}})
+			expectDenied(err, "spec.redundancy is immutable")
 		})
 
 		It("provisions a bucket, access + policy and a complete credentials Secret", func() {
