@@ -83,7 +83,7 @@ func systemDurabilitySpecs() {
 			Expect(waitOSBReady(ctx, testBucket)).To(Succeed())
 
 			var err error
-			replicas, _, err = statefulSetReadyReplicas(ctx, systemStore)
+			replicas, _, err = statefulSetReadyReplicas(ctx, garageStatefulSetName(systemStore))
 			Expect(err).NotTo(HaveOccurred(), "read the System StatefulSet")
 			GinkgoWriter.Printf("System store runs %d replica(s)\n", replicas)
 
@@ -137,7 +137,7 @@ func systemDurabilitySpecs() {
 					g.Expect(deleted[p.Name]).NotTo(Equal(p.UID), "pod %s is still the pre-restart instance", p.Name)
 					g.Expect(p.Status.Phase).To(Equal(corev1.PodRunning), "pod %s must be Running", p.Name)
 				}
-				desired, ready, err := statefulSetReadyReplicas(ctx, systemStore)
+				desired, ready, err := statefulSetReadyReplicas(ctx, garageStatefulSetName(systemStore))
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(ready).To(Equal(desired), "all replicas must be Ready again")
 			}, 15*time.Minute, 10*time.Second).Should(Succeed())

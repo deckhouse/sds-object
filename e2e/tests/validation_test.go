@@ -19,6 +19,7 @@ package tests
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -28,9 +29,31 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
 
 	objectv1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 )
+
+// recordingWarningHandler collects the admission warnings the apiserver returns, so
+// a spec can assert on guards that warn rather than deny (the default client just
+// prints them to stderr).
+type recordingWarningHandler struct {
+	mu    sync.Mutex
+	items []string
+}
+
+func (h *recordingWarningHandler) HandleWarningHeader(_ int, _, text string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.items = append(h.items, text)
+}
+
+func (h *recordingWarningHandler) all() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.items...)
+}
 
 // validationSpecs exercises the admission guards that protect the API: the
 // validating webhooks (single System cluster, unique bucket name per cluster)
@@ -241,6 +264,32 @@ func validationSpecs() {
 				_ = suiteDyn.Resource(bucketClaimGVR).Namespace(suiteCfg.namespace).Delete(context.Background(), "e2e-both-fields", metav1.DeleteOptions{})
 			}()
 			expectDenied(err, "mutually exclusive")
+		})
+
+		It("warns instead of denying when a Heavy cluster references a missing ElasticCluster", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+
+			// Create-before-dependency must stay possible: the validator warns and admits
+			// so the store can reconcile to Pending until its ElasticCluster shows up.
+			// A regression to a hard deny would break that ordering silently — the
+			// request would simply fail — so the warning itself is the contract. Dry-run
+			// keeps the store out of the cluster (nothing to reconcile or finalize).
+			warnings := &recordingWarningHandler{}
+			cfg := rest.CopyConfig(suiteRestCfg)
+			cfg.WarningHandler = warnings
+			dyn, err := dynamic.NewForConfig(cfg)
+			Expect(err).NotTo(HaveOccurred())
+
+			osc := newOSC("e2e-heavy-missing-ec", map[string]interface{}{
+				"type":              string(objectv1alpha1.ClusterTypeHeavy),
+				"elasticClusterRef": "does-not-exist",
+			})
+			_, err = dyn.Resource(objectStoreGVR).Create(ctx, osc, metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}})
+			Expect(err).NotTo(HaveOccurred(), "a missing ElasticCluster must be admitted, not denied")
+			Expect(warnings.all()).To(ContainElement(ContainSubstring("does-not-exist")),
+				"the validator must say which ElasticCluster is missing")
+			Expect(warnings.all()).To(ContainElement(ContainSubstring("not found")))
 		})
 
 		It("denies a Full ObjectStore whose storage.nodes cannot satisfy replication", func() {

@@ -612,9 +612,11 @@ func deleteGaragePods(ctx context.Context, storeName string) (map[string]types.U
 }
 
 // statefulSetReadyReplicas returns the desired and ready replica counts of a
-// store's StatefulSet.
-func statefulSetReadyReplicas(ctx context.Context, storeName string) (desired, ready int32, err error) {
-	sts, err := suiteClientset.AppsV1().StatefulSets(moduleNS).Get(ctx, storeName+"-garage", metav1.GetOptions{})
+// StatefulSet in the module namespace, by its own name — the workloads are named
+// per backend and per component (<store>-garage, <store>-seaweedfs-filer, …), so
+// deriving the name here would only invite passing the wrong one.
+func statefulSetReadyReplicas(ctx context.Context, name string) (desired, ready int32, err error) {
+	sts, err := suiteClientset.AppsV1().StatefulSets(moduleNS).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return 0, 0, err
 	}
@@ -623,6 +625,9 @@ func statefulSetReadyReplicas(ctx context.Context, storeName string) (desired, r
 	}
 	return desired, sts.Status.ReadyReplicas, nil
 }
+
+// garageStatefulSetName is the data-plane workload of a Garage-backed store.
+func garageStatefulSetName(storeName string) string { return storeName + "-garage" }
 
 // execInPod runs cmd in a container of a pod and returns its stdout. Errors carry
 // stderr, so a failing Garage CLI call is diagnosable from the spec output. Used to
