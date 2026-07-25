@@ -28,6 +28,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	objectv1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 )
@@ -245,6 +246,70 @@ func systemDurabilitySpecs() {
 				g.Expect(pv.UID).NotTo(Equal(oldPV.pvUID),
 					"gcSystemLocalPVs must reap the Released pool PV left behind by the recycle")
 			}, 10*time.Minute, 10*time.Second).Should(Succeed())
+		})
+
+		It("adopts a store provisioned before the incarnation counter, instead of rebuilding it", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+			defer cancel()
+
+			// The local-PV names and on-node directories of a never-recreated store
+			// deliberately carry no incarnation, so that a controller which learns
+			// about the counter finds the cluster it is already running rather than a
+			// pool it has to provision from scratch. A store created before the
+			// counter existed is exactly a ConfigMap without the key — so strip it,
+			// restart the controller, and require the cluster to be adopted untouched.
+			// (A real cross-version upgrade needs the harness to install two module
+			// versions; this covers the invariant that upgrade depends on.)
+			cm, err := suiteClientset.CoreV1().ConfigMaps(moduleNS).Get(ctx, systemStore+"-garage-config", metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cm.Data).To(HaveKey(systemIncarnationKey), "the running controller must record an incarnation")
+
+			rfBefore, err := garageReplicationFactor(ctx, systemStore)
+			Expect(err).NotTo(HaveOccurred())
+			bindingsBefore, err := systemReplicaBindings(ctx, systemStore)
+			Expect(err).NotTo(HaveOccurred())
+			podsBefore, err := garagePods(ctx, systemStore)
+			Expect(err).NotTo(HaveOccurred())
+			podUIDs := map[string]types.UID{}
+			for i := range podsBefore.Items {
+				podUIDs[podsBefore.Items[i].Name] = podsBefore.Items[i].UID
+			}
+
+			By("removing the incarnation key, making the store look pre-upgrade")
+			_, err = suiteClientset.CoreV1().ConfigMaps(moduleNS).Patch(ctx, cm.Name, types.MergePatchType,
+				[]byte(fmt.Sprintf(`{"data":{%q:null}}`, systemIncarnationKey)), metav1.PatchOptions{})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("restarting the controller so it reconciles the store from scratch")
+			Expect(restartController(ctx, suiteCfg.moduleReadyTO)).To(Succeed())
+
+			By("waiting for the controller to record the first incarnation again")
+			Eventually(func() (int, error) {
+				return garageSystemIncarnation(ctx, systemStore)
+			}, 10*time.Minute, 10*time.Second).Should(Equal(1),
+				"a missing counter reads back as the first incarnation, never as a new one")
+
+			By("asserting nothing was rebuilt: same pinned factor, same volumes, same pods")
+			rfAfter, err := garageReplicationFactor(ctx, systemStore)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(rfAfter).To(Equal(rfBefore), "the pinned replication factor must be read back, not recomputed")
+
+			bindingsAfter, err := systemReplicaBindings(ctx, systemStore)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(bindingsAfter).To(Equal(bindingsBefore), "adoption must not re-home any replica")
+
+			podsAfter, err := garagePods(ctx, systemStore)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(podsAfter.Items).To(HaveLen(len(podUIDs)))
+			for i := range podsAfter.Items {
+				p := &podsAfter.Items[i]
+				Expect(p.UID).To(Equal(podUIDs[p.Name]), "pod %s must not be restarted by adoption", p.Name)
+			}
+
+			Expect(waitOSCReady(ctx, systemStore)).To(Succeed())
+
+			By("asserting the data is still served")
+			Expect(s3AssertMarkerContent(ctx, "s3-adoption-read", suiteCfg.namespace, testSecret, markerObj, markerBody)).To(Succeed())
 		})
 	})
 }

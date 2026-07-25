@@ -24,6 +24,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	objectv1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 )
@@ -113,6 +114,98 @@ func greenfieldSpecs() {
 			Expect(suiteDyn.Resource(bucketAccessGVR).Namespace(suiteCfg.namespace).Delete(ctx, access, metav1.DeleteOptions{})).To(Succeed())
 			Expect(waitResourceGone(ctx, bucketClaimGVR, suiteCfg.namespace, claim, resourceGoneTimeout)).To(Succeed())
 			Expect(waitResourceGone(ctx, bucketGVR, "", boundBucket, resourceGoneTimeout)).To(Succeed())
+		})
+	})
+
+	// A greenfield claim carries the bucket's own settings (accessPolicy, quota,
+	// reclaimPolicy) and the controller copies them onto the Bucket it provisions.
+	// Only the Delete path was covered above; Retain — where the tenant's data
+	// outlives the claim — and the copying itself were not.
+	Describe("greenfield-retain", Ordered, func() {
+		const (
+			claim      = "e2e-greenfield-retain"
+			markerObj  = "greenfield-marker.txt"
+			markerBody = "written before the greenfield claim was deleted"
+		)
+		access := accessName(claim)
+		var boundBucket string
+
+		BeforeAll(func() {
+			DeferCleanup(func() {
+				bg, cancel := context.WithTimeout(context.Background(), resourceGoneTimeout+2*time.Minute)
+				defer cancel()
+				_ = suiteDyn.Resource(bucketAccessGVR).Namespace(suiteCfg.namespace).Delete(bg, access, metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketClaimGVR).Namespace(suiteCfg.namespace).Delete(bg, claim, metav1.DeleteOptions{})
+				if boundBucket != "" {
+					_ = waitResourceGone(bg, bucketGVR, "", boundBucket, resourceGoneTimeout)
+				}
+			})
+		})
+
+		It("copies the claim's accessPolicy, quota and reclaimPolicy onto the provisioned Bucket", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), suiteCfg.obReadyTimeout+suiteCfg.probeJobTimeout+5*time.Minute)
+			defer cancel()
+
+			By("creating a greenfield claim with Retain, a quota and an explicit accessPolicy")
+			c := buildGreenfieldClaim(claim, suiteCfg.namespace, suiteCfg.oscName, objectv1alpha1.BucketReclaimRetain)
+			spec := c.Object["spec"].(map[string]interface{})
+			spec["accessPolicy"] = string(objectv1alpha1.AccessPolicyPrivate)
+			spec["quota"] = map[string]interface{}{"maxSize": "1Gi"}
+			Expect(createBucketClaim(ctx, c)).To(Succeed())
+			Expect(waitCondition(ctx, bucketClaimGVR, suiteCfg.namespace, claim,
+				objectv1alpha1.BucketClaimConditionReady, string(metav1.ConditionTrue), suiteCfg.obReadyTimeout)).To(Succeed())
+
+			var err error
+			boundBucket, err = getStringField(ctx, bucketClaimGVR, suiteCfg.namespace, claim, "status", "boundBucketName")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(boundBucket).NotTo(BeEmpty())
+
+			By("asserting the provisioned Bucket carries the claim's settings")
+			b, err := suiteDyn.Resource(bucketGVR).Get(ctx, boundBucket, metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred())
+			reclaim, _, _ := unstructured.NestedString(b.Object, "spec", "reclaimPolicy")
+			Expect(reclaim).To(Equal(string(objectv1alpha1.BucketReclaimRetain)))
+			accessPolicy, _, _ := unstructured.NestedString(b.Object, "spec", "accessPolicy")
+			Expect(accessPolicy).To(Equal(string(objectv1alpha1.AccessPolicyPrivate)))
+			maxSize, _, _ := unstructured.NestedString(b.Object, "spec", "quota", "maxSize")
+			Expect(maxSize).To(Equal("1Gi"), "the claim's quota must reach the Bucket, or it is silently dropped")
+
+			By("writing a marker object through an access on the claim")
+			Expect(createOSBAccess(ctx, buildOSBAccess(access, suiteCfg.namespace, claim, objectv1alpha1.AccessReadWrite))).To(Succeed())
+			Expect(waitAccessReady(ctx, suiteCfg.namespace, access)).To(Succeed())
+			Expect(s3PutMarker(ctx, "s3-greenfield-write", suiteCfg.namespace, credsSecretName(access), markerObj, markerBody)).To(Succeed())
+		})
+
+		It("keeps the tenant's data when a Retain claim is deleted, and a new claim adopts it", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), suiteCfg.obReadyTimeout+suiteCfg.probeJobTimeout+resourceGoneTimeout+5*time.Minute)
+			defer cancel()
+
+			By("deleting the access and the claim")
+			Expect(suiteDyn.Resource(bucketAccessGVR).Namespace(suiteCfg.namespace).Delete(ctx, access, metav1.DeleteOptions{})).To(Succeed())
+			Expect(waitResourceGone(ctx, bucketAccessGVR, suiteCfg.namespace, access, resourceGoneTimeout)).To(Succeed())
+			Expect(suiteDyn.Resource(bucketClaimGVR).Namespace(suiteCfg.namespace).Delete(ctx, claim, metav1.DeleteOptions{})).To(Succeed())
+			Expect(waitResourceGone(ctx, bucketClaimGVR, suiteCfg.namespace, claim, resourceGoneTimeout)).To(Succeed())
+
+			By("asserting the Bucket CR is gone (the claim owns it) even under Retain")
+			Expect(waitResourceGone(ctx, bucketGVR, "", boundBucket, resourceGoneTimeout)).To(Succeed())
+
+			// The greenfield bucket name is derived from namespace+claim name, so the
+			// same claim provisions the same bucket again — and Retain means the
+			// backend still holds it, data and all. Recreate with Delete this time so
+			// the bucket does not outlive the suite.
+			By("recreating the same claim: it must adopt the retained bucket")
+			Expect(createBucketClaim(ctx, buildGreenfieldClaim(claim, suiteCfg.namespace, suiteCfg.oscName, objectv1alpha1.BucketReclaimDelete))).To(Succeed())
+			Expect(waitCondition(ctx, bucketClaimGVR, suiteCfg.namespace, claim,
+				objectv1alpha1.BucketClaimConditionReady, string(metav1.ConditionTrue), suiteCfg.obReadyTimeout)).To(Succeed())
+			adopted, err := getStringField(ctx, bucketClaimGVR, suiteCfg.namespace, claim, "status", "boundBucketName")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(adopted).To(Equal(boundBucket), "the greenfield bucket name must be stable for the same claim")
+
+			By("reading the marker back through a fresh access")
+			Expect(createOSBAccess(ctx, buildOSBAccess(access, suiteCfg.namespace, claim, objectv1alpha1.AccessReadWrite))).To(Succeed())
+			Expect(waitAccessReady(ctx, suiteCfg.namespace, access)).To(Succeed())
+			Expect(s3AssertMarkerContent(ctx, "s3-greenfield-read", suiteCfg.namespace, credsSecretName(access), markerObj, markerBody)).To(Succeed(),
+				"Retain must have kept the tenant's objects after the claim was deleted")
 		})
 	})
 }
