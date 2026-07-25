@@ -23,6 +23,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	objectv1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
@@ -145,6 +147,40 @@ func createSpecs() {
 
 			By("running the mc probe Job against the bucket endpoint")
 			Expect(runS3ProbeJob(ctx, "s3-probe", suiteCfg.namespace, secretName)).To(Succeed())
+		})
+
+		It("reports the data-plane capacity in status", func() {
+			if expectedBackend() != string(objectv1alpha1.BackendGarage) {
+				Skip("only the Garage driver reports capacity today (SeaweedFS/Ceph RGW report none)")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+
+			// status.capacity.total is the Garage layout total: the per-node capacity
+			// assigned to every data-plane node. Deriving the expectation from the
+			// StatefulSet's own PVC request keeps it honest across profiles (System's
+			// managed 10Gi default, Lightweight's storage.sizePerNode).
+			// Used/available/usedPercent are not populated by this driver yet, so
+			// nothing is asserted about them.
+			sts, err := suiteClientset.AppsV1().StatefulSets(moduleNS).Get(ctx, suiteCfg.oscName+"-garage", metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred(), "get Garage StatefulSet")
+			Expect(sts.Spec.Replicas).NotTo(BeNil())
+			Expect(sts.Spec.VolumeClaimTemplates).To(HaveLen(1))
+			perNode := sts.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests[corev1.ResourceStorage]
+			want := perNode.Value() * int64(*sts.Spec.Replicas)
+
+			Eventually(func() (int64, error) {
+				raw, err := getStringField(ctx, objectStoreGVR, "", suiteCfg.oscName, "status", "capacity", "total")
+				if err != nil {
+					return 0, err
+				}
+				total, err := resource.ParseQuantity(raw)
+				if err != nil {
+					return 0, err
+				}
+				return total.Value(), nil
+			}, 3*time.Minute, pollInterval).Should(Equal(want),
+				"status.capacity.total must be the per-node capacity times the data-plane node count")
 		})
 	})
 }

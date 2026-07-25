@@ -989,6 +989,37 @@ func s3AssertMarkerContent(ctx context.Context, jobName, ns, secretName, object,
 	return runS3ScriptJob(ctx, jobName, ns, secretName, 10, script)
 }
 
+// s3AssertQuotaEnforced fills a bucket up to its object quota and then keeps
+// trying to exceed it until a write is refused. Polling matters: the backend
+// counts objects asynchronously, so the first write past the limit can still be
+// accepted — a single attempt would be flaky. Once a write is refused, a read is
+// done to prove the client and credentials are fine and the refusal was specific
+// to the quota rather than a broken connection.
+func s3AssertQuotaEnforced(ctx context.Context, jobName, ns, secretName string, maxObjects int) error {
+	lines := []string{
+		s3AliasLine(),
+		fmt.Sprintf("i=0; while [ $i -lt %d ]; do i=$((i+1)); echo filler | mc pipe \"%s/$%s/quota-fill-$i.txt\"; done",
+			maxObjects, probeAlias, objectv1alpha1.SecretKeyS3Bucket),
+		"echo '--- at quota, trying to exceed it ---'",
+		"refused=0; attempt=0",
+		"while [ $attempt -lt 30 ]; do",
+		"  attempt=$((attempt+1))",
+		fmt.Sprintf("  if echo over | mc pipe \"%s/$%s/quota-over-$attempt.txt\" 2>/tmp/err; then", probeAlias, objectv1alpha1.SecretKeyS3Bucket),
+		"    sleep 2; continue",
+		"  fi",
+		"  refused=1; echo \"--- refusal after $attempt attempt(s): $(cat /tmp/err) ---\"; break",
+		"done",
+		"if [ \"$refused\" != 1 ]; then",
+		"  echo \"ERROR: the object quota was never enforced\"",
+		"  exit 1",
+		"fi",
+		fmt.Sprintf("mc cat \"%s/$%s/quota-fill-1.txt\" >/dev/null", probeAlias, objectv1alpha1.SecretKeyS3Bucket),
+		"echo QUOTA ENFORCED",
+	}
+
+	return runS3ScriptJob(ctx, jobName, ns, secretName, 3, strings.Join(lines, "\n"))
+}
+
 // s3AssertCredentialsRejected succeeds only when the given credentials are
 // REFUSED by the backend, and refused for an authentication reason. Revocation
 // asserted at the Kubernetes level (the Secret is gone, the condition is False)

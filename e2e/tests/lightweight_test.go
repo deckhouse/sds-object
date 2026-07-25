@@ -103,6 +103,30 @@ func lightweightSpecs() {
 			Expect(sts.Spec.Template.Annotations).To(HaveKey("storage.deckhouse.io/config-hash"))
 		})
 
+		It("allows a bucket name already used on another cluster", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), suiteCfg.obReadyTimeout+2*time.Minute)
+			defer cancel()
+
+			// Bucket-name uniqueness is per ObjectStore, so the same effective name on
+			// a different cluster must be admitted — the webhook rejecting it would
+			// make names globally scarce for no reason. The collision case (same name,
+			// same cluster) is covered in validation_test.go.
+			const twin = "e2e-light-name-twin"
+
+			DeferCleanup(func() {
+				bg, cancel := context.WithTimeout(context.Background(), resourceGoneTimeout+time.Minute)
+				defer cancel()
+				_ = suiteDyn.Resource(bucketGVR).Delete(bg, twin, metav1.DeleteOptions{})
+				_ = waitResourceGone(bg, bucketGVR, "", twin, resourceGoneTimeout)
+			})
+
+			osb := buildOSB(twin, oscName, objectv1alpha1.BucketReclaimDelete)
+			osb.Object["spec"].(map[string]interface{})["bucketName"] = suiteCfg.bucketName
+			Expect(createOSB(ctx, osb)).To(Succeed(),
+				"the same bucket name on another cluster must not collide")
+			Expect(waitOSBReady(ctx, twin)).To(Succeed())
+		})
+
 		It("rejects changing spec.redundancy on a non-System cluster (CEL, dry-run)", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
