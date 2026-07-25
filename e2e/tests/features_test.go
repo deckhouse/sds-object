@@ -133,5 +133,41 @@ func featuresSpecs() {
 			By("filling the bucket to the quota and asserting further writes are refused")
 			Expect(s3AssertQuotaEnforced(ctx, "s3-quota-enforced", suiteCfg.namespace, secretName, maxObjects)).To(Succeed())
 		})
+
+		It("actually refuses writes past the size quota", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), suiteCfg.obReadyTimeout+suiteCfg.probeJobTimeout+5*time.Minute)
+			defer cancel()
+
+			// The size quota is enforced by every backend — including SeaweedFS, whose
+			// only quota is the size one — so unlike the object-count case this runs on
+			// all profiles.
+			bucket := suiteCfg.bucketName + "-quota-size"
+			access := accessName(bucket)
+
+			DeferCleanup(func() {
+				bg := context.Background()
+				_ = suiteDyn.Resource(bucketAccessGVR).Namespace(suiteCfg.namespace).Delete(bg, access, metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketClaimGVR).Namespace(suiteCfg.namespace).Delete(bg, claimName(bucket), metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketClaimPolicyGVR).Delete(bg, policyName(bucket), metav1.DeleteOptions{})
+				_ = suiteDyn.Resource(bucketGVR).Delete(bg, bucket, metav1.DeleteOptions{})
+			})
+
+			By("creating a bucket limited to 1Ki")
+			Expect(createOSB(ctx, buildOSBFeatures(bucket, suiteCfg.oscName, objectv1alpha1.BucketReclaimDelete, "",
+				map[string]interface{}{"maxSize": "1Ki"}))).To(Succeed())
+			Expect(waitOSBReady(ctx, bucket)).To(Succeed())
+
+			By("granting the test namespace read-write access")
+			Expect(createOSBPolicy(ctx, buildOSBPolicy(policyName(bucket), bucket, []string{suiteCfg.namespace}))).To(Succeed())
+			Expect(createBucketClaim(ctx, buildBucketClaim(claimName(bucket), suiteCfg.namespace, bucket))).To(Succeed())
+			Expect(createOSBAccess(ctx, buildOSBAccess(access, suiteCfg.namespace, claimName(bucket), objectv1alpha1.AccessReadWrite))).To(Succeed())
+			Expect(waitAccessReady(ctx, suiteCfg.namespace, access)).To(Succeed())
+
+			secretName, err := getStringField(ctx, bucketAccessGVR, suiteCfg.namespace, access, "status", "secretRef", "name")
+			Expect(err).NotTo(HaveOccurred())
+
+			By("asserting a small write succeeds and oversized writes are refused")
+			Expect(s3AssertSizeQuotaEnforced(ctx, "s3-quota-size", suiteCfg.namespace, secretName)).To(Succeed())
+		})
 	})
 }

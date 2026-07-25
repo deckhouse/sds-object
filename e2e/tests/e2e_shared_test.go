@@ -1082,6 +1082,37 @@ func s3AssertQuotaEnforced(ctx context.Context, jobName, ns, secretName string, 
 	return runS3ScriptJob(ctx, jobName, ns, secretName, 3, strings.Join(lines, "\n"))
 }
 
+// s3AssertSizeQuotaEnforced writes one small object (which must succeed, proving
+// the credentials and bucket are fine) and then keeps writing an object larger than
+// the whole quota until a write is refused. It builds its payload by doubling a
+// shell string, so it needs no bulk-data tooling in the probe image, and it polls
+// for the same reason as the object-count variant: backends account usage
+// asynchronously.
+func s3AssertSizeQuotaEnforced(ctx context.Context, jobName, ns, secretName string) error {
+	lines := []string{
+		s3AliasLine(),
+		fmt.Sprintf("printf ok | mc pipe \"%s/$%s/size-under.bin\"", probeAlias, objectv1alpha1.SecretKeyS3Bucket),
+		"payload=0123456789abcdef",
+		"i=0; while [ $i -lt 8 ]; do payload=\"$payload$payload\"; i=$((i+1)); done", // 16 * 2^8 = 4096 bytes
+		"echo '--- payload is 4Ki, quota is 1Ki ---'",
+		"refused=0; attempt=0",
+		"while [ $attempt -lt 30 ]; do",
+		"  attempt=$((attempt+1))",
+		fmt.Sprintf("  if printf '%%s' \"$payload\" | mc pipe \"%s/$%s/size-over-$attempt.bin\" 2>/tmp/err; then", probeAlias, objectv1alpha1.SecretKeyS3Bucket),
+		"    sleep 2; continue",
+		"  fi",
+		"  refused=1; echo \"--- refusal after $attempt attempt(s): $(cat /tmp/err) ---\"; break",
+		"done",
+		"if [ \"$refused\" != 1 ]; then",
+		"  echo \"ERROR: the size quota was never enforced\"",
+		"  exit 1",
+		"fi",
+		"echo SIZE QUOTA ENFORCED",
+	}
+
+	return runS3ScriptJob(ctx, jobName, ns, secretName, 3, strings.Join(lines, "\n"))
+}
+
 // s3AssertCredentialsRejected succeeds only when the given credentials are
 // REFUSED by the backend, and refused for an authentication reason. Revocation
 // asserted at the Kubernetes level (the Secret is gone, the condition is False)

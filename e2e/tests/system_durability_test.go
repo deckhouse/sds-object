@@ -266,6 +266,8 @@ func systemDurabilitySpecs() {
 
 			rfBefore, err := garageReplicationFactor(ctx, systemStore)
 			Expect(err).NotTo(HaveOccurred())
+			keyBefore, err := getStringField(ctx, bucketAccessGVR, suiteCfg.namespace, testAccess, "status", "accessKeyID")
+			Expect(err).NotTo(HaveOccurred())
 			bindingsBefore, err := systemReplicaBindings(ctx, systemStore)
 			Expect(err).NotTo(HaveOccurred())
 			podsBefore, err := garagePods(ctx, systemStore)
@@ -307,6 +309,16 @@ func systemDurabilitySpecs() {
 			}
 
 			Expect(waitOSCReady(ctx, systemStore)).To(Succeed())
+
+			// A restarted controller reconciles every object from scratch; that must be
+			// idempotent, not a round of re-minting. A re-issued key here would mean the
+			// controller cannot tell "the key is still there" from "the key is gone".
+			By("asserting the restart did not churn the bucket or re-issue the access key")
+			Expect(waitOSBReady(ctx, testBucket)).To(Succeed())
+			Expect(waitAccessReady(ctx, suiteCfg.namespace, testAccess)).To(Succeed())
+			keyAfter, err := getStringField(ctx, bucketAccessGVR, suiteCfg.namespace, testAccess, "status", "accessKeyID")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(keyAfter).To(Equal(keyBefore), "an idempotent reconcile must reuse the issued key")
 
 			By("asserting the data is still served")
 			Expect(s3AssertMarkerContent(ctx, "s3-adoption-read", suiteCfg.namespace, testSecret, markerObj, markerBody)).To(Succeed())

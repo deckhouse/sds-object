@@ -19,6 +19,7 @@ package tests
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -28,6 +29,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	commander "github.com/deckhouse/storage-e2e/pkg/commander"
 
 	objectv1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 )
@@ -232,6 +235,74 @@ func systemSingleReplicaSpecs() {
 
 			By("asserting the single-replica store serves a full S3 round-trip")
 			Expect(runS3ProbeJob(ctx, "s3-probe-single-replica", suiteCfg.namespace, testSecret)).To(Succeed())
+		})
+
+		It("never migrates the single replica when masters are added", func() {
+			if os.Getenv("E2E_COMMANDER_URL") == "" {
+				Skip("adding a master needs Commander (E2E_COMMANDER_URL); the single-master run cannot spread anyway")
+			}
+			// The default profile answers new masters by spreading its replicas one per
+			// node. The single-replica profile must not: there is no second copy to
+			// re-replicate from, so relocating would discard the store. Growing the
+			// control plane is the only way to tell "does not spread" from "had nowhere
+			// to spread to", which is why this needs Commander.
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Minute)
+			defer cancel()
+
+			before, err := systemReplicaBindings(ctx, systemStore)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(before).To(HaveLen(1))
+			nodesBefore, err := garageRunningPodNodes(ctx, systemStore)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(nodesBefore).To(HaveLen(1))
+			GinkgoWriter.Printf("single replica sits on %s (%+v)\n", nodesBefore[0], before)
+
+			DeferCleanup(func() {
+				bg, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
+				defer cancel()
+				if err := commander.SetMasterCount(bg, 1); err != nil {
+					GinkgoWriter.Printf("warning: scale control plane back to 1: %v\n", err)
+					return
+				}
+				_ = waitOSCReady(bg, systemStore)
+			})
+
+			By("scaling the control plane from 1 to 3 masters via Commander")
+			Expect(commander.SetMasterCount(ctx, 3)).To(Succeed())
+			Eventually(func() (int, error) { return controlPlaneNodeCount(ctx) },
+				15*time.Minute, 15*time.Second).Should(Equal(3))
+
+			By("asserting the pool gains a slot per new master, so a move would have been possible")
+			Eventually(func() (int, error) {
+				pvs, err := suiteClientset.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{
+					LabelSelector: "storage.deckhouse.io/object-store=" + systemStore + ",storage.deckhouse.io/system-local-node",
+				})
+				if err != nil {
+					return 0, err
+				}
+				return len(pvs.Items), nil
+			}, 10*time.Minute, 15*time.Second).Should(Equal(3), "one slot per control-plane node")
+
+			By("asserting the replica stays put: same node, same volume, one pod")
+			Consistently(func(g Gomega) {
+				bindings, err := systemReplicaBindings(ctx, systemStore)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(bindings).To(Equal(before), "the single replica must never be re-homed")
+				nodes, err := garageRunningPodNodes(ctx, systemStore)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(nodes).To(Equal(nodesBefore), "the pod must stay on its master")
+			}, 5*time.Minute, 20*time.Second).Should(Succeed())
+			Expect(waitOSCReady(ctx, systemStore)).To(Succeed(), "the store must stay healthy across the growth")
+
+			By("scaling the control plane back to 1 master")
+			Expect(commander.SetMasterCount(ctx, 1)).To(Succeed())
+			Eventually(func() (int, error) { return controlPlaneNodeCount(ctx) },
+				25*time.Minute, 15*time.Second).Should(Equal(1))
+			Expect(waitOSCReady(ctx, systemStore)).To(Succeed())
+
+			after, err := systemReplicaBindings(ctx, systemStore)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(after).To(Equal(before), "shrinking back must not have moved the replica either")
 		})
 
 		It("switches back to three replicas, again by recreating the store", func() {

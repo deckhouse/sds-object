@@ -26,6 +26,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	objectv1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 )
@@ -147,6 +148,34 @@ func createSpecs() {
 
 			By("running the mc probe Job against the bucket endpoint")
 			Expect(runS3ProbeJob(ctx, "s3-probe", suiteCfg.namespace, secretName)).To(Succeed())
+		})
+
+		It("publishes the admin Secret reference and the observed generation", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+
+			// status.adminSecretRef is the contract that tells an operator which Secret
+			// holds the backend admin credentials the controller manages buckets with;
+			// observedGeneration is how a client knows the status it is reading belongs
+			// to the spec it applied. Neither was checked anywhere.
+			osc, err := suiteDyn.Resource(objectStoreGVR).Get(ctx, suiteCfg.oscName, metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred())
+
+			observed, found, err := unstructured.NestedInt64(osc.Object, "status", "observedGeneration")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(found).To(BeTrue(), "status.observedGeneration must be published")
+			Expect(observed).To(Equal(osc.GetGeneration()), "a Ready store must have observed its current spec")
+
+			if expectedBackend() != string(objectv1alpha1.BackendGarage) {
+				// Only the Garage driver publishes an admin Secret today; the others
+				// authenticate differently (SeaweedFS filer, Ceph RGW admin ops).
+				return
+			}
+			secretName, err := getStringField(ctx, objectStoreGVR, "", suiteCfg.oscName, "status", "adminSecretRef", "name")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(secretName).NotTo(BeEmpty(), "status.adminSecretRef.name must be published")
+			_, err = suiteClientset.CoreV1().Secrets(moduleNS).Get(ctx, secretName, metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred(), "the referenced admin Secret must exist in %s", moduleNS)
 		})
 
 		It("reports the data-plane capacity in status", func() {
