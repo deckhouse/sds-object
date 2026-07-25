@@ -19,6 +19,7 @@ package tests
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -246,6 +247,28 @@ func systemSingleReplicaSpecs() {
 				return found, err
 			}, 10*time.Minute, 10*time.Second).Should(BeFalse(),
 				"clearing the setting must remove redundancy, restoring the default profile")
+
+			// Restart the controller while the teardown is in flight. The pinned
+			// factor is rewritten only after the data plane is fully gone, so a
+			// restarted controller must still see the mismatch and finish the
+			// recreate instead of leaving a half-switched cluster. Catching the exact
+			// window is best-effort — the convergence assertions below hold either
+			// way, and which case ran is logged.
+			By("restarting the controller during the recreate")
+			caught := false
+			for deadline := time.Now().Add(3 * time.Minute); time.Now().Before(deadline); {
+				if strings.Contains(storeConditionMessage(ctx, systemStore, objectv1alpha1.ObjectStoreConditionBackendReady),
+					"recreating the System store") {
+					caught = true
+					break
+				}
+				if incarnation, err := garageSystemIncarnation(ctx, systemStore); err == nil && incarnation > baseIncarnation+1 {
+					break // the recreate already got past the teardown
+				}
+				time.Sleep(5 * time.Second)
+			}
+			GinkgoWriter.Printf("controller restarted with the teardown in flight: %v\n", caught)
+			Expect(restartController(ctx, suiteCfg.moduleReadyTO)).To(Succeed(), "the controller must come back Ready")
 
 			By("waiting for the controller to rebuild three replicas at the following incarnation")
 			Eventually(func(g Gomega) {

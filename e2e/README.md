@@ -68,6 +68,24 @@ When you point `E2E_OSC_TYPE` at a heavier profile, enable the corresponding
 modules in `tests/cluster_config.yml` first (see the comments there). The suite
 fails fast in `BeforeSuite` if a profile's required env knob is missing.
 
+## System-specific specs
+
+Three spec groups cover the shipped `system` store beyond the generic
+create/bucket/access flow:
+
+- `system-bucket` ([tests/system_test.go](tests/system_test.go)): the shipped CRs,
+  the replica/factor/pool shape, and — on Commander runs only
+  (`E2E_COMMANDER_URL`) — the master-count transitions 1→3→1 with the automatic
+  rebalance.
+- `system-durability` ([tests/system_durability_test.go](tests/system_durability_test.go)):
+  the data-safety mechanisms, without needing Commander. A full data-plane restart
+  must bring every replica back to its own volume on its own node with the data
+  intact, and a recycled replica (the step a rebalance is made of) must come back
+  with its original Garage node identity restored from the identity Secret.
+- `system-single-replica` ([tests/system_single_replica_test.go](tests/system_single_replica_test.go)):
+  the `systemBucket.singleReplica` setting, including the controller being
+  restarted mid-recreate. **Destructive** — see `E2E_SKIP_SYSTEM_RECREATE` below.
+
 ## Why one shared cluster + Ordered specs
 
 The validation and delete specs build on the cluster and bucket created by the

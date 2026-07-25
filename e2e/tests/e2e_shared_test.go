@@ -540,6 +540,154 @@ func garageSystemIncarnation(ctx context.Context, storeName string) (int, error)
 	return strconv.Atoi(raw)
 }
 
+// systemLocalStorageClassName is the managed StorageClass backing the System
+// profile's node-sticky local PVs.
+const systemLocalStorageClassName = "sds-object-system-local"
+
+// replicaBinding records how one System replica is nailed to its data: the PV its
+// PVC is bound to and the node that PV's nodeAffinity pins. The PV UID is carried
+// too, because pool PV names are deterministic per node and slot: a recycled
+// replica can rebind the same NAME (a freshly created object) when there is only
+// one master to place it on, so identity has to be compared by UID.
+type replicaBinding struct {
+	pvName string
+	pvUID  types.UID
+	node   string
+}
+
+// systemReplicaBindings maps each replica PVC of a System store to its current
+// PV + pinned node. It is the observable form of the node-stickiness contract: the
+// bindings must survive a pod restart untouched, and a recycled replica must show
+// up with a different PV.
+func systemReplicaBindings(ctx context.Context, storeName string) (map[string]replicaBinding, error) {
+	pvcs, err := suiteClientset.CoreV1().PersistentVolumeClaims(moduleNS).List(ctx, metav1.ListOptions{
+		LabelSelector: "storage.deckhouse.io/object-store=" + storeName,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]replicaBinding, len(pvcs.Items))
+	for i := range pvcs.Items {
+		pvc := &pvcs.Items[i]
+		binding := replicaBinding{pvName: pvc.Spec.VolumeName}
+		if binding.pvName != "" {
+			pv, err := suiteClientset.CoreV1().PersistentVolumes().Get(ctx, binding.pvName, metav1.GetOptions{})
+			if err != nil {
+				return nil, err
+			}
+			binding.pvUID = pv.UID
+			binding.node = pvPinnedHostname(*pv)
+		}
+		out[pvc.Name] = binding
+	}
+	return out, nil
+}
+
+// garagePods lists the data-plane pods of a store.
+func garagePods(ctx context.Context, storeName string) (*corev1.PodList, error) {
+	return suiteClientset.CoreV1().Pods(moduleNS).List(ctx, metav1.ListOptions{
+		LabelSelector: "storage.deckhouse.io/object-store=" + storeName,
+	})
+}
+
+// deleteGaragePods deletes every data-plane pod of a store and returns the names
+// (and UIDs) it deleted, so a spec can tell the replacements apart.
+func deleteGaragePods(ctx context.Context, storeName string) (map[string]types.UID, error) {
+	pods, err := garagePods(ctx, storeName)
+	if err != nil {
+		return nil, err
+	}
+	deleted := make(map[string]types.UID, len(pods.Items))
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		deleted[p.Name] = p.UID
+		if err := suiteClientset.CoreV1().Pods(moduleNS).Delete(ctx, p.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("delete pod %s: %w", p.Name, err)
+		}
+	}
+	return deleted, nil
+}
+
+// statefulSetReadyReplicas returns the desired and ready replica counts of a
+// store's StatefulSet.
+func statefulSetReadyReplicas(ctx context.Context, storeName string) (desired, ready int32, err error) {
+	sts, err := suiteClientset.AppsV1().StatefulSets(moduleNS).Get(ctx, storeName+"-garage", metav1.GetOptions{})
+	if err != nil {
+		return 0, 0, err
+	}
+	if sts.Spec.Replicas != nil {
+		desired = *sts.Spec.Replicas
+	}
+	return desired, sts.Status.ReadyReplicas, nil
+}
+
+// containerLog fetches the (current instance's) log of one container in a pod —
+// used to confirm the restore-node-key initContainer actually restored a persisted
+// Garage identity.
+func containerLog(ctx context.Context, ns, pod, container string) (string, error) {
+	raw, err := suiteClientset.CoreV1().Pods(ns).
+		GetLogs(pod, &corev1.PodLogOptions{Container: container}).
+		DoRaw(ctx)
+	if err != nil {
+		return "", fmt.Errorf("read %s log of pod %s: %w", container, formatRef(ns, pod), err)
+	}
+	return string(raw), nil
+}
+
+// restartController deletes the module controller's pods and waits for the
+// Deployment to be Ready again, so a spec can assert reconciliation resumes
+// correctly after a restart in the middle of an operation.
+func restartController(ctx context.Context, timeout time.Duration) error {
+	// Take the selector from the Deployment rather than guessing its labels, which
+	// are owned by the shared helm_lib controller template.
+	dep, err := suiteClientset.AppsV1().Deployments(moduleNS).Get(ctx, controllerDeploymentName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get controller Deployment: %w", err)
+	}
+	selector, err := metav1.LabelSelectorAsSelector(dep.Spec.Selector)
+	if err != nil {
+		return fmt.Errorf("build controller pod selector: %w", err)
+	}
+	pods, err := suiteClientset.CoreV1().Pods(moduleNS).List(ctx, metav1.ListOptions{
+		LabelSelector: selector.String(),
+	})
+	if err != nil {
+		return fmt.Errorf("list controller pods: %w", err)
+	}
+	if len(pods.Items) == 0 {
+		return fmt.Errorf("no controller pods found in %s (label app=%s)", moduleNS, controllerDeploymentName)
+	}
+	for i := range pods.Items {
+		name := pods.Items[i].Name
+		if err := suiteClientset.CoreV1().Pods(moduleNS).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete controller pod %s: %w", name, err)
+		}
+	}
+	return waitControllerReady(ctx, timeout)
+}
+
+// storeConditionMessage returns the message of one condition on an ObjectStore
+// (empty when absent), for specs that watch the controller narrate progress.
+func storeConditionMessage(ctx context.Context, name, condType string) string {
+	u, err := suiteDyn.Resource(objectStoreGVR).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return ""
+	}
+	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	for _, c := range conds {
+		cm, ok := c.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if t, _, _ := unstructured.NestedString(cm, "type"); t != condType {
+			continue
+		}
+		msg, _, _ := unstructured.NestedString(cm, "message")
+		return msg
+	}
+	return ""
+}
+
 // moduleConfigGVR is the Deckhouse ModuleConfig resource (cluster-scoped); the
 // suite patches spec.settings on it to drive module-level knobs the way an
 // operator would.
@@ -800,6 +948,22 @@ func s3PutMarker(ctx context.Context, jobName, ns, secretName, object, content s
 		fmt.Sprintf("got=$(mc cat \"%s/$%s/%s\")", probeAlias, objectv1alpha1.SecretKeyS3Bucket, object),
 		fmt.Sprintf("test \"$got\" = %q", content),
 		"echo MARKER WRITTEN",
+	}, "\n")
+
+	return runS3ScriptJob(ctx, jobName, ns, secretName, 10, script)
+}
+
+// s3AssertMarkerContent succeeds only when the marker object is still there with
+// exactly the content it was written with — the observable form of "the data
+// survived".
+func s3AssertMarkerContent(ctx context.Context, jobName, ns, secretName, object, content string) error {
+	script := strings.Join([]string{
+		s3AliasLine(),
+		fmt.Sprintf("echo '--- listing ---'; mc ls \"%s/$%s\"", probeAlias, objectv1alpha1.SecretKeyS3Bucket),
+		fmt.Sprintf("got=$(mc cat \"%s/$%s/%s\")", probeAlias, objectv1alpha1.SecretKeyS3Bucket, object),
+		"echo \"--- content: $got ---\"",
+		fmt.Sprintf("test \"$got\" = %q", content),
+		"echo MARKER INTACT",
 	}, "\n")
 
 	return runS3ScriptJob(ctx, jobName, ns, secretName, 10, script)
