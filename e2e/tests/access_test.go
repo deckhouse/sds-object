@@ -100,6 +100,9 @@ func accessSpecs() {
 
 			By("snapshotting the issued credentials before they are revoked")
 			Expect(snapshotCredentials(ctx, suiteCfg.namespace, secret, staleSecret)).To(Succeed())
+			issuedKeyID, err := getStringField(ctx, bucketAccessGVR, suiteCfg.namespace, access, "status", "accessKeyID")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(issuedKeyID).NotTo(BeEmpty())
 
 			By("deleting the policy: the claim unbinds, the access is revoked and its Secret garbage-collected")
 			Expect(suiteDyn.Resource(bucketClaimPolicyGVR).Delete(ctx, policy, metav1.DeleteOptions{})).To(Succeed())
@@ -115,9 +118,12 @@ func accessSpecs() {
 			}).WithTimeout(2 * time.Minute).WithPolling(pollInterval).Should(Equal("False"))
 			Expect(waitSecretGone(ctx, suiteCfg.namespace, secret, 2*time.Minute)).To(Succeed())
 
-			By("asserting the backend itself refuses the revoked credentials")
+			By("asserting the key was deleted in the backend, not just dropped from the Secret")
+			expectBackendKeyGone(ctx, suiteCfg.oscName, issuedKeyID)
+
+			By("asserting the backend refuses the revoked credentials over S3")
 			Expect(s3AssertCredentialsRejected(ctx, "s3-revoked-creds", suiteCfg.namespace, staleSecret)).To(Succeed(),
-				"dropping the Secret is not revocation: the key must be gone from the backend too")
+				"a revoked key must stop working")
 		})
 
 		It("matches a namespace by regexp pattern", func() {
@@ -200,6 +206,7 @@ func accessSpecs() {
 			Expect(runS3ProbeJob(ctx, "s3-probe-rotate", suiteCfg.namespace, secretName)).To(Succeed())
 
 			By("confirming the superseded key was revoked, not just replaced in the Secret")
+			expectBackendKeyGone(ctx, suiteCfg.oscName, oldKeyID)
 			Expect(s3AssertCredentialsRejected(ctx, "s3-rotated-away-creds", suiteCfg.namespace, staleSecret)).To(Succeed(),
 				"rotation must delete the previous key from the backend, or it stays usable forever")
 		})
@@ -341,6 +348,21 @@ func annotateAccess(ctx context.Context, ns, name, key, value string) error {
 	_, err := suiteDyn.Resource(bucketAccessGVR).Namespace(ns).
 		Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{})
 	return err
+}
+
+// expectBackendKeyGone asserts the access key is absent from the backend itself,
+// which is what revocation means — and unlike an S3 probe it depends on no error
+// wording. Garage-backed profiles only; the others expose no comparable audit, so
+// there the S3 refusal stands alone.
+func expectBackendKeyGone(ctx context.Context, storeName, keyID string) {
+	GinkgoHelper()
+	if expectedBackend() != string(objectv1alpha1.BackendGarage) || keyID == "" {
+		return
+	}
+	Eventually(func() (string, error) {
+		return garageCLI(ctx, storeName, "key", "list")
+	}, 5*time.Minute, pollInterval).ShouldNot(ContainSubstring(keyID),
+		"the key must be deleted in the backend, not merely dropped from the Secret")
 }
 
 // getSecretValue returns a single key from a Secret as a string.

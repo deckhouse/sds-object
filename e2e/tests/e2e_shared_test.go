@@ -1119,14 +1119,20 @@ func s3AssertSizeQuotaEnforced(ctx context.Context, jobName, ns, secretName stri
 }
 
 // s3AssertCredentialsRejected succeeds only when the given credentials are
-// REFUSED by the backend, and refused for an authentication reason. Revocation
-// asserted at the Kubernetes level (the Secret is gone, the condition is False)
-// says nothing about the backend still honouring the key, which is the half that
-// matters; this closes it.
+// REFUSED by the backend. Revocation asserted at the Kubernetes level (the Secret
+// is gone, the condition is False) says nothing about the backend still honouring
+// the key, which is the half that matters; this closes it.
 //
 // The alias is configured through MC_HOST_<alias> rather than `mc alias set`,
 // which validates the credentials up front — a failure there would abort the
 // script before it could tell "rejected" from "misconfigured".
+//
+// It does not try to recognise the refusal by wording: `mc` renders each backend's
+// auth error in its own words (Garage's InvalidAccessKeyId arrives as "The Access
+// Key Id you provided does not exist in our records"), so a whitelist of phrases
+// only produces false failures. Instead the transport-level failures that would
+// prove nothing about revocation are rejected explicitly, and callers pair this
+// with expectBackendKeyGone for an authoritative check.
 func s3AssertCredentialsRejected(ctx context.Context, jobName, ns, secretName string) error {
 	script := strings.Join([]string{
 		"set -e",
@@ -1138,16 +1144,17 @@ func s3AssertCredentialsRejected(ctx context.Context, jobName, ns, secretName st
 		"  exit 1",
 		"fi",
 		"echo \"--- refusal: $out ---\"",
-		"echo \"$out\" | grep -Eqi 'invalidaccesskeyid|access ?denied|signature|forbidden|not authorized' || {",
-		"  echo \"ERROR: the request failed, but not with an authentication error\"",
-		"  exit 1",
-		"}",
+		"case \"$out\" in",
+		"  *\"no such host\"*|*\"connection refused\"*|*\"i/o timeout\"*|*\"context deadline\"*|*\"EOF\"*)",
+		"    echo \"ERROR: the endpoint was unreachable, which proves nothing about revocation\"",
+		"    exit 1;;",
+		"esac",
 		"echo CREDENTIALS REJECTED",
 	}, "\n")
 
-	// A revoked key must be refused immediately; retries would only mask a
-	// backend that keeps honouring it for a while.
-	return runS3ScriptJob(ctx, jobName, ns, secretName, 1, script)
+	// A revoked key must be refused; two attempts tolerate one transient hiccup
+	// without masking a backend that keeps honouring the key.
+	return runS3ScriptJob(ctx, jobName, ns, secretName, 2, script)
 }
 
 // s3AssertMarkerAbsent succeeds only when the credentials work, the bucket is
@@ -1214,16 +1221,41 @@ func runS3ScriptJob(ctx context.Context, jobName, ns, secretName string, backoff
 				return nil
 			}
 			if j.Status.Failed >= backoff {
-				return fmt.Errorf("probe job %s failed (%d attempts); inspect `kubectl -n %s logs job/%s`", formatRef(ns, jobName), j.Status.Failed, ns, jobName)
+				dumpJobLogs(ctx, ns, jobName)
+				return fmt.Errorf("probe job %s failed (%d attempts); see its log above", formatRef(ns, jobName), j.Status.Failed)
 			}
 		}
 		if time.Now().After(deadline) {
+			dumpJobLogs(ctx, ns, jobName)
 			s, f := jobStatus(j)
 			return fmt.Errorf("timeout waiting for probe job %s to succeed (succeeded=%d failed=%d)", formatRef(ns, jobName), s, f)
 		}
 		if !sleepCtx(ctx, pollInterval) {
 			return ctx.Err()
 		}
+	}
+}
+
+// dumpJobLogs prints the logs of a probe Job's pods. Every probe script narrates
+// what it saw before failing, and that narration is the whole diagnosis — without
+// it a failure only says "the job exited non-zero", which is unreadable in CI where
+// the cluster is gone by the time anyone looks.
+func dumpJobLogs(ctx context.Context, ns, jobName string) {
+	pods, err := suiteClientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: "job-name=" + jobName,
+	})
+	if err != nil {
+		GinkgoWriter.Printf("  probe job %s: cannot list pods: %v\n", formatRef(ns, jobName), err)
+		return
+	}
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		log, err := containerLog(ctx, ns, p.Name, "mc")
+		if err != nil {
+			GinkgoWriter.Printf("  probe pod %s (%s): cannot read log: %v\n", p.Name, p.Status.Phase, err)
+			continue
+		}
+		GinkgoWriter.Printf("  probe pod %s (%s) log:\n%s\n", p.Name, p.Status.Phase, strings.TrimRight(log, "\n"))
 	}
 }
 
