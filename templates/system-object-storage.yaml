@@ -7,18 +7,24 @@
   right to bind it via a brownfield BucketClaim (binding is deny-by-default
   otherwise).
 
-  System runs a FIXED 3-replica Garage (a StatefulSet), independent of the
-  control-plane node count: replicas spread one-per-node across masters when
+  By default System runs a fixed 3-replica Garage (a StatefulSet), independent of
+  the control-plane node count: replicas spread one-per-node across masters when
   several exist and co-locate on the single master otherwise. Storage is a
   per-replica node-sticky local PV (managed StorageClass sds-object-system-local,
   a controller-provisioned pool of nodeAffinity-pinned PVs), so a replica returns
   to its node — hence its data — after a restart. The replication factor is pinned
-  at 3 (spec.redundancy is not set / not allowed for System). Because three Garage
-  nodes always run, the quorum tracks the pod count, not the master count: the
-  store keeps serving read-write across master-count changes (3<->2<->1), and the
-  layout is reconciled as replicas move and rejoin. Co-located replicas share one
-  disk, so hardware-level redundancy is only realised while masters allow
-  spreading (see DESIGN).
+  at 3. Because three Garage nodes always run, the quorum tracks the pod count,
+  not the master count: the store keeps serving read-write across master-count
+  changes (3<->2<->1), and the layout is reconciled as replicas move and rejoin.
+  Co-located replicas share one disk, so hardware-level redundancy is only
+  realised while masters allow spreading (see DESIGN).
+
+  systemBucket.singleReplica renders spec.redundancy: None instead, which trades
+  all of that for one replica with replication factor 1, pinned to a single master
+  and never migrated. Toggling the setting either way makes the controller RECREATE
+  the store empty (Garage cannot change its replication factor in place), so the
+  stored objects are lost — see the setting's description in
+  openapi/config-values.yaml and docs/USAGE.
 */ -}}
 {{- if .Values.sdsObject.systemBucket.enabled }}
 apiVersion: storage.deckhouse.io/v1alpha1
@@ -28,6 +34,9 @@ metadata:
   {{- include "helm_lib_module_labels" (list .) | nindent 2 }}
 spec:
   type: System
+  {{- if .Values.sdsObject.systemBucket.singleReplica }}
+  redundancy: None
+  {{- end }}
   reclaimPolicy: Retain
 ---
 apiVersion: storage.deckhouse.io/v1alpha1

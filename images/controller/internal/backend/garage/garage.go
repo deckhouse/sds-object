@@ -98,12 +98,37 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 	if err := d.ensureSecret(ctx, cluster); err != nil {
 		return state, fmt.Errorf("ensure secret: %w", err)
 	}
-	rf, err := d.pinnedReplicationFactor(ctx, cluster)
+	pinned, err := d.pinnedState(ctx, cluster)
 	if err != nil {
-		return state, fmt.Errorf("compute replication factor: %w", err)
+		return state, fmt.Errorf("read pinned cluster state: %w", err)
 	}
+
+	// A System replica-count switch (the sdsObject.systemBucket.singleReplica
+	// module setting toggled) cannot be applied in place: it changes the
+	// replication factor, which Garage refuses to do on a live cluster. Tear the
+	// data plane down instead and let the rest of this reconcile rebuild it empty
+	// at the next incarnation. This DESTROYS the stored objects — documented on
+	// the setting.
+	if cluster.Spec.Type == v1alpha1.ClusterTypeSystem {
+		if want := initialReplicationFactor(cluster); pinned.exists && pinned.rf != want {
+			done, msg, err := d.teardownSystemDataPlane(ctx, cluster)
+			if err != nil {
+				return state, fmt.Errorf("recreate system data plane: %w", err)
+			}
+			if !done {
+				state.Message = msg
+				return state, nil
+			}
+			pinned = pinnedState{rf: want, incarnation: pinned.incarnation + 1, exists: true}
+			d.log.Info(fmt.Sprintf(
+				"[EnsureCluster] System %q torn down for a replica-count switch; rebuilding empty at incarnation %d (replication factor %d)",
+				cluster.Name, pinned.incarnation, pinned.rf))
+		}
+	}
+
+	rf := pinned.rf
 	cfgHash := configHash(renderConfig(rf))
-	if err := d.apply(ctx, cluster, buildConfigMap(cluster, d.namespace, rf)); err != nil {
+	if err := d.apply(ctx, cluster, buildConfigMap(cluster, d.namespace, rf, pinned.incarnation)); err != nil {
 		return state, fmt.Errorf("ensure configmap: %w", err)
 	}
 	if err := d.apply(ctx, cluster, buildServiceAccount(cluster, d.namespace)); err != nil {
@@ -121,7 +146,7 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 	// System is backed by node-sticky local PVs the controller provisions itself;
 	// the pool must exist before the StatefulSet's PVCs try to bind.
 	if cluster.Spec.Type == v1alpha1.ClusterTypeSystem {
-		if err := d.ensureSystemLocalPVs(ctx, cluster); err != nil {
+		if err := d.ensureSystemLocalPVs(ctx, cluster, pinned.incarnation); err != nil {
 			return state, fmt.Errorf("ensure system local PVs: %w", err)
 		}
 		// Persist each replica's Garage node identity before any placement move, so
@@ -167,23 +192,38 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 	return state, nil
 }
 
-// pinnedReplicationFactor returns the replication_factor to bake into
-// garage.toml. Garage cannot change replication_factor on a live cluster, so it
-// is decided ONCE at cluster init and then pinned: the value is read back from
-// the running garage.toml on every subsequent reconcile and never recomputed
-// from the current node count. This keeps the factor stable across control-plane
-// node-count changes (e.g. masters going 3->1->3) — every node keeps the same
-// factor, no data-losing rf change is ever attempted, and the cluster merely
-// degrades to read-only (data intact) if the live node count drops below it.
-func (d *Driver) pinnedReplicationFactor(ctx context.Context, cluster *v1alpha1.ObjectStore) (int32, error) {
+// pinnedState is the cluster state the controller pins at init and reads back
+// afterwards instead of recomputing: the Garage replication factor and (System
+// only) the data-plane incarnation. exists reports whether the garage.toml
+// ConfigMap holding it was found, i.e. whether the cluster was ever initialized.
+type pinnedState struct {
+	rf          int32
+	incarnation int32
+	exists      bool
+}
+
+// pinnedState returns the replication_factor to bake into garage.toml plus the
+// System data-plane incarnation. Garage cannot change replication_factor on a
+// live cluster, so it is decided ONCE at cluster init and then pinned: the value
+// is read back from the running garage.toml on every subsequent reconcile and
+// never recomputed from the current node count. This keeps the factor stable
+// across control-plane node-count changes (e.g. masters going 3->1->3) — every
+// node keeps the same factor, no data-losing rf change is ever attempted, and the
+// cluster merely degrades to read-only (data intact) if the live node count drops
+// below it.
+//
+// The only sanctioned way out of a pinned factor is an explicit recreate of the
+// System data plane (a replica-count switch), which EnsureCluster performs by
+// tearing everything down and bumping the incarnation.
+func (d *Driver) pinnedState(ctx context.Context, cluster *v1alpha1.ObjectStore) (pinnedState, error) {
 	existing := &corev1.ConfigMap{}
 	err := d.client.Get(ctx, client.ObjectKey{Namespace: d.namespace, Name: configName(cluster)}, existing)
 	switch {
 	case apierrors.IsNotFound(err):
 		// First init: no pinned factor yet, compute it once.
-		return initialReplicationFactor(cluster), nil
+		return pinnedState{rf: initialReplicationFactor(cluster), incarnation: firstSystemIncarnation}, nil
 	case err != nil:
-		return 0, err
+		return pinnedState{}, err
 	}
 	// The ConfigMap exists — the factor is already pinned and must be read back,
 	// never recomputed. If it is missing/unparseable, fail closed rather than
@@ -191,15 +231,16 @@ func (d *Driver) pinnedReplicationFactor(ctx context.Context, cluster *v1alpha1.
 	// initialized with and trigger a forbidden replication_factor change.
 	rf := replicationFactorFromConfigMap(existing)
 	if rf <= 0 {
-		return 0, fmt.Errorf("garage.toml ConfigMap %q exists but its replication_factor is absent or unparseable; refusing to recompute (would risk a replication_factor change on a live cluster)", configName(cluster))
+		return pinnedState{}, fmt.Errorf("garage.toml ConfigMap %q exists but its replication_factor is absent or unparseable; refusing to recompute (would risk a replication_factor change on a live cluster)", configName(cluster))
 	}
-	return rf, nil
+	return pinnedState{rf: rf, incarnation: systemIncarnationFromConfigMap(existing), exists: true}, nil
 }
 
 // initialReplicationFactor computes the factor to pin at first init: the
-// redundancy intent (for System always Standard=3, since redundancy is not
-// settable there) clamped to the desired replica count. For System the count is
-// fixed (systemReplicas), so the factor is independent of the master count.
+// redundancy intent clamped to the desired replica count. For System the intent
+// is either the default Standard (3 replicas, factor 3) or None (single replica,
+// factor 1) — the only two values the CRD accepts there — and the replica count
+// is fixed either way, so the factor never depends on the master count.
 func initialReplicationFactor(cluster *v1alpha1.ObjectStore) int32 {
 	return clampRF(replicationFactor(cluster), desiredReplicas(cluster))
 }

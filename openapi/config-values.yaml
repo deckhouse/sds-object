@@ -6,8 +6,9 @@ properties:
     description: |
       The built-in system object storage: a `System` ObjectStore
       (Garage on control-plane nodes) with a `system` Bucket for
-      platform needs. The cluster redundancy follows the cluster HA mode
-      (`Standard` when HA is enabled, otherwise `None`).
+      platform needs. It runs three replicas with a replication factor of 3,
+      independent of the control-plane node count, unless `singleReplica`
+      reduces it to one.
     properties:
       enabled:
         type: boolean
@@ -16,6 +17,34 @@ properties:
           Whether to provision the system ObjectStore and its
           `system` bucket. Disable if the platform does not need a built-in
           object storage.
+      singleReplica:
+        type: boolean
+        default: false
+        description: |
+          Run the system ObjectStore as a single Garage replica
+          (`replication_factor: 1`) instead of the default three.
+
+          The replica is placed on one control-plane node and **never migrates
+          between masters**: its data lives on that node's local volume and there
+          is no second copy to re-replicate from. If that node is removed or
+          stays down, the system storage is unavailable until it returns (the data
+          on its disk is not touched), and the controller will not move the
+          replica for you.
+
+          Use it to cut the footprint of the system storage on small or
+          non-production installations. Do not use it where the platform data in
+          the `system` bucket must survive the loss of a control-plane node.
+
+          > **Toggling this setting recreates the system ObjectStore and DESTROYS
+          > everything stored in it.** Garage cannot change its replication factor
+          > on a live cluster, so the controller tears the data plane down
+          > (StatefulSet, volumes, node identities) and rebuilds it empty on fresh
+          > directories, in both directions (on and off). Buckets are recreated and
+          > access keys are re-issued automatically, but the objects are gone —
+          > back up anything you need first. The previous data directories are left
+          > on the control-plane nodes under
+          > `/var/lib/deckhouse/sds-object/garage/system` and can be removed
+          > manually once you no longer need them.
   logLevel:
     type: string
     enum:

@@ -29,10 +29,11 @@ import (
 
 // ensureSystemLocalPVs maintains the static pool of node-sticky local PVs that
 // backs the System profile's StatefulSet. For every control-plane node it
-// ensures systemReplicas PVs exist (each hostPath-backed and nodeAffinity-pinned
-// to that node), so the scheduler — under WaitForFirstConsumer — always has an
-// available PV on whichever node it places a replica, and a bound replica
-// returns to its node (hence its data) after a restart.
+// ensures systemReplicas PVs of the current incarnation exist (each
+// hostPath-backed and nodeAffinity-pinned to that node), so the scheduler — under
+// WaitForFirstConsumer — always has an available PV on whichever node it places a
+// replica, and a bound replica returns to its node (hence its data) after a
+// restart.
 //
 // It is create-only and idempotent: PVs have deterministic names, existing ones
 // are left untouched, and the pool is owned by the ObjectStore so the PV objects
@@ -40,7 +41,7 @@ import (
 // regardless). Over-provisioning (a full pool per node, most of it Available) is
 // intentional and cheap: an Available PV allocates no directory until a pod
 // mounts it.
-func (d *Driver) ensureSystemLocalPVs(ctx context.Context, cluster *v1alpha1.ObjectStore) error {
+func (d *Driver) ensureSystemLocalPVs(ctx context.Context, cluster *v1alpha1.ObjectStore, incarnation int32) error {
 	hostnames, err := d.controlPlaneHostnames(ctx)
 	if err != nil {
 		return err
@@ -58,7 +59,10 @@ func (d *Driver) ensureSystemLocalPVs(ctx context.Context, cluster *v1alpha1.Obj
 		have[existing.Items[i].Name] = struct{}{}
 	}
 
-	for _, pv := range desiredSystemLocalPVs(cluster, hostnames) {
+	desired := desiredSystemLocalPVs(cluster, hostnames, incarnation)
+	wanted := make(map[string]struct{}, len(desired))
+	for _, pv := range desired {
+		wanted[pv.Name] = struct{}{}
 		if _, ok := have[pv.Name]; ok {
 			continue
 		}
@@ -70,16 +74,18 @@ func (d *Driver) ensureSystemLocalPVs(ctx context.Context, cluster *v1alpha1.Obj
 		}
 	}
 
-	return d.gcSystemLocalPVs(ctx, existing, hostnames)
+	return d.gcSystemLocalPVs(ctx, existing, hostnames, wanted)
 }
 
 // gcSystemLocalPVs reaps stale pool PVs: any Released PV (its PVC was recycled
-// during a rebalance — Retain left the PV behind), and any Available PV pinned
-// to a node that is no longer a control-plane node (a removed master). Bound PVs
-// are never touched (a live replica, or a Pending replica still owning it — the
-// placement reconcile recycles the latter's PVC, after which the PV goes
-// Released and is reaped on a later pass).
-func (d *Driver) gcSystemLocalPVs(ctx context.Context, pool *corev1.PersistentVolumeList, hostnames []string) error {
+// during a rebalance — Retain left the PV behind), and any Available PV that is
+// pinned to a node which is no longer a control-plane node (a removed master) or
+// is not part of the wanted pool (a leftover of a previous incarnation, or of a
+// replica count the cluster no longer runs). Bound PVs are never touched (a live
+// replica, or a Pending replica still owning it — the placement reconcile
+// recycles the latter's PVC, after which the PV goes Released and is reaped on a
+// later pass).
+func (d *Driver) gcSystemLocalPVs(ctx context.Context, pool *corev1.PersistentVolumeList, hostnames []string, wanted map[string]struct{}) error {
 	live := make(map[string]struct{}, len(hostnames))
 	for _, h := range hostnames {
 		live[h] = struct{}{}
@@ -87,8 +93,9 @@ func (d *Driver) gcSystemLocalPVs(ctx context.Context, pool *corev1.PersistentVo
 	for i := range pool.Items {
 		pv := &pool.Items[i]
 		_, onLiveNode := live[pv.Labels[labelSystemLocalNode]]
+		_, inPool := wanted[pv.Name]
 		stale := pv.Status.Phase == corev1.VolumeReleased ||
-			(pv.Status.Phase == corev1.VolumeAvailable && !onLiveNode)
+			(pv.Status.Phase == corev1.VolumeAvailable && (!onLiveNode || !inPool))
 		if !stale {
 			continue
 		}
@@ -120,13 +127,16 @@ func (d *Driver) controlPlaneHostnames(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
-// desiredSystemLocalPVs is the full pool the controller wants: systemReplicas PVs
-// per control-plane hostname.
-func desiredSystemLocalPVs(cluster *v1alpha1.ObjectStore, hostnames []string) []*corev1.PersistentVolume {
-	pvs := make([]*corev1.PersistentVolume, 0, len(hostnames)*int(systemReplicas))
+// desiredSystemLocalPVs is the full pool the controller wants for the given
+// incarnation: systemReplicas PVs per control-plane hostname (one per hostname in
+// single-replica mode, so the scheduler can still place the sole replica on any
+// master).
+func desiredSystemLocalPVs(cluster *v1alpha1.ObjectStore, hostnames []string, incarnation int32) []*corev1.PersistentVolume {
+	replicas := systemReplicas(cluster)
+	pvs := make([]*corev1.PersistentVolume, 0, len(hostnames)*int(replicas))
 	for _, h := range hostnames {
-		for i := int32(0); i < systemReplicas; i++ {
-			pvs = append(pvs, buildSystemLocalPV(cluster, h, i))
+		for i := int32(0); i < replicas; i++ {
+			pvs = append(pvs, buildSystemLocalPV(cluster, h, incarnation, i))
 		}
 	}
 	return pvs

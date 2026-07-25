@@ -17,6 +17,7 @@ limitations under the License.
 package garage
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -102,7 +103,7 @@ func TestClampRF(t *testing.T) {
 }
 
 func TestReplicationFactorFromConfigMap(t *testing.T) {
-	cm := buildConfigMap(cluster("shared", ""), "d8-sds-object", 2)
+	cm := buildConfigMap(cluster("shared", ""), "d8-sds-object", 2, firstSystemIncarnation)
 	if got := replicationFactorFromConfigMap(cm); got != 2 {
 		t.Errorf("replicationFactorFromConfigMap=%d, want 2", got)
 	}
@@ -155,9 +156,52 @@ func systemCluster() *v1alpha1.ObjectStore {
 	}
 }
 
+// singleReplicaSystemCluster is the System store as the module ships it when
+// sdsObject.systemBucket.singleReplica is on.
+func singleReplicaSystemCluster() *v1alpha1.ObjectStore {
+	c := systemCluster()
+	c.Spec.Redundancy = v1alpha1.RedundancyNone
+	return c
+}
+
+func TestSystemReplicas(t *testing.T) {
+	if systemSingleReplica(systemCluster()) {
+		t.Errorf("default System must not be single-replica")
+	}
+	if !systemSingleReplica(singleReplicaSystemCluster()) {
+		t.Errorf("System with redundancy None must be single-replica")
+	}
+	// Redundancy None on a PVC-backed profile is a different thing entirely (one
+	// copy, but the replica count still comes from spec.storage.nodes).
+	if systemSingleReplica(cluster("lw", v1alpha1.RedundancyNone)) {
+		t.Errorf("systemSingleReplica must only apply to type System")
+	}
+
+	if got := systemReplicas(systemCluster()); got != systemReplicasHA {
+		t.Errorf("systemReplicas(default)=%d, want %d", got, systemReplicasHA)
+	}
+	if got := systemReplicas(singleReplicaSystemCluster()); got != systemReplicasSingle {
+		t.Errorf("systemReplicas(single)=%d, want %d", got, systemReplicasSingle)
+	}
+}
+
+func TestInitialReplicationFactorSystem(t *testing.T) {
+	if got := initialReplicationFactor(systemCluster()); got != systemReplicasHA {
+		t.Errorf("initialReplicationFactor(System)=%d, want %d", got, systemReplicasHA)
+	}
+	// Single replica pins factor 1: a higher factor could never be satisfied by one
+	// Garage node, so the store would stay read-only forever.
+	if got := initialReplicationFactor(singleReplicaSystemCluster()); got != 1 {
+		t.Errorf("initialReplicationFactor(System single)=%d, want 1", got)
+	}
+}
+
 func TestDesiredReplicas(t *testing.T) {
-	if got := desiredReplicas(systemCluster()); got != systemReplicas {
-		t.Errorf("desiredReplicas(System)=%d, want %d (fixed, master-count independent)", got, systemReplicas)
+	if got := desiredReplicas(systemCluster()); got != systemReplicasHA {
+		t.Errorf("desiredReplicas(System)=%d, want %d (fixed, master-count independent)", got, systemReplicasHA)
+	}
+	if got := desiredReplicas(singleReplicaSystemCluster()); got != systemReplicasSingle {
+		t.Errorf("desiredReplicas(System single)=%d, want %d", got, systemReplicasSingle)
 	}
 	if got := desiredReplicas(cluster("lw", v1alpha1.RedundancyStandard)); got != 3 {
 		t.Errorf("desiredReplicas(Lightweight Standard)=%d, want 3", got)
@@ -176,8 +220,8 @@ func TestDesiredReplicas(t *testing.T) {
 func TestBuildSystemStatefulSet(t *testing.T) {
 	sts := buildSystemStatefulSet(systemCluster(), "d8-sds-object", "garage:v1", "hash")
 
-	if sts.Spec.Replicas == nil || *sts.Spec.Replicas != systemReplicas {
-		t.Fatalf("replicas=%v, want %d (fixed, independent of master count)", sts.Spec.Replicas, systemReplicas)
+	if sts.Spec.Replicas == nil || *sts.Spec.Replicas != systemReplicasHA {
+		t.Fatalf("replicas=%v, want %d (fixed, independent of master count)", sts.Spec.Replicas, systemReplicasHA)
 	}
 	if sts.Spec.PodManagementPolicy != appsv1.ParallelPodManagement {
 		t.Errorf("PodManagementPolicy=%q, want Parallel", sts.Spec.PodManagementPolicy)
@@ -284,8 +328,60 @@ func TestPodOrdinal(t *testing.T) {
 	}
 }
 
+func TestBuildSingleReplicaSystemStatefulSet(t *testing.T) {
+	sts := buildSystemStatefulSet(singleReplicaSystemCluster(), "d8-sds-object", "garage:v1", "hash")
+
+	if sts.Spec.Replicas == nil || *sts.Spec.Replicas != systemReplicasSingle {
+		t.Fatalf("replicas=%v, want %d", sts.Spec.Replicas, systemReplicasSingle)
+	}
+	// Everything else is the System profile as usual: control-plane placement and
+	// node-sticky storage on the managed local StorageClass.
+	spec := sts.Spec.Template.Spec
+	if _, ok := spec.NodeSelector[controlPlaneNodeLabel]; !ok {
+		t.Errorf("nodeSelector missing %q: %v", controlPlaneNodeLabel, spec.NodeSelector)
+	}
+	if len(sts.Spec.VolumeClaimTemplates) != 1 ||
+		sts.Spec.VolumeClaimTemplates[0].Spec.StorageClassName == nil ||
+		*sts.Spec.VolumeClaimTemplates[0].Spec.StorageClassName != systemLocalStorageClass {
+		t.Errorf("volumeClaimTemplates=%+v, want one PVC on %q", sts.Spec.VolumeClaimTemplates, systemLocalStorageClass)
+	}
+}
+
+func TestSystemLocalPVIncarnation(t *testing.T) {
+	c := systemCluster()
+
+	// A never-recreated cluster keeps the original names and directories, so
+	// upgrading a running store moves nothing.
+	legacyName := systemLocalPVName(c, "master-0", firstSystemIncarnation, 2)
+	legacyPath := systemLocalPVPath(c, "master-0", firstSystemIncarnation, 2)
+	if want := fmt.Sprintf("%s-local-%s-2", resourceName(c), shortHash("master-0")); legacyName != want {
+		t.Errorf("legacy PV name=%q, want %q", legacyName, want)
+	}
+	if want := fmt.Sprintf("%s/%s/%s-2", hostPathBase, c.Name, shortHash("master-0")); legacyPath != want {
+		t.Errorf("legacy PV path=%q, want %q", legacyPath, want)
+	}
+
+	// A recreated cluster gets both a distinct PV name (so it cannot bind a
+	// leftover PV of the previous incarnation) and a distinct directory (so it
+	// starts from empty storage rather than incompatible Garage metadata).
+	name := systemLocalPVName(c, "master-0", 2, 2)
+	path := systemLocalPVPath(c, "master-0", 2, 2)
+	if name == legacyName {
+		t.Errorf("incarnation 2 PV name must differ from %q", legacyName)
+	}
+	if path == legacyPath {
+		t.Errorf("incarnation 2 PV path must differ from %q", legacyPath)
+	}
+	if !strings.HasPrefix(path, fmt.Sprintf("%s/%s/", hostPathBase, c.Name)) {
+		t.Errorf("PV path=%q, want it under the cluster's hostPath base", path)
+	}
+	if pv := buildSystemLocalPV(c, "master-0", 2, 2); pv.Name != name || pv.Spec.HostPath.Path != path {
+		t.Errorf("buildSystemLocalPV=(%q,%q), want (%q,%q)", pv.Name, pv.Spec.HostPath.Path, name, path)
+	}
+}
+
 func TestBuildSystemLocalPV(t *testing.T) {
-	pv := buildSystemLocalPV(systemCluster(), "master-0", 2)
+	pv := buildSystemLocalPV(systemCluster(), "master-0", firstSystemIncarnation, 2)
 
 	if pv.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
 		t.Errorf("reclaimPolicy=%q, want Retain (never wipe data)", pv.Spec.PersistentVolumeReclaimPolicy)
@@ -314,9 +410,9 @@ func TestBuildSystemLocalPV(t *testing.T) {
 
 func TestDesiredSystemLocalPVs(t *testing.T) {
 	hostnames := []string{"master-0", "master-1", "master-2"}
-	pvs := desiredSystemLocalPVs(systemCluster(), hostnames)
+	pvs := desiredSystemLocalPVs(systemCluster(), hostnames, firstSystemIncarnation)
 
-	want := len(hostnames) * int(systemReplicas)
+	want := len(hostnames) * int(systemReplicasHA)
 	if len(pvs) != want {
 		t.Fatalf("pool size=%d, want %d (systemReplicas per node)", len(pvs), want)
 	}
@@ -334,8 +430,21 @@ func TestDesiredSystemLocalPVs(t *testing.T) {
 		perNode[pv.Labels[labelSystemLocalNode]]++
 	}
 	for _, h := range hostnames {
-		if perNode[h] != int(systemReplicas) {
-			t.Errorf("node %q has %d PVs, want %d", h, perNode[h], systemReplicas)
+		if perNode[h] != int(systemReplicasHA) {
+			t.Errorf("node %q has %d PVs, want %d", h, perNode[h], systemReplicasHA)
+		}
+	}
+
+	// Single-replica mode still stocks one PV per master, so the scheduler can
+	// place the sole replica on any of them (once bound, nodeAffinity keeps it
+	// there for good).
+	single := desiredSystemLocalPVs(singleReplicaSystemCluster(), hostnames, firstSystemIncarnation)
+	if len(single) != len(hostnames) {
+		t.Fatalf("single-replica pool size=%d, want %d (one per master)", len(single), len(hostnames))
+	}
+	for _, pv := range single {
+		if !strings.HasSuffix(pv.Name, "-0") {
+			t.Errorf("single-replica pool PV %q must be the ordinal-0 slot", pv.Name)
 		}
 	}
 }

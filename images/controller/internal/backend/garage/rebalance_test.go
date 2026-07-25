@@ -16,7 +16,18 @@ limitations under the License.
 
 package garage
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	v1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
+)
 
 func TestNextPlacementAction(t *testing.T) {
 	const replicas = int32(3)
@@ -126,4 +137,69 @@ func TestNextPlacementAction(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestReconcileSystemPlacementSingleReplica pins the promise of the
+// singleReplica setting: the sole replica is never relocated. The fixture is a
+// consolidate case the default profile acts on without a health gate (one master
+// left, the replica's PV pinned to a master that is gone), so the two modes are
+// compared on identical input.
+func TestReconcileSystemPlacementSingleReplica(t *testing.T) {
+	ns := "d8-sds-object"
+
+	newDriver := func(t *testing.T, cluster *v1alpha1.ObjectStore) (*Driver, client.Client) {
+		t.Helper()
+		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{
+			Name:   "m0",
+			Labels: map[string]string{controlPlaneNodeLabel: "", hostnameTopologyKey: "m0"},
+		}}
+		pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{
+			Name:   "pool-pv",
+			Labels: map[string]string{objectStoreLabel: cluster.Name, labelSystemLocalNode: "gone"},
+		}}
+		pvc := &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: "data-" + resourceName(cluster) + "-0", Namespace: ns},
+			Spec:       corev1.PersistentVolumeClaimSpec{VolumeName: pv.Name},
+		}
+		c := fake.NewClientBuilder().WithScheme(rfScheme(t)).WithObjects(node, pv, pvc).Build()
+		return &Driver{client: c, apiReader: c, namespace: ns}, c
+	}
+
+	pvcGone := func(t *testing.T, c client.Client, cluster *v1alpha1.ObjectStore) bool {
+		t.Helper()
+		err := c.Get(context.Background(), client.ObjectKey{
+			Namespace: ns, Name: "data-" + resourceName(cluster) + "-0",
+		}, &corev1.PersistentVolumeClaim{})
+		return apierrors.IsNotFound(err)
+	}
+
+	t.Run("single replica: never migrates", func(t *testing.T) {
+		cluster := singleReplicaSystemCluster()
+		d, c := newDriver(t, cluster)
+		acted, msg, err := d.reconcileSystemPlacement(context.Background(), cluster)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if acted {
+			t.Errorf("acted=true (%q), want no placement action for a single replica", msg)
+		}
+		if pvcGone(t, c, cluster) {
+			t.Errorf("the replica's PVC was recycled; single-replica data must never be discarded")
+		}
+	})
+
+	t.Run("default profile: consolidates onto the surviving master", func(t *testing.T) {
+		cluster := systemCluster()
+		d, c := newDriver(t, cluster)
+		acted, _, err := d.reconcileSystemPlacement(context.Background(), cluster)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !acted {
+			t.Fatalf("acted=false, want the default profile to recycle the stale replica")
+		}
+		if !pvcGone(t, c, cluster) {
+			t.Errorf("expected the replica's PVC to be recycled")
+		}
+	})
 }

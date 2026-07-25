@@ -28,7 +28,7 @@ weight: 1
 
 | `spec.type` | Бэкенд | Размещение / данные | Сценарий |
 |-------------|--------|---------------------|----------|
-| `System` | Garage | StatefulSet (фикс. 3 реплики) на control-plane узлах, node-sticky local PV | Системные нужды платформы (бэкапы, registry, логи). |
+| `System` | Garage | StatefulSet на control-plane узлах (3 реплики или одна при `systemBucket.singleReplica`), node-sticky local PV | Системные нужды платформы (бэкапы, registry, логи). |
 | `Lightweight` | Garage | StatefulSet, PVC на StorageClass | Небольшие прикладные нагрузки. |
 | `Full` | SeaweedFS | StatefulSet, PVC | Масштабируемое полнофункциональное хранилище. |
 | `Heavy` | Ceph RGW | RADOS Gateway поверх существующего кластера sds-elastic | Переиспользует ёмкость и отказоустойчивость Ceph. |
