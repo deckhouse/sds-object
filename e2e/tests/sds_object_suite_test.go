@@ -84,7 +84,8 @@ var _ = Describe("sds-object e2e", Ordered, ContinueOnFailure, func() {
 	validationSpecs()         // validation_test.go: webhook + CEL admission guards
 	accessSpecs()             // access_test.go: deny-by-default + revocation, regexp policy, key rotation, ReadOnly, cross-namespace
 	featuresSpecs()           // features_test.go: fail-loud feature parity (quota, PublicRead) via the FeaturesApplied condition
-	greenfieldSpecs()         // greenfield_test.go: self-service claim provisions a private bucket, capture guard, finalizer gate
+	greenfieldSpecs()         // greenfield_test.go: self-service claim provisions a private bucket, capture guard, finalizer gate, Retain
+	orphanSpecs()             // orphans_test.go: backend audit — no keys/buckets (incl. the temporary owner key) survive a teardown
 	systemBucketSpecs()       // system_test.go: built-in system OSCluster+OSB+policy shipped by templates
 	lightweightSpecs()        // lightweight_test.go: Lightweight (Garage on PVC) create -> bucket -> round-trip -> delete
 	fullSpecs()               // full_test.go: Full (SeaweedFS, None/leveldb) create -> bucket -> round-trip -> delete
@@ -93,9 +94,11 @@ var _ = Describe("sds-object e2e", Ordered, ContinueOnFailure, func() {
 	reclaimSpecs()            // reclaim_test.go: Bucket Retain keeps (and re-adopts) the data; cluster Retain/Delete on the data-plane PVCs
 	systemDurabilitySpecs()   // system_durability_test.go: data survives a full data-plane restart; a recycled replica keeps its Garage identity
 	deleteSpecs()             // delete_test.go: OB delete (+ creds Secret + reclaim), OSC delete
-	// Last on purpose: switching sdsObject.systemBucket.singleReplica recreates the
-	// system store EMPTY (both ways), so it must not run before specs that rely on
-	// the shipped system cluster or its data. Opt out with E2E_SKIP_SYSTEM_RECREATE.
+	// Last two, in this order: both disturb the shipped system store, so they must
+	// not run before specs that rely on it. The toggle goes first because it rebuilds
+	// the store from the volumes of the current incarnation, which the singleReplica
+	// switch then bumps. Both opt out with E2E_SKIP_SYSTEM_RECREATE.
+	systemBucketToggleSpecs()  // system_toggle_test.go: systemBucket.enabled off (volumes kept) -> on
 	systemSingleReplicaSpecs() // system_single_replica_test.go: singleReplica on -> recreate -> off
 })
 

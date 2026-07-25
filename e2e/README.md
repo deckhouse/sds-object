@@ -70,6 +70,12 @@ fails fast in `BeforeSuite` if a profile's required env knob is missing.
 
 ## Data-safety specs
 
+`orphans` ([tests/orphans_test.go](tests/orphans_test.go)) audits the backend's own
+state after a teardown — that no access key and no bucket survive their CRs, and
+that the short-lived owner key the driver mints to empty a non-empty bucket is
+revoked. It runs the `garage` CLI inside a data-plane pod (nothing in Kubernetes
+reflects this state), so it covers the Garage-backed profiles only.
+
 `reclaim` ([tests/reclaim_test.go](tests/reclaim_test.go)) covers when the module
 is allowed to destroy data: a `Bucket` with `reclaimPolicy: Retain` (the default)
 must leave the backend bucket and its objects alone, so re-declaring the same
@@ -93,6 +99,10 @@ create/bucket/access flow:
   must bring every replica back to its own volume on its own node with the data
   intact, and a recycled replica (the step a rebalance is made of) must come back
   with its original Garage node identity restored from the identity Secret.
+- `system-bucket-toggle` ([tests/system_toggle_test.go](tests/system_toggle_test.go)):
+  `systemBucket.enabled` off (the shipped ObjectStore, Bucket, policy and
+  StorageClass go; the replica PVCs stay, since the store is Retain) and back on.
+  **Disruptive** — see `E2E_SKIP_SYSTEM_RECREATE` below.
 - `system-single-replica` ([tests/system_single_replica_test.go](tests/system_single_replica_test.go)):
   the `systemBucket.singleReplica` setting, including the controller being
   restarted mid-recreate. **Destructive** — see `E2E_SKIP_SYSTEM_RECREATE` below.
@@ -169,11 +179,12 @@ switch runs after them. `RandomizeAllSpecs` stays **off**.
 - `E2E_PROBE_JOB_TIMEOUT`: Go duration bounding the probe Job, defaults to 5m.
 - `E2E_KEEP_CLUSTER_ON_FAILURE`: when truthy and at least one spec failed, the
   nested cluster is **not** torn down in `AfterSuite`, so you can inspect it.
-- `E2E_SKIP_SYSTEM_RECREATE`: when truthy, skips the `system-single-replica`
-  specs. They toggle `systemBucket.singleReplica` through the ModuleConfig, which
-  **recreates the system store empty** in both directions (that is the setting's
-  documented behaviour) and takes two recreates' worth of time. They run last in
-  the suite, so nothing else depends on the system store's data.
+- `E2E_SKIP_SYSTEM_RECREATE`: when truthy, skips the two specs that drive the
+  `systemBucket` switches through the ModuleConfig: `system-bucket-toggle`
+  (unships and re-ships the system storage) and `system-single-replica` (which
+  **recreates the system store empty** in both directions — that is the setting's
+  documented behaviour — and takes two recreates' worth of time). Both run last in
+  the suite, so nothing else depends on the system store or its data.
 
 ## Quick start
 

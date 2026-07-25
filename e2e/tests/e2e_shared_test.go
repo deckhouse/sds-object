@@ -17,6 +17,7 @@ limitations under the License.
 package tests
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -37,7 +38,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	clientgokube "k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/remotecommand"
 
 	objectv1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 	"github.com/deckhouse/storage-e2e/pkg/cluster"
@@ -621,6 +624,53 @@ func statefulSetReadyReplicas(ctx context.Context, storeName string) (desired, r
 	return desired, sts.Status.ReadyReplicas, nil
 }
 
+// execInPod runs cmd in a container of a pod and returns its stdout. Errors carry
+// stderr, so a failing Garage CLI call is diagnosable from the spec output. Used to
+// audit the backend's own state (keys, buckets), which no Kubernetes object
+// reflects.
+func execInPod(ctx context.Context, ns, pod, container string, cmd ...string) (string, error) {
+	req := suiteClientset.CoreV1().RESTClient().Post().
+		Resource("pods").Name(pod).Namespace(ns).SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Container: container,
+			Command:   cmd,
+			Stdout:    true,
+			Stderr:    true,
+		}, scheme.ParameterCodec)
+	executor, err := remotecommand.NewSPDYExecutor(suiteRestCfg, "POST", req.URL())
+	if err != nil {
+		return "", fmt.Errorf("build executor for %s: %w", formatRef(ns, pod), err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := executor.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &stdout, Stderr: &stderr}); err != nil {
+		return "", fmt.Errorf("exec %v in %s: %w (stderr: %s)", cmd, formatRef(ns, pod), err, strings.TrimSpace(stderr.String()))
+	}
+	return stdout.String(), nil
+}
+
+// garageConfigPath is where the module mounts garage.toml in the data-plane pods.
+const garageConfigPath = "/etc/garage/garage.toml"
+
+// garageCLI runs a `garage` subcommand inside a Running data-plane pod of the
+// store. The binary talks to its local node over RPC using the mounted config
+// (passed explicitly rather than relying on the env var) and the RPC secret
+// already in the container's environment.
+func garageCLI(ctx context.Context, storeName string, args ...string) (string, error) {
+	pods, err := garagePods(ctx, storeName)
+	if err != nil {
+		return "", err
+	}
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.Status.Phase != corev1.PodRunning {
+			continue
+		}
+		cmd := append([]string{"/garage", "-c", garageConfigPath}, args...)
+		return execInPod(ctx, moduleNS, p.Name, "garage", cmd...)
+	}
+	return "", fmt.Errorf("no Running Garage pod for ObjectStore %q", storeName)
+}
+
 // snapshotCredentials copies a credentials Secret into a plain Secret the module
 // does not own, so a spec can keep using (or rather, try to use) the credentials
 // after the controller has revoked the original.
@@ -715,17 +765,29 @@ var moduleConfigGVR = schema.GroupVersionResource{
 	Group: "deckhouse.io", Version: "v1alpha1", Resource: "moduleconfigs",
 }
 
-// setSystemSingleReplica flips sdsObject.systemBucket.singleReplica in the
+// setSystemBucketSetting flips one boolean under sdsObject.systemBucket in the
 // module's ModuleConfig, i.e. the real operator-facing path: Deckhouse re-renders
-// the chart, which sets/removes spec.redundancy: None on the shipped system
-// ObjectStore, which makes the controller recreate the store.
-func setSystemSingleReplica(ctx context.Context, enabled bool) error {
-	patch := fmt.Sprintf(`{"spec":{"settings":{"systemBucket":{"singleReplica":%t}}}}`, enabled)
+// the chart and the controller converges on the result.
+func setSystemBucketSetting(ctx context.Context, key string, value bool) error {
+	patch := fmt.Sprintf(`{"spec":{"settings":{"systemBucket":{%q:%t}}}}`, key, value)
 	_, err := suiteDyn.Resource(moduleConfigGVR).Patch(ctx, moduleName, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
 	if err != nil {
-		return fmt.Errorf("patch ModuleConfig %s (singleReplica=%t): %w", moduleName, enabled, err)
+		return fmt.Errorf("patch ModuleConfig %s (%s=%t): %w", moduleName, key, value, err)
 	}
 	return nil
+}
+
+// setSystemSingleReplica switches the shipped system store between the default
+// 3-replica profile and the single-replica one, which makes the controller recreate
+// the data plane.
+func setSystemSingleReplica(ctx context.Context, enabled bool) error {
+	return setSystemBucketSetting(ctx, "singleReplica", enabled)
+}
+
+// setSystemBucketEnabled ships or unships the system ObjectStore, its bucket, the
+// d8-* claim policy and the managed local StorageClass.
+func setSystemBucketEnabled(ctx context.Context, enabled bool) error {
+	return setSystemBucketSetting(ctx, "enabled", enabled)
 }
 
 // storeRedundancy returns spec.redundancy of an ObjectStore and whether the field
