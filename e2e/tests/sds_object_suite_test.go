@@ -90,6 +90,7 @@ var _ = Describe("sds-object e2e", Ordered, ContinueOnFailure, func() {
 	fullSpecs()               // full_test.go: Full (SeaweedFS, None/leveldb) create -> bucket -> round-trip -> delete
 	fullHighRedundancySpecs() // full_test.go: Full High (SeaweedFS multi-filer HA + managed-postgres)
 	heavySpecs()              // heavy_test.go: Heavy (Ceph RGW on sds-elastic ElasticCluster) bring-up -> create -> bucket -> round-trip -> delete
+	reclaimSpecs()            // reclaim_test.go: Bucket Retain keeps (and re-adopts) the data; cluster Retain/Delete on the data-plane PVCs
 	systemDurabilitySpecs()   // system_durability_test.go: data survives a full data-plane restart; a recycled replica keeps its Garage identity
 	deleteSpecs()             // delete_test.go: OB delete (+ creds Secret + reclaim), OSC delete
 	// Last on purpose: switching sdsObject.systemBucket.singleReplica recreates the

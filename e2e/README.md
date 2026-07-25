@@ -68,6 +68,17 @@ When you point `E2E_OSC_TYPE` at a heavier profile, enable the corresponding
 modules in `tests/cluster_config.yml` first (see the comments there). The suite
 fails fast in `BeforeSuite` if a profile's required env knob is missing.
 
+## Data-safety specs
+
+`reclaim` ([tests/reclaim_test.go](tests/reclaim_test.go)) covers when the module
+is allowed to destroy data: a `Bucket` with `reclaimPolicy: Retain` (the default)
+must leave the backend bucket and its objects alone, so re-declaring the same
+Bucket adopts the data back, while `Delete` still empties and removes it; and an
+`ObjectStore`'s reclaim policy decides whether its data-plane PVCs survive its
+deletion (Kubernetes never GCs a StatefulSet's PVCs, so it is entirely the
+controller's call). The cluster half needs a StorageClass for two throwaway
+Lightweight stores and skips without one.
+
 ## System-specific specs
 
 Three spec groups cover the shipped `system` store beyond the generic
