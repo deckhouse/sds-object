@@ -249,6 +249,14 @@ func (r *ObjectStoreReconciler) updateStatus(
 			if state.Capacity != nil {
 				latest.Status.Capacity = state.Capacity
 			}
+			// Publish the backend admin credentials Secret once the driver has one, so
+			// an operator does not have to know each backend's naming. Only drivers that
+			// keep it in the module namespace report it (Ceph RGW's lives in the
+			// sds-elastic namespace and is Rook-owned), so an empty name leaves the
+			// field untouched rather than clearing it.
+			if state.AdminSecretName != "" {
+				latest.Status.AdminSecretRef = &v1alpha1.LocalSecretReference{Name: state.AdminSecretName}
+			}
 		}
 
 		if reflect.DeepEqual(before, latest.Status) {

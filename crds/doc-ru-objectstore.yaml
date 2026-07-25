@@ -160,6 +160,9 @@ spec:
                   description: |
                     Ссылка на Secret (в namespace модуля) с админ-учёткой бэкенда,
                     которую контроллер использует для управления бакетами и ключами.
+
+                    Не заполняется для `Heavy`: его учётные данные RGW принадлежат
+                    Rook и лежат в namespace sds-elastic, а не модуля.
                   properties:
                     name:
                       description: Имя Secret.

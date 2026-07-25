@@ -48,6 +48,12 @@ type ClusterState struct {
 
 	// Capacity is the latest usage probe, when available.
 	Capacity *v1alpha1.ObjectCapacityStatus
+
+	// AdminSecretName is the Secret in the module namespace holding the backend
+	// admin credentials the controller manages buckets and access keys with. It is
+	// published as status.adminSecretRef so an operator can find the credentials
+	// without knowing each backend's naming. Empty until the Secret exists.
+	AdminSecretName string
 }
 
 // BucketState is the observed state a Driver reports for an Bucket.

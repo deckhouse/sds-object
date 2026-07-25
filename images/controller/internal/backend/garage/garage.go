@@ -98,6 +98,8 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 	if err := d.ensureSecret(ctx, cluster); err != nil {
 		return state, fmt.Errorf("ensure secret: %w", err)
 	}
+	// The RPC/admin secret exists from here on, so the CR can point at it.
+	state.AdminSecretName = secretName(cluster)
 	pinned, err := d.pinnedState(ctx, cluster)
 	if err != nil {
 		return state, fmt.Errorf("read pinned cluster state: %w", err)

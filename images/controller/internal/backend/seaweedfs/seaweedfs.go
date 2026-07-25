@@ -172,6 +172,8 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 		state.Message = fmt.Sprintf("configuring S3 admin identity: %v", err)
 		return state, nil
 	}
+	// The admin Secret exists from here on, so the CR can point at it.
+	state.AdminSecretName = adminSecretName(cluster)
 
 	state.Ready = true
 	state.Message = "SeaweedFS S3 gateway is ready"

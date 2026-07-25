@@ -298,6 +298,9 @@ spec:
                     Reference to the Secret (in the module namespace) holding the
                     backend admin credentials used by the controller to manage
                     buckets and access keys.
+
+                    Not published for `Heavy`: its RGW credentials are owned by
+                    Rook and live in the sds-elastic namespace, not this module's.
                   properties:
                     name:
                       type: string
