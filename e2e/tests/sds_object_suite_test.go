@@ -47,12 +47,18 @@ func TestSdsObject(t *testing.T) {
 
 	suiteConfig, reporterConfig := GinkgoConfiguration()
 	if os.Getenv("CI") != "" {
-		suiteConfig.FailFast = true
 		// Generous: the Heavy profile brings up a full Rook Ceph cluster (via an
 		// sds-elastic ElasticCluster) on top of the Full (SeaweedFS + Postgres) and
 		// Garage profiles, so the whole suite can run well past an hour.
 		suiteConfig.Timeout = 180 * time.Minute
 	}
+	// FailFast stays OFF, matching the root container's ContinueOnFailure. A run
+	// costs a provisioned cluster and well over an hour, so stopping at the first
+	// failure yields exactly one finding per run and hides everything behind it.
+	// The trade-off is accepted deliberately: after a failure the shared fixtures
+	// may be in a state that makes later specs fail too, so read a failing run's
+	// FIRST failure first — the ones after it can be consequences, not causes.
+	suiteConfig.FailFast = false
 	// The suite shares one ObjectStore across dependency-ordered specs
 	// (create -> bucket + S3 round-trip -> validation guards -> delete), so spec
 	// randomization MUST stay OFF.

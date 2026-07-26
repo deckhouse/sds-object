@@ -117,6 +117,12 @@ called in explicit order from the root container
 the deletion specs run near the end, and the destructive `system-single-replica`
 switch runs after them. `RandomizeAllSpecs` stays **off**.
 
+`FailFast` is **off** as well (matching the root container's `ContinueOnFailure`): a
+run costs a provisioned cluster and well over an hour, so stopping at the first
+failure would surface one finding per run. The flip side is that the specs share
+fixtures, so a failure can knock over the ones behind it — when reading a failing
+run, start from the **first** failure; the later ones may be its consequences.
+
 ## Requirements
 
 - Go **1.26+**
