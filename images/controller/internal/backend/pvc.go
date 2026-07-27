@@ -29,9 +29,15 @@ import (
 // labels. StatefulSet volumeClaimTemplates PVCs are not garbage-collected by
 // Kubernetes, so PVC-backed drivers call this to honour a Delete reclaim
 // policy. Idempotent.
-func DeleteClusterPVCs(ctx context.Context, c client.Client, namespace string, labels map[string]string) error {
+//
+// The listing goes through reader, which MUST be the non-cached API reader: the
+// module grants no watch verb on PersistentVolumeClaims, and a cached List would
+// start an informer that can never sync, blocking the reconcile — and with it the
+// whole controller — forever instead of returning an error. Every other PVC access
+// in the drivers reads through the API reader for the same reason.
+func DeleteClusterPVCs(ctx context.Context, reader client.Reader, c client.Client, namespace string, labels map[string]string) error {
 	list := &corev1.PersistentVolumeClaimList{}
-	if err := c.List(ctx, list, client.InNamespace(namespace), client.MatchingLabels(labels)); err != nil {
+	if err := reader.List(ctx, list, client.InNamespace(namespace), client.MatchingLabels(labels)); err != nil {
 		return fmt.Errorf("list cluster PVCs: %w", err)
 	}
 	for i := range list.Items {

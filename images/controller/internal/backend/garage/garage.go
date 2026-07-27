@@ -255,7 +255,7 @@ func (d *Driver) DeleteCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 	if cluster.Spec.ReclaimPolicy != v1alpha1.ClusterReclaimDelete {
 		return nil
 	}
-	return backend.DeleteClusterPVCs(ctx, d.client, d.namespace, commonLabels(cluster))
+	return backend.DeleteClusterPVCs(ctx, d.apiReader, d.client, d.namespace, commonLabels(cluster))
 }
 
 // EnsureBucket and DeleteBucket are implemented in buckets.go.
