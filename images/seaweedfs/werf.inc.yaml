@@ -58,6 +58,17 @@ secrets:
 shell:
   setup:
     - cd /src/weed
+    # CVE bumps for transitive dependencies upstream still pins at vulnerable
+    # versions: golang.org/x/text CVE-2026-56852 (norm.Iter infinite loop, fixed
+    # in 0.39.0) and google.golang.org/grpc GHSA-hrxh-6v49-42gf (xDS RBAC and
+    # HTTP/2, fixed in 1.82.1). Done with `go get` rather than a patch file: a
+    # patch would have to carry go.sum hashes and would break on every SeaweedFS
+    # bump, while this reapplies itself. Drop the lines once upstream's go.mod
+    # pins these versions or newer.
+    - >
+      GOPROXY=$(cat /run/secrets/GOPROXY) go get
+      golang.org/x/text@v0.39.0
+      google.golang.org/grpc@v1.82.1
     - GOPROXY=$(cat /run/secrets/GOPROXY) go mod download
     - export GOOS=linux GOARCH=amd64 CGO_ENABLED=0
     - |
@@ -81,3 +92,11 @@ imageSpec:
     entrypoint: ["/weed"]
     env:
       SEAWEEDFS_VERSION: "{{ $seaweedfsVersion }}"
+
+{{- /*
+Attach an OpenVEX attestation to the seaweedfs image so trivy suppresses the
+unfixable golang.org/x/crypto/openpgp advisory (GO-2026-5932) reported against
+the upstream `weed` binary. Predicate:
+/images/seaweedfs/known_vulnerabilities.vex (per the "vex mitigation" template).
+*/ -}}
+{{- include "vex mitigation" (list $ $.ImageName) }}
