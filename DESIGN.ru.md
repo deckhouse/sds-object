@@ -646,7 +646,14 @@ type Driver interface {
   `sds-elastic` (`d8-sds-elastic`), привязанный к CephCluster из `elasticClusterRef`;
   RGW-поды и Service поднимает Rook; пулы метаданных/данных — из `redundancy`.
   `preservePoolsOnDelete` завязан на `reclaimPolicy` кластера (Retain → пулы
-  сохраняются).
+  сохраняются). При удалении `ObjectStore` контроллер удаляет `CephObjectStore`
+  **при любой** reclaim-политике: данные держит не CR, а `preservePoolsOnDelete`,
+  поэтому под `Retain` удаление CR оставляет пулы RGW и всё их содержимое целыми.
+  Оставлять CR нельзя — его больше никто не удалит: вебхук sds-elastic отклоняет
+  запросы к вендоренным ресурсам Rook от всех, кого не знает, включая garbage
+  collector, поэтому CR переживает свой `ObjectStore`; а пока он есть, Rook держит
+  object store живым, и финализатор `ElasticCluster` не может завершиться (его
+  guard ждёт тома, занятые нашим остатком).
 
 ### 5.2 Реконсиляция бакета и доступа
 

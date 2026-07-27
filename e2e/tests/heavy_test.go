@@ -112,11 +112,11 @@ func heavySpecs() {
 		})
 
 		AfterAll(func() {
-			// Tear the Ceph substrate down so it does not linger. This must break a
-			// teardown softlock: a Heavy ObjectStore deleted with the default Retain
-			// policy leaves its CephObjectStore (RGW) behind, which keeps the Rook
-			// Ceph cluster — and its Retain OSD PVs — alive, so sds-elastic's
-			// VolumesExist guard blocks the ElasticCluster finalizer indefinitely.
+			// Tear the Ceph substrate down so it does not linger. What can still hold
+			// it back is sds-elastic's own VolumesExist guard: the cluster's OSD PVs are
+			// Retain and keep the guard tripped after the OSDs are gone, so the cleanup
+			// reaps them while it waits. (The CephObjectStore no longer belongs on that
+			// list — the module removes its own on ObjectStore deletion.)
 			// Best-effort: log but do not fail.
 			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
 			defer cancel()
@@ -233,6 +233,20 @@ func heavySpecs() {
 			Expect(suiteDyn.Resource(objectStoreGVR).
 				Delete(ctx, oscName, metav1.DeleteOptions{})).To(Succeed())
 			Expect(waitResourceGone(ctx, objectStoreGVR, "", oscName, resourceGoneTimeout)).To(Succeed())
+
+			// The module must take its CephObjectStore with it, under Retain as much as
+			// under Delete: nobody else can remove it (sds-elastic's webhook rejects
+			// vendored-Rook deletes from anyone it does not know, the garbage collector
+			// included), and while it exists Rook keeps the object store alive, so the
+			// ElasticCluster can never finish terminating. The pools are preserved by
+			// preservePoolsOnDelete, asserted on creation above.
+			By("asserting the rendered CephObjectStore was removed with the store")
+			Eventually(func() bool {
+				_, err := suiteDyn.Resource(cephObjectStoreGVR).Namespace(sdsElasticNamespace).
+					Get(ctx, oscName, metav1.GetOptions{})
+				return apierrors.IsNotFound(err) || meta.IsNoMatchError(err)
+			}, resourceGoneTimeout, pollInterval).Should(BeTrue(),
+				"a leftover CephObjectStore strands the Rook cluster and blocks the ElasticCluster finalizer")
 		})
 	})
 }
@@ -247,23 +261,32 @@ var cephObjectStoreGVR = schema.GroupVersionResource{
 	Group: "internal.sdselastic.deckhouse.io", Version: "v1", Resource: "cephobjectstores",
 }
 
-// cleanupHeavyElastic removes the Ceph substrate created for the Heavy specs and
-// breaks the teardown softlock described in AfterAll:
+// cleanupHeavyElastic removes the Ceph substrate created for the Heavy specs:
 //
-//  1. delete the leftover CephObjectStore — a Heavy ObjectStore deleted with the
-//     default Retain policy keeps it (and its RGW) around, which pins the Rook
-//     Ceph cluster alive;
-//  2. reap the cluster's Retain OSD PVs in the background as Rook releases them
+//  1. reap the cluster's Retain OSD PVs in the background as Rook releases them
 //     (they persist after the OSDs go and keep sds-elastic's VolumesExist guard
 //     tripped, blocking the ElasticCluster finalizer);
-//  3. delete the ElasticCluster and wait for it to be gone (now unblocked).
+//  2. delete the ElasticCluster and wait for it to be gone.
+//
+// It no longer tries to delete a leftover CephObjectStore. That step could never
+// work — sds-elastic's validating webhook rejects requests to vendored Rook
+// resources from anyone it does not know, so the suite's admin user was denied
+// ("Direct modifications to Rook Ceph resources are not allowed") — and it is no
+// longer needed: the module removes its own CephObjectStore on ObjectStore
+// deletion under both reclaim policies, keeping the pools via
+// preservePoolsOnDelete.
 //
 // Best-effort throughout: it logs and never fails the suite.
 func cleanupHeavyElastic(ctx context.Context, oscName, ecName string) {
-	if err := suiteDyn.Resource(cephObjectStoreGVR).Namespace(sdsElasticNamespace).
-		Delete(ctx, oscName, metav1.DeleteOptions{}); err != nil &&
-		!apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
-		GinkgoWriter.Printf("warning: delete CephObjectStore %s/%s: %v\n", sdsElasticNamespace, oscName, err)
+	// The module's own teardown must have removed the CephObjectStore already; if
+	// one is still there, the ElasticCluster wait below will not finish, so say so
+	// rather than letting the timeout look like an sds-elastic problem.
+	if _, err := suiteDyn.Resource(cephObjectStoreGVR).Namespace(sdsElasticNamespace).
+		Get(ctx, oscName, metav1.GetOptions{}); err == nil {
+		GinkgoWriter.Printf("warning: CephObjectStore %s/%s still exists after the ObjectStore was deleted; "+
+			"it pins the Rook cluster and will block the ElasticCluster finalizer\n", sdsElasticNamespace, oscName)
+	} else if !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
+		GinkgoWriter.Printf("warning: check CephObjectStore %s/%s: %v\n", sdsElasticNamespace, oscName, err)
 	}
 
 	osdPVPrefix := "sds-elastic-" + ecName + "-osd-"
