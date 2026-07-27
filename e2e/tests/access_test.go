@@ -25,8 +25,6 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	batchv1 "k8s.io/api/batch/v1"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -38,9 +36,14 @@ import (
 // behaviours on top of the shared cluster + bucket from create_test.go:
 //   - deny-by-default: an access with no matching policy stays Pending and gets
 //     no Secret; adding a policy flips it to Ready; deleting the policy revokes
-//     the key and garbage-collects the Secret (continuous enforcement);
+//     the key and garbage-collects the Secret (continuous enforcement), and the
+//     backend refuses the revoked credentials — dropping the Secret alone would
+//     leave a usable key behind;
 //   - regexp namespace matching in a policy;
-//   - key rotation via the storage.deckhouse.io/rotate annotation;
+//   - key rotation via the storage.deckhouse.io/rotate annotation, including that
+//     the superseded key stops working;
+//   - re-issuing credentials when their Secret is deleted out from under the
+//     access (the secret key cannot be recovered, so a fresh pair must be minted);
 //   - ReadOnly permission (reads succeed, writes are denied).
 //
 // These specs create their own auxiliary buckets/accesses (except rotation,
@@ -59,12 +62,17 @@ func accessSpecs() {
 
 			claim := claimName(bucket)
 
+			// Copy of the issued credentials, kept alive after the controller revokes
+			// the original so the backend's own refusal can be asserted.
+			staleSecret := secret + "-stale"
+
 			DeferCleanup(func() {
 				bg := context.Background()
 				_ = suiteDyn.Resource(bucketAccessGVR).Namespace(suiteCfg.namespace).Delete(bg, access, metav1.DeleteOptions{})
 				_ = suiteDyn.Resource(bucketClaimGVR).Namespace(suiteCfg.namespace).Delete(bg, claim, metav1.DeleteOptions{})
 				_ = suiteDyn.Resource(bucketClaimPolicyGVR).Delete(bg, policy, metav1.DeleteOptions{})
 				_ = suiteDyn.Resource(bucketGVR).Delete(bg, bucket, metav1.DeleteOptions{})
+				_ = suiteClientset.CoreV1().Secrets(suiteCfg.namespace).Delete(bg, staleSecret, metav1.DeleteOptions{})
 			})
 
 			By("creating a Shared bucket with NO policy: " + bucket)
@@ -90,6 +98,12 @@ func accessSpecs() {
 			Expect(waitAccessReady(ctx, suiteCfg.namespace, access)).To(Succeed())
 			Expect(secretExists(ctx, suiteCfg.namespace, secret)).To(BeTrue(), "credentials Secret must exist once allowed")
 
+			By("snapshotting the issued credentials before they are revoked")
+			Expect(snapshotCredentials(ctx, suiteCfg.namespace, secret, staleSecret)).To(Succeed())
+			issuedKeyID, err := getStringField(ctx, bucketAccessGVR, suiteCfg.namespace, access, "status", "accessKeyID")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(issuedKeyID).NotTo(BeEmpty())
+
 			By("deleting the policy: the claim unbinds, the access is revoked and its Secret garbage-collected")
 			Expect(suiteDyn.Resource(bucketClaimPolicyGVR).Delete(ctx, policy, metav1.DeleteOptions{})).To(Succeed())
 			Eventually(func() string {
@@ -103,6 +117,13 @@ func accessSpecs() {
 				return st
 			}).WithTimeout(2 * time.Minute).WithPolling(pollInterval).Should(Equal("False"))
 			Expect(waitSecretGone(ctx, suiteCfg.namespace, secret, 2*time.Minute)).To(Succeed())
+
+			By("asserting the key was deleted in the backend, not just dropped from the Secret")
+			expectBackendKeyGone(ctx, suiteCfg.oscName, issuedKeyID)
+
+			By("asserting the backend refuses the revoked credentials over S3")
+			Expect(s3AssertCredentialsRejected(ctx, "s3-revoked-creds", suiteCfg.namespace, staleSecret)).To(Succeed(),
+				"a revoked key must stop working")
 		})
 
 		It("matches a namespace by regexp pattern", func() {
@@ -154,6 +175,13 @@ func accessSpecs() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(oldSecretKey).NotTo(BeEmpty())
 
+			By("snapshotting the pre-rotation credentials")
+			staleSecret := secretName + "-stale"
+			DeferCleanup(func() {
+				_ = suiteClientset.CoreV1().Secrets(suiteCfg.namespace).Delete(context.Background(), staleSecret, metav1.DeleteOptions{})
+			})
+			Expect(snapshotCredentials(ctx, suiteCfg.namespace, secretName, staleSecret)).To(Succeed())
+
 			By("setting the rotate annotation")
 			Expect(annotateAccess(ctx, suiteCfg.namespace, access, objectv1alpha1.RotateAnnotation, "1")).To(Succeed())
 
@@ -176,6 +204,46 @@ func accessSpecs() {
 
 			By("confirming the rotated credentials still allow an S3 round-trip")
 			Expect(runS3ProbeJob(ctx, "s3-probe-rotate", suiteCfg.namespace, secretName)).To(Succeed())
+
+			By("confirming the superseded key was revoked, not just replaced in the Secret")
+			expectBackendKeyGone(ctx, suiteCfg.oscName, oldKeyID)
+			Expect(s3AssertCredentialsRejected(ctx, "s3-rotated-away-creds", suiteCfg.namespace, staleSecret)).To(Succeed(),
+				"rotation must delete the previous key from the backend, or it stays usable forever")
+		})
+
+		It("re-issues credentials when the Secret is deleted out from under the access", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), suiteCfg.obReadyTimeout+suiteCfg.probeJobTimeout+5*time.Minute)
+			defer cancel()
+
+			access := accessName(suiteCfg.bucketName)
+
+			oldKeyID, err := getStringField(ctx, bucketAccessGVR, suiteCfg.namespace, access, "status", "accessKeyID")
+			Expect(err).NotTo(HaveOccurred())
+			secretName, err := getStringField(ctx, bucketAccessGVR, suiteCfg.namespace, access, "status", "secretRef", "name")
+			Expect(err).NotTo(HaveOccurred())
+
+			// The secret key is only ever returned once, at creation, so a lost Secret
+			// cannot be rebuilt from the recorded key: the reconciler has to mint a
+			// fresh key pair instead of leaving the consumer without credentials.
+			By("deleting the credentials Secret " + secretName)
+			Expect(suiteClientset.CoreV1().Secrets(suiteCfg.namespace).
+				Delete(ctx, secretName, metav1.DeleteOptions{})).To(Succeed())
+
+			By("waiting for the controller to mint a fresh key and rewrite the Secret")
+			Eventually(func() (string, error) {
+				return getStringField(ctx, bucketAccessGVR, suiteCfg.namespace, access, "status", "accessKeyID")
+			}).WithTimeout(6 * time.Minute).WithPolling(pollInterval).ShouldNot(Or(BeEmpty(), Equal(oldKeyID)))
+			Expect(waitAccessReady(ctx, suiteCfg.namespace, access)).To(Succeed())
+
+			secret, err := suiteClientset.CoreV1().Secrets(suiteCfg.namespace).Get(ctx, secretName, metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred(), "the Secret must be written again")
+			for _, key := range credsSecretKeys {
+				Expect(secret.Data).To(HaveKey(key))
+				Expect(secret.Data[key]).NotTo(BeEmpty())
+			}
+
+			By("confirming the re-issued credentials work")
+			Expect(runS3ProbeJob(ctx, "s3-probe-reissued", suiteCfg.namespace, secretName)).To(Succeed())
 		})
 
 		It("issues read-only credentials that cannot write", func() {
@@ -282,6 +350,21 @@ func annotateAccess(ctx context.Context, ns, name, key, value string) error {
 	return err
 }
 
+// expectBackendKeyGone asserts the access key is absent from the backend itself,
+// which is what revocation means — and unlike an S3 probe it depends on no error
+// wording. Garage-backed profiles only; the others expose no comparable audit, so
+// there the S3 refusal stands alone.
+func expectBackendKeyGone(ctx context.Context, storeName, keyID string) {
+	GinkgoHelper()
+	if expectedBackend() != string(objectv1alpha1.BackendGarage) || keyID == "" {
+		return
+	}
+	Eventually(func() (string, error) {
+		return garageCLI(ctx, storeName, "key", "list")
+	}, 5*time.Minute, pollInterval).ShouldNot(ContainSubstring(keyID),
+		"the key must be deleted in the backend, not merely dropped from the Secret")
+}
+
 // getSecretValue returns a single key from a Secret as a string.
 func getSecretValue(ctx context.Context, ns, name, key string) (string, error) {
 	s, err := suiteClientset.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
@@ -316,54 +399,5 @@ func runS3ReadOnlyProbeJob(ctx context.Context, jobName, ns, secretName string) 
 		"echo 'RO OK'",
 	}, "\n")
 
-	backoff := int32(6)
-	var ttl int32 = 600
-	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: jobName, Namespace: ns},
-		Spec: batchv1.JobSpec{
-			BackoffLimit:            &backoff,
-			TTLSecondsAfterFinished: &ttl,
-			Template: corev1.PodTemplateSpec{
-				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
-					Containers: []corev1.Container{{
-						Name:    "mc",
-						Image:   suiteCfg.probeImage,
-						Command: []string{"/bin/sh", "-c"},
-						Args:    []string{script},
-						EnvFrom: []corev1.EnvFromSource{{
-							SecretRef: &corev1.SecretEnvSource{
-								LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
-							},
-						}},
-					}},
-				},
-			},
-		},
-	}
-
-	_ = suiteClientset.BatchV1().Jobs(ns).Delete(ctx, jobName, metav1.DeleteOptions{PropagationPolicy: ptr(metav1.DeletePropagationForeground)})
-	if _, err := suiteClientset.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{}); err != nil {
-		return fmt.Errorf("create read-only probe job %s: %w", formatRef(ns, jobName), err)
-	}
-
-	deadline := time.Now().Add(suiteCfg.probeJobTimeout)
-	for {
-		j, err := suiteClientset.BatchV1().Jobs(ns).Get(ctx, jobName, metav1.GetOptions{})
-		if err == nil {
-			if j.Status.Succeeded > 0 {
-				return nil
-			}
-			if j.Status.Failed >= backoff {
-				return fmt.Errorf("read-only probe job %s failed (%d attempts); inspect `kubectl -n %s logs job/%s`", formatRef(ns, jobName), j.Status.Failed, ns, jobName)
-			}
-		}
-		if time.Now().After(deadline) {
-			s, f := jobStatus(j)
-			return fmt.Errorf("timeout waiting for read-only probe job %s (succeeded=%d failed=%d)", formatRef(ns, jobName), s, f)
-		}
-		if !sleepCtx(ctx, pollInterval) {
-			return ctx.Err()
-		}
-	}
+	return runS3ScriptJob(ctx, jobName, ns, secretName, 6, script)
 }

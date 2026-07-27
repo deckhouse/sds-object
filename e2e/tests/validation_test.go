@@ -19,6 +19,7 @@ package tests
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -28,9 +29,31 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
 
 	objectv1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 )
+
+// recordingWarningHandler collects the admission warnings the apiserver returns, so
+// a spec can assert on guards that warn rather than deny (the default client just
+// prints them to stderr).
+type recordingWarningHandler struct {
+	mu    sync.Mutex
+	items []string
+}
+
+func (h *recordingWarningHandler) HandleWarningHeader(_ int, _, text string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.items = append(h.items, text)
+}
+
+func (h *recordingWarningHandler) all() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.items...)
+}
 
 // validationSpecs exercises the admission guards that protect the API: the
 // validating webhooks (single System cluster, unique bucket name per cluster)
@@ -55,20 +78,54 @@ func validationSpecs() {
 			expectDenied(err, "must be named 'system'")
 		})
 
-		It("denies spec.redundancy on a System ObjectStore (CEL)", func() {
+		It("denies a configurable spec.redundancy on a System ObjectStore (CEL)", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 
-			// Use name 'system' so the name rule passes and the redundancy rule is
-			// the sole CEL failure. CEL runs on the submitted object at admission
-			// (before persistence), so nothing is ever created — no cleanup, and no
-			// risk of touching the shipped `system` store.
-			bad := newOSC("system", map[string]interface{}{
-				"type":       string(objectv1alpha1.ClusterTypeSystem),
-				"redundancy": string(objectv1alpha1.RedundancyStandard),
-			})
-			err := createOSC(ctx, bad)
-			expectDenied(err, "redundancy must not be set")
+			// System takes either no redundancy (3 replicas) or None (single
+			// replica); Standard/High are not configurable there. Use name 'system'
+			// so the name rule passes and the redundancy rule is the sole CEL
+			// failure. CEL runs on the submitted object at admission (before
+			// persistence), so nothing is ever created — no cleanup, and no risk of
+			// touching the shipped `system` store.
+			for _, redundancy := range []objectv1alpha1.RedundancyMode{
+				objectv1alpha1.RedundancyStandard,
+				objectv1alpha1.RedundancyHigh,
+			} {
+				bad := newOSC("system", map[string]interface{}{
+					"type":       string(objectv1alpha1.ClusterTypeSystem),
+					"redundancy": string(redundancy),
+				})
+				expectDenied(createOSC(ctx, bad), "not configurable")
+			}
+		})
+
+		It("admits redundancy None on the System store and keeps it mutable (dry-run)", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+
+			// The counterpart of the deny case: None IS accepted for System (it is
+			// what sdsObject.systemBucket.singleReplica renders), and — uniquely for
+			// System — redundancy may change on a live store, since the controller
+			// answers with a recreate instead of an in-place factor change. Dry-run
+			// so the shipped store is not actually switched here (the destructive
+			// switch is covered end to end by system_single_replica_test.go).
+			exists, err := oscExists(ctx, "system")
+			Expect(err).NotTo(HaveOccurred())
+			if !exists {
+				Skip("system ObjectStore not present (sdsObject.systemBucket.enabled is false)")
+			}
+
+			patch := []byte(`{"spec":{"redundancy":"` + string(objectv1alpha1.RedundancyNone) + `"}}`)
+			_, err = suiteDyn.Resource(objectStoreGVR).Patch(ctx, "system", types.MergePatchType, patch,
+				metav1.PatchOptions{DryRun: []string{metav1.DryRunAll}})
+			Expect(err).NotTo(HaveOccurred(), "redundancy None must be admitted on a live System store")
+
+			By("still rejecting a switch to a configurable redundancy on the live store")
+			bad := []byte(`{"spec":{"redundancy":"` + string(objectv1alpha1.RedundancyStandard) + `"}}`)
+			_, err = suiteDyn.Resource(objectStoreGVR).Patch(ctx, "system", types.MergePatchType, bad,
+				metav1.PatchOptions{DryRun: []string{metav1.DryRunAll}})
+			expectDenied(err, "not configurable")
 		})
 
 		It("denies spec.storage.sizePerNode on a System ObjectStore (CEL)", func() {
@@ -207,6 +264,32 @@ func validationSpecs() {
 				_ = suiteDyn.Resource(bucketClaimGVR).Namespace(suiteCfg.namespace).Delete(context.Background(), "e2e-both-fields", metav1.DeleteOptions{})
 			}()
 			expectDenied(err, "mutually exclusive")
+		})
+
+		It("warns instead of denying when a Heavy cluster references a missing ElasticCluster", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+
+			// Create-before-dependency must stay possible: the validator warns and admits
+			// so the store can reconcile to Pending until its ElasticCluster shows up.
+			// A regression to a hard deny would break that ordering silently — the
+			// request would simply fail — so the warning itself is the contract. Dry-run
+			// keeps the store out of the cluster (nothing to reconcile or finalize).
+			warnings := &recordingWarningHandler{}
+			cfg := rest.CopyConfig(suiteRestCfg)
+			cfg.WarningHandler = warnings
+			dyn, err := dynamic.NewForConfig(cfg)
+			Expect(err).NotTo(HaveOccurred())
+
+			osc := newOSC("e2e-heavy-missing-ec", map[string]interface{}{
+				"type":              string(objectv1alpha1.ClusterTypeHeavy),
+				"elasticClusterRef": "does-not-exist",
+			})
+			_, err = dyn.Resource(objectStoreGVR).Create(ctx, osc, metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}})
+			Expect(err).NotTo(HaveOccurred(), "a missing ElasticCluster must be admitted, not denied")
+			Expect(warnings.all()).To(ContainElement(ContainSubstring("does-not-exist")),
+				"the validator must say which ElasticCluster is missing")
+			Expect(warnings.all()).To(ContainElement(ContainSubstring("not found")))
 		})
 
 		It("denies a Full ObjectStore whose storage.nodes cannot satisfy replication", func() {

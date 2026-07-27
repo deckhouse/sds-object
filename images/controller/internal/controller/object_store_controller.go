@@ -213,9 +213,13 @@ func (r *ObjectStoreReconciler) finish(
 	if reconcileErr != nil {
 		return ctrl.Result{}, reconcileErr
 	}
-	if aggregateReady(status) {
-		return ctrl.Result{}, nil
-	}
+	// A Ready cluster is requeued too, on the same interval. Its data plane can
+	// change underneath the controller with nothing to observe it: restarted pods
+	// come back with new IPs and the Garage RPC mesh has to be reconnected, a
+	// recycled replica needs a fresh local PV in the pool, and the reported health
+	// goes stale the moment either happens. Generation-based events cannot see any
+	// of that, so without this the store would sit at Ready while being unusable
+	// until an unrelated change happened to trigger a reconcile.
 	return ctrl.Result{RequeueAfter: r.Cfg.RequeueInterval}, nil
 }
 
@@ -248,6 +252,14 @@ func (r *ObjectStoreReconciler) updateStatus(
 			latest.Status.Endpoint = &e
 			if state.Capacity != nil {
 				latest.Status.Capacity = state.Capacity
+			}
+			// Publish the backend admin credentials Secret once the driver has one, so
+			// an operator does not have to know each backend's naming. Only drivers that
+			// keep it in the module namespace report it (Ceph RGW's lives in the
+			// sds-elastic namespace and is Rook-owned), so an empty name leaves the
+			// field untouched rather than clearing it.
+			if state.AdminSecretName != "" {
+				latest.Status.AdminSecretRef = &v1alpha1.LocalSecretReference{Name: state.AdminSecretName}
 			}
 		}
 

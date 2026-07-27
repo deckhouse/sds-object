@@ -24,6 +24,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	objectv1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 )
@@ -102,6 +103,43 @@ func lightweightSpecs() {
 			Expect(sts.Spec.Template.Annotations).To(HaveKey("storage.deckhouse.io/config-hash"))
 		})
 
+		It("allows a bucket name already used on another cluster", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), suiteCfg.obReadyTimeout+2*time.Minute)
+			defer cancel()
+
+			// Bucket-name uniqueness is per ObjectStore, so the same effective name on
+			// a different cluster must be admitted — the webhook rejecting it would
+			// make names globally scarce for no reason. The collision case (same name,
+			// same cluster) is covered in validation_test.go.
+			const twin = "e2e-light-name-twin"
+
+			DeferCleanup(func() {
+				bg, cancel := context.WithTimeout(context.Background(), resourceGoneTimeout+time.Minute)
+				defer cancel()
+				_ = suiteDyn.Resource(bucketGVR).Delete(bg, twin, metav1.DeleteOptions{})
+				_ = waitResourceGone(bg, bucketGVR, "", twin, resourceGoneTimeout)
+			})
+
+			osb := buildOSB(twin, oscName, objectv1alpha1.BucketReclaimDelete)
+			osb.Object["spec"].(map[string]interface{})["bucketName"] = suiteCfg.bucketName
+			Expect(createOSB(ctx, osb)).To(Succeed(),
+				"the same bucket name on another cluster must not collide")
+			Expect(waitOSBReady(ctx, twin)).To(Succeed())
+		})
+
+		It("rejects changing spec.redundancy on a non-System cluster (CEL, dry-run)", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+
+			// redundancy is mutable for System only, where a switch is answered with a
+			// recreate. The other profiles have no such path — Garage cannot change
+			// replication_factor in place — so the immutability rule must still bite.
+			patch := []byte(`{"spec":{"redundancy":"` + string(objectv1alpha1.RedundancyNone) + `"}}`)
+			_, err := suiteDyn.Resource(objectStoreGVR).Patch(ctx, oscName, types.MergePatchType, patch,
+				metav1.PatchOptions{DryRun: []string{metav1.DryRunAll}})
+			expectDenied(err, "spec.redundancy is immutable")
+		})
+
 		It("provisions a bucket, access + policy and a complete credentials Secret", func() {
 			ctx, cancel := context.WithTimeout(context.Background(), suiteCfg.obReadyTimeout+2*time.Minute)
 			defer cancel()
@@ -135,6 +173,44 @@ func lightweightSpecs() {
 
 			Expect(secretName).NotTo(BeEmpty())
 			Expect(runS3ProbeJob(ctx, "s3-probe-light", suiteCfg.namespace, secretName)).To(Succeed())
+		})
+
+		It("scales the data plane on storage.nodes without touching the pinned factor", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), suiteCfg.oscReadyTimeout+suiteCfg.probeJobTimeout+5*time.Minute)
+			defer cancel()
+
+			// spec.storage.nodes is mutable, and growing it must add data-plane nodes
+			// while leaving replication_factor exactly as it was pinned at init: Garage
+			// cannot change the factor on a live cluster, so recomputing it from the new
+			// node count (2 -> 3 here) is the failure this guards. The store must also
+			// stay usable across the change.
+			rfBefore, err := garageReplicationFactor(ctx, oscName)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(rfBefore).To(Equal(2), "the factor was pinned to clampRF(Standard=3, nodes=2)")
+
+			By("patching spec.storage.nodes from 2 to 3")
+			_, err = suiteDyn.Resource(objectStoreGVR).Patch(ctx, oscName, types.MergePatchType,
+				[]byte(`{"spec":{"storage":{"nodes":3}}}`), metav1.PatchOptions{})
+			Expect(err).NotTo(HaveOccurred(), "spec.storage.nodes must be mutable")
+
+			By("waiting for the third replica to be Ready")
+			Eventually(func(g Gomega) {
+				desired, ready, err := statefulSetReadyReplicas(ctx, garageStatefulSetName(oscName))
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(desired).To(Equal(int32(3)))
+				g.Expect(ready).To(Equal(int32(3)))
+			}, 10*time.Minute, 10*time.Second).Should(Succeed())
+			Expect(waitOSCReady(ctx, oscName)).To(Succeed())
+
+			By("asserting the replication factor is still the pinned one")
+			rfAfter, err := garageReplicationFactor(ctx, oscName)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(rfAfter).To(Equal(rfBefore),
+				"the pinned factor must be read back from garage.toml, never recomputed from the node count")
+
+			By("asserting the grown cluster still serves S3")
+			Expect(secretName).NotTo(BeEmpty())
+			Expect(runS3ProbeJob(ctx, "s3-probe-light-grown", suiteCfg.namespace, secretName)).To(Succeed())
 		})
 
 		It("deletes the Lightweight access, bucket and cluster", func() {

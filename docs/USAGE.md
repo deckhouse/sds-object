@@ -58,6 +58,38 @@ d8 k get objectstore
 # shared   Lightweight   Ready   http://shared-garage.d8-sds-object.svc...:3900     True    3m
 ```
 
+## Running the system storage on a single replica
+
+The built-in `system` store (shipped by the module, see `systemBucket`) runs three Garage replicas by default and rebalances them across control-plane nodes. On small or non-production installations that can be reduced to one replica:
+
+```yaml
+apiVersion: deckhouse.io/v1alpha1
+kind: ModuleConfig
+metadata:
+  name: sds-object
+spec:
+  enabled: true
+  version: 1
+  settings:
+    systemBucket:
+      singleReplica: true
+```
+
+The single replica is placed on one control-plane node and **never migrates between masters**: its data is on that node's local volume and there is no second copy to re-replicate from. While that node is down or removed, the system storage is unavailable — the data on its disk stays intact, but the controller will not relocate the replica.
+
+{{< alert level="danger" >}}
+Turning `singleReplica` on **or** off recreates the system object store and destroys everything stored in it. Garage cannot change its replication factor on a live cluster, so the controller deletes the data plane (StatefulSet, volumes, node identities) and rebuilds it empty on fresh directories. Buckets are recreated and access keys are re-issued automatically; the objects are not. Back up the contents of the `system` bucket before toggling the setting.
+
+The previous replicas' data directories are left on the control-plane nodes under `/var/lib/deckhouse/sds-object/garage/system` and can be removed manually once they are no longer needed.
+{{< /alert >}}
+
+Follow the recreate through the store's status — it reports the teardown, then comes back `Ready` with one replica:
+
+```shell
+d8 k get objectstore system -o jsonpath='{.status.phase}{"\n"}{.status.conditions[?(@.type=="BackendReady")].message}{"\n"}'
+d8 k get pods -n d8-sds-object -l storage.deckhouse.io/object-store=system
+```
+
 ## Declaring a Shared bucket
 
 `Bucket` is **cluster-scoped** — an administrator declares a bucket in an object store; it carries no credentials. This is a **Shared** bucket, meant to be consumed from multiple namespaces via policy-gated claims:

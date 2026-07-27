@@ -28,6 +28,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	objectv1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
@@ -145,6 +146,34 @@ func heavySpecs() {
 			endpoint, err := getStringField(ctx, objectStoreGVR, "", oscName, "status", "endpoint", "internal")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(endpoint).NotTo(BeEmpty())
+
+			// The Ceph-side data safety of a Heavy store lives entirely in the
+			// CephObjectStore the driver renders: the reclaim policy decides whether
+			// Rook is allowed to destroy the RGW pools (and with them every bucket's
+			// objects, regardless of any bucket's own Retain), and the redundancy
+			// intent decides the pools' replication. Neither is visible on the
+			// ObjectStore itself, so assert it where it is enforced.
+			By("asserting the rendered CephObjectStore preserves the pools and maps redundancy to pool sizes")
+			cos, err := suiteDyn.Resource(cephObjectStoreGVR).Namespace(sdsElasticNamespace).
+				Get(ctx, oscName, metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred(), "get CephObjectStore %s/%s", sdsElasticNamespace, oscName)
+
+			preserve, found, err := unstructured.NestedBool(cos.Object, "spec", "preservePoolsOnDelete")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(found).To(BeTrue(), "preservePoolsOnDelete must be set explicitly, not left to Rook's default")
+			Expect(preserve).To(BeTrue(), "this store is Retain (the CRD default), so the pools must be preserved")
+
+			// redundancy None: data pool size 2 with the safe-replica guard off (size 1
+			// is unsafe), metadata pool always 3.
+			dataSize, _, err := unstructured.NestedInt64(cos.Object, "spec", "dataPool", "replicated", "size")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(dataSize).To(Equal(int64(2)))
+			safeReplica, _, err := unstructured.NestedBool(cos.Object, "spec", "dataPool", "replicated", "requireSafeReplicaSize")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(safeReplica).To(BeFalse(), "size 2 needs the guard disabled, or Ceph refuses the pool")
+			metaSize, _, err := unstructured.NestedInt64(cos.Object, "spec", "metadataPool", "replicated", "size")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(metaSize).To(Equal(int64(3)), "RGW metadata is always kept at three copies")
 		})
 
 		It("provisions a bucket, access + policy and a complete credentials Secret", func() {

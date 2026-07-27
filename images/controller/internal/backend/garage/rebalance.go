@@ -117,6 +117,16 @@ func nextPlacementAction(cpNodes []string, replicaNode map[int32]string, replica
 // human-readable message and whether it acted (the caller then reports "not
 // ready" and requeues so the move can settle before the next one).
 func (d *Driver) reconcileSystemPlacement(ctx context.Context, cluster *v1alpha1.ObjectStore) (acted bool, msg string, err error) {
+	// Single-replica System never migrates. A relocation recycles the replica's
+	// PVC and lets it re-replicate from the surviving copies — with one replica
+	// there are none, so the move would silently discard the whole store. The
+	// replica therefore stays on the master its local PV bound to, and goes
+	// Pending (data intact on that node's disk) if the master is removed: bringing
+	// it back or recreating the store empty is an operator decision.
+	if systemSingleReplica(cluster) {
+		return false, "", nil
+	}
+
 	cpNodes, err := d.controlPlaneHostnames(ctx)
 	if err != nil {
 		return false, "", fmt.Errorf("list control-plane nodes: %w", err)
@@ -127,12 +137,13 @@ func (d *Driver) reconcileSystemPlacement(ctx context.Context, cluster *v1alpha1
 	}
 
 	// The health gate only matters for SPREAD; querying it is skipped otherwise.
+	replicas := systemReplicas(cluster)
 	healthy := false
-	if int32(len(cpNodes)) >= systemReplicas {
+	if int32(len(cpNodes)) >= replicas {
 		healthy = d.garageHealthy(ctx, cluster)
 	}
 
-	action := nextPlacementAction(cpNodes, replicaNode, systemReplicas, healthy)
+	action := nextPlacementAction(cpNodes, replicaNode, replicas, healthy)
 	if !action.act {
 		return false, "", nil
 	}
@@ -148,8 +159,9 @@ func (d *Driver) reconcileSystemPlacement(ctx context.Context, cluster *v1alpha1
 // is unbound / the PV is missing (e.g. the replica is Pending because its master
 // was removed).
 func (d *Driver) systemReplicaNodes(ctx context.Context, cluster *v1alpha1.ObjectStore) (map[int32]string, error) {
-	out := make(map[int32]string, systemReplicas)
-	for ord := int32(0); ord < systemReplicas; ord++ {
+	replicas := systemReplicas(cluster)
+	out := make(map[int32]string, replicas)
+	for ord := int32(0); ord < replicas; ord++ {
 		pvc := &corev1.PersistentVolumeClaim{}
 		key := client.ObjectKey{Namespace: d.namespace, Name: fmt.Sprintf("data-%s-%d", resourceName(cluster), ord)}
 		if err := d.apiReader.Get(ctx, key, pvc); err != nil {

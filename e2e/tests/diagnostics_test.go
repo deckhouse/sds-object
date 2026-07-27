@@ -19,6 +19,7 @@ package tests
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 
@@ -42,6 +43,7 @@ func dumpFailedSpecDiagnostics(ctx context.Context) {
 	dumpDynamic(ctx, bucketAccessGVR, suiteCfg.namespace, accessName(suiteCfg.bucketName), "BucketAccess")
 
 	dumpPods(ctx, moduleNS)
+	dumpControllerLog(ctx)
 	dumpEvents(ctx, moduleNS)
 	dumpEvents(ctx, suiteCfg.namespace)
 
@@ -77,6 +79,45 @@ func dumpDynamic(ctx context.Context, gvr schema.GroupVersionResource, ns, name,
 		reason, _, _ := unstructured.NestedString(cm, "reason")
 		msg, _, _ := unstructured.NestedString(cm, "message")
 		GinkgoWriter.Printf("    - %s=%s reason=%q msg=%q\n", t, st, reason, msg)
+	}
+}
+
+// controllerLogTail is how much of the controller log a failure dump carries:
+// enough to cover the reconciles around the failure without burying it.
+const controllerLogTail = 120
+
+// dumpControllerLog prints the tail of the module controller's log. Most failures
+// are the controller not converging, and its log is the only place that says why —
+// a stuck reconcile, a forbidden API call, a backend refusing a request. Without it
+// a CI failure leaves only symptoms, and the cluster is gone by the time anyone
+// looks.
+func dumpControllerLog(ctx context.Context) {
+	dep, err := suiteClientset.AppsV1().Deployments(moduleNS).Get(ctx, controllerDeploymentName, metav1.GetOptions{})
+	if err != nil {
+		GinkgoWriter.Printf("  controller Deployment: %v\n", err)
+		return
+	}
+	selector, err := metav1.LabelSelectorAsSelector(dep.Spec.Selector)
+	if err != nil {
+		GinkgoWriter.Printf("  controller selector: %v\n", err)
+		return
+	}
+	pods, err := suiteClientset.CoreV1().Pods(moduleNS).List(ctx, metav1.ListOptions{LabelSelector: selector.String()})
+	if err != nil {
+		GinkgoWriter.Printf("  controller pods: %v\n", err)
+		return
+	}
+	tail := int64(controllerLogTail)
+	for i := range pods.Items {
+		name := pods.Items[i].Name
+		raw, err := suiteClientset.CoreV1().Pods(moduleNS).
+			GetLogs(name, &corev1.PodLogOptions{Container: "controller", TailLines: &tail}).
+			DoRaw(ctx)
+		if err != nil {
+			GinkgoWriter.Printf("  controller log (%s): %v\n", name, err)
+			continue
+		}
+		GinkgoWriter.Printf("  controller log (%s, last %d lines):\n%s\n", name, controllerLogTail, strings.TrimRight(string(raw), "\n"))
 	}
 }
 

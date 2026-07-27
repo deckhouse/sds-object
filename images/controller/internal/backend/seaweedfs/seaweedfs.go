@@ -172,6 +172,8 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 		state.Message = fmt.Sprintf("configuring S3 admin identity: %v", err)
 		return state, nil
 	}
+	// The admin Secret exists from here on, so the CR can point at it.
+	state.AdminSecretName = adminSecretName(cluster)
 
 	state.Ready = true
 	state.Message = "SeaweedFS S3 gateway is ready"
@@ -187,7 +189,7 @@ func (d *Driver) DeleteCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 	if cluster.Spec.ReclaimPolicy != v1alpha1.ClusterReclaimDelete {
 		return nil
 	}
-	return backend.DeleteClusterPVCs(ctx, d.client, d.namespace, commonLabels(cluster))
+	return backend.DeleteClusterPVCs(ctx, d.apiReader, d.client, d.namespace, commonLabels(cluster))
 }
 
 // EnsureBucket creates the bucket via the S3 API with the admin credentials

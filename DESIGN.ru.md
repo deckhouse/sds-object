@@ -62,7 +62,7 @@ namespaced-`ObjectBucket`-модели (см. историческую врез�
 
 | `spec.type` | Бэкенд | Размещение / данные | Сценарий |
 |-------------|--------|---------------------|----------|
-| `System` | Garage | StatefulSet (фикс. 3 реплики) на control-plane, node-sticky local PV | Системные нужды платформы (backup, registry, loki, …). Минимум зависимостей, не требует внешнего стораджа. |
+| `System` | Garage | StatefulSet на control-plane (3 реплики; 1 при `redundancy: None`), node-sticky local PV | Системные нужды платформы (backup, registry, loki, …). Минимум зависимостей, не требует внешнего стораджа. |
 | `Lightweight` | Garage | StatefulSet, PVC на StorageClass | Лёгкое хранилище для прикладных нужд небольшого объёма. |
 | `Full` | SeaweedFS | StatefulSet (master/volume/filer+s3), PVC | Полноценное масштабируемое хранилище с репликацией/EC. |
 | `Heavy` | sds-elastic (Ceph RGW) | RADOS Gateway поверх существующего CephCluster | Тяжёлое хранилище, переиспользует ёмкость и отказоустойчивость Ceph. |
@@ -91,8 +91,9 @@ spec:
   type: Lightweight       # System | Lightweight | Full | Heavy — REQUIRED, immutable
 
   # Ёмкость и сторадж. Игнорируется для type=Heavy (ёмкость у Ceph).
-  # Для type=System поля storage.sizePerNode и redundancy задавать НЕЛЬЗЯ
-  # (запрещено CEL): ёмкость — local PV, фактор закреплён на 3.
+  # Для type=System поле storage.sizePerNode задавать НЕЛЬЗЯ (запрещено CEL):
+  # ёмкость — local PV. redundancy для System допускает только None (одна
+  # реплика, фактор 1); без него — 3 реплики и фактор 3.
   storage:
     sizePerNode: 100Gi    # ёмкость на один узел data plane
     nodes: 3              # число узлов data plane (optional; иначе из redundancy)
@@ -106,7 +107,9 @@ spec:
     tolerations: []
 
   # Интент отказоустойчивости. Маппится в конкретные настройки бэкенда.
-  # По умолчанию Standard. Нельзя задавать для type=System.
+  # По умолчанию Standard. Для type=System допустимо только None — режим одной
+  # реплики (и это единственное поле, которое System разрешает менять после
+  # создания: переключение пересоздаёт кластер, см. 3.2).
   redundancy: Standard    # None | Standard | High   (optional)
 
   # Только для type=Heavy: ссылка на ElasticCluster (sds-elastic),
@@ -119,7 +122,12 @@ spec:
 ```yaml
 # 1. Системный кластер (garage на мастерах, node-sticky local PV)
 spec:
-  type: System            # всё остальное — дефолты
+  type: System            # всё остальное — дефолты (3 реплики)
+---
+# 1b. Системный кластер в одной реплике (модульный параметр singleReplica)
+spec:
+  type: System
+  redundancy: None
 ---
 # 2. Lightweight (garage + PVC)
 spec:
@@ -158,7 +166,7 @@ spec:
 
 | Профиль (движок) | Реплики data plane | Фактор репликации / аналог |
 |------------------|--------------------|----------------------------|
-| `System` (Garage) | фиксированные 3 реплики (StatefulSet, node-sticky local PV), независимо от числа мастеров | `3`, **pinned**; `redundancy`/`sizePerNode` задавать нельзя |
+| `System` (Garage) | 3 реплики (StatefulSet, node-sticky local PV) либо 1 при `redundancy: None`, в обоих случаях независимо от числа мастеров | `3` (или `1` в режиме одной реплики), **pinned**; `sizePerNode` задавать нельзя, `redundancy` — только `None` |
 | `Lightweight` (Garage) | `spec.storage.nodes`, иначе из `redundancy`: None→1, Standard→3, High→5 | `clampRF(intent, число узлов)` = `max(1, min(intent, узлы))`, допускается 2, **pinned** |
 | `Full` (SeaweedFS) | volume-серверы: `spec.storage.nodes`, иначе None→1 / Standard→3 / High→4 (master 1/3/3; filer 1, в High → 3) | код репликации `000`/`001`/`002` из `redundancy` |
 | `Heavy` (Ceph RGW) | топология на стороне Ceph (`sds-elastic`) | `size` пула: None→2 / Standard→3 / High→4 |
@@ -318,6 +326,53 @@ ID, а старый остался бы в layout **мёртвой** нодой 
 чтобы транзиент не вызывал лишних ребалансов) — защитный fallback для ID, который
 по-настоящему не вернётся (например, идентичность потеряна до того, как её успели снять).
 
+#### Режим одной реплики System (`singleReplica`)
+
+Параметр модуля `sdsObject.systemBucket.singleReplica` (default `false`) рендерит в
+системном `ObjectStore` `spec.redundancy: None`, и контроллер разворачивает System из
+**одной** реплики Garage с `replication_factor = 1` (`systemReplicas(cluster)` = 1,
+`systemSingleReplica`). Смысл — сократить потребление ресурсов системным хранилищем на
+небольших и непродуктивных инсталляциях; ценой — полный отказ от избыточности.
+
+**Реплика никогда не переезжает между мастерами.** `reconcileSystemPlacement` в этом
+режиме сразу возвращает «нет действия»: переезд — это recycle PVC с последующей
+дорепликой с живых копий, а при одной реплике живых копий нет, то есть перенос просто
+уничтожил бы хранилище. Следствия:
+
+- реплика встаёт на тот мастер, где планировщик забиндил её PVC (пул local PV
+  по-прежнему держит по одному PV на каждый control-plane узел, чтобы выбор был), и
+  `nodeAffinity` держит её там навсегда;
+- при выводе или падении этого мастера под уходит в `Pending`, а хранилище становится
+  недоступным до возвращения узла; данные на его диске не затрагиваются (`Retain`);
+- рост числа мастеров ничего не меняет: spread-логика к одной реплике не применяется.
+
+**Переключение параметра пересоздаёт кластер (данные теряются).** Garage не умеет менять
+`replication_factor` на живом кластере, а 3↔1 — это именно смена фактора, поэтому
+in-place перехода не существует. `EnsureCluster` сравнивает закреплённый в ConfigMap
+фактор с желаемым и, если они разошлись, вызывает `teardownSystemDataPlane`:
+
+1. удаляет StatefulSet (вместе с подами), PVC реплик, Secret с идентичностями нод и весь
+   пул local PV — и на каждом проходе повторяет удаление, пока что-то остаётся (PVC
+   держит finalizer до исчезновения пода, `Retain`-PV — до исчезновения PVC);
+2. ConfigMap с закреплённым фактором перезаписывается **только после** полного сноса,
+   поэтому рестарт контроллера посреди процесса снова видит расхождение и доводит снос
+   до конца;
+3. счётчик **инкарнации** (`system-incarnation` в том же ConfigMap) увеличивается на 1, и
+   новый пул local PV получает другие имена и **другие каталоги на узлах**
+   (`systemLocalPVName`/`systemLocalPVPath`). Это обязательно: подняться над каталогами
+   прошлой инкарнации значило бы прочитать метаданные Garage с другим фактором и layout
+   из уже не существующих node ID — состояние, из которого Garage не восстанавливается.
+   Инкарнация 1 рендерит прежние (без счётчика) имена и пути, поэтому для уже работающих
+   кластеров апгрейд ничего не двигает;
+4. кластер поднимается **пустым**: бакеты создаются заново (`EnsureBucket` идемпотентен
+   по алиасу), ключи доступа перевыпускаются (`EnsureAccess` минтит новый ключ, если
+   записанный исчез из бэкенда), а объекты теряются.
+
+Каталоги прошлой инкарнации остаются на узлах (`/var/lib/deckhouse/sds-object/garage/<имя>/…`):
+у контроллера нет агента на узле, а `Retain` по контракту не стирает данные — их удаляет
+оператор вручную. Тот же путь используется в обе стороны (включение и выключение), так
+что необратимость симметрична и вынесена в документацию параметра.
+
 #### Особенности System
 
 `System` — особый профиль (Garage, StatefulSet с фиксированным числом реплик на
@@ -326,8 +381,10 @@ control-plane узлах, данные в node-sticky local PV), поднима�
 параметром модуля). Правила CRD (CEL) фиксируют его отличия:
 
 - имя ObjectStore обязано быть `system` (единственность + предсказуемые имена);
-- `spec.redundancy` и `spec.storage.sizePerNode` задавать нельзя: ёмкость — это
-  local PV на мастерах, фактор закреплён на 3 при init (не настраивается);
+- `spec.storage.sizePerNode` задавать нельзя (ёмкость — это local PV на мастерах), а
+  `spec.redundancy` допускает только `None` (режим одной реплики); фактор в остальных
+  случаях закреплён на 3 при init. `redundancy` — единственное изменяемое поле System:
+  его переключение пересоздаёт кластер (см. выше);
 - `spec.storage.class` игнорируется: используется управляемый StorageClass
   `sds-object-system-local`;
 - число реплик и фактор не зависят от числа мастеров (см. сценарии выше); поды
@@ -365,6 +422,8 @@ status:
 
 - `metadata.name` — DNS-1123 label, `<= 30` символов.
 - `spec.type` — immutable.
+- `spec.redundancy` — immutable, **кроме** `type == System`, где допустимо только
+  `None`/unset и переключение между ними пересоздаёт кластер (§3.2).
 - `spec.elasticClusterRef` — обязателен и непуст ⇔ `type == Heavy`; immutable.
 - `spec.storage.class` — обязателен для `Lightweight`/`Full`.
 - `type == System`: размещение принудительно на control-plane, `storage.class`
@@ -565,15 +624,18 @@ type Driver interface {
 
 ### 5.1 Реконсиляция кластера
 
-- **System (Garage):** StatefulSet с фиксированным числом реплик (`systemReplicas` = 3),
+- **System (Garage):** StatefulSet с числом реплик `systemReplicas(cluster)` (3 или 1
+  в режиме одной реплики),
   `nodeSelector: node-role.kubernetes.io/control-plane` и tolerations на мастера; мягкий
   (preferred) pod anti-affinity по `kubernetes.io/hostname`; `PodManagementPolicy: Parallel`.
   Данные — `volumeClaimTemplates` на управляемом StorageClass `sds-object-system-local`
   (node-sticky local PV, см. §3.2); контроллер держит пул статических `hostPath`-PV с
   `nodeAffinity` на control-plane узлах (`ensureSystemLocalPVs`) и убирает `Released` PV.
   Service (S3 API) и headless-сервис для членства; admin API для layout.
-  `replication_factor` закреплён на 3 (независимо от числа мастеров); layout реконсилится
-  при переезде/возврате реплик (см. §3.2). Админ-ключ → Secret в namespace модуля.
+  `replication_factor` закреплён на 3 (в режиме одной реплики — на 1), независимо от числа
+  мастеров; layout реконсилится при переезде/возврате реплик (см. §3.2). Смена числа реплик
+  выполняется только через пересоздание data plane (`teardownSystemDataPlane`, см. §3.2).
+  Админ-ключ → Secret в namespace модуля.
 - **Lightweight (Garage):** StatefulSet с `volumeClaimTemplates` (`storage.class`,
   `storage.size`); число реплик = `replication_factor`, фактор достижим по построению.
 - **Full (SeaweedFS):** master(ы) (raft 1/3), volume-servers (StatefulSet+PVC),
@@ -631,9 +693,9 @@ type Driver interface {
    при транзиентной ошибке reconcile повторяется (ключ не остаётся орфаном).
 
 Системное хранилище: модуль по умолчанию (`sdsObject.systemBucket.enabled`,
-default true) шипует системный `ObjectStore` (`System`) + `system`-бакет
-+ политику на `d8-*`; `redundancy` кластера следует режиму HA
-(`helm_lib_is_ha_to_value`: HA → Standard, иначе None).
+default true) шипует системный `ObjectStore` (`System`), `system`-бакет
+и политику на `d8-*`. Параметр `sdsObject.systemBucket.singleReplica` (default
+false) рендерит в спеке `redundancy: None` — режим одной реплики (см. §3.2).
 
 Маппинг admin-операций по бэкендам: Garage Admin API; SeaweedFS S3/filer API;
 Ceph RGW admin ops (или `CephObjectStoreUser` + bucket через S3 от его имени).
@@ -650,6 +712,8 @@ nodeSelector: {}                              # размещение служе�
 tolerations: []
 systemBucket:
   enabled: true                               # шипать системный кластер+бакет (default true)
+  singleReplica: false                        # системный кластер в одну реплику (см. §3.2);
+                                              # переключение пересоздаёт кластер (данные теряются)
 ```
 
 Вся специфика кластеров и бакетов — только через CRD.

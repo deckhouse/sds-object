@@ -77,13 +77,54 @@ const (
 	annConfigHash = "storage.deckhouse.io/config-hash"
 )
 
-// systemReplicas is the fixed number of Garage replicas the System profile runs,
-// independent of the control-plane node count. Keeping it constant (rather than
-// one pod per master) keeps the pinned replication factor and the Garage quorum
-// stable across master-count changes: three replicas always run — spread across
-// control-plane nodes when several exist, co-located on the single master
-// otherwise (see DESIGN, "System master-count change scenarios").
-const systemReplicas int32 = 3
+// systemReplicasHA is the number of Garage replicas the default (highly
+// available) System profile runs, independent of the control-plane node count.
+// Keeping it constant (rather than one pod per master) keeps the pinned
+// replication factor and the Garage quorum stable across master-count changes:
+// three replicas always run — spread across control-plane nodes when several
+// exist, co-located on the single master otherwise (see DESIGN, "System
+// master-count change scenarios").
+const systemReplicasHA int32 = 3
+
+// systemReplicasSingle is the replica count of the single-replica System profile
+// (spec.redundancy: None, shipped via the sdsObject.systemBucket.singleReplica
+// module setting): one Garage replica with replication_factor 1. It gives up all
+// redundancy — the store is unavailable while its pod is down and lost with its
+// master's disk — in exchange for a third of the footprint, and it never
+// migrates between masters (see reconcileSystemPlacement).
+const systemReplicasSingle int32 = 1
+
+// systemSingleReplica reports whether the System cluster runs in single-replica
+// mode. None is the only redundancy value the CRD accepts for System, so it is
+// the whole switch: unset means the default systemReplicasHA profile.
+func systemSingleReplica(cluster *v1alpha1.ObjectStore) bool {
+	return cluster.Spec.Type == v1alpha1.ClusterTypeSystem &&
+		cluster.Spec.Redundancy == v1alpha1.RedundancyNone
+}
+
+// systemReplicas is the number of Garage replicas the System profile runs: one in
+// single-replica mode, systemReplicasHA otherwise. Both counts are independent of
+// the control-plane node count; switching between them is not an in-place change
+// but a recreate of the data plane (see Driver.teardownSystemDataPlane).
+func systemReplicas(cluster *v1alpha1.ObjectStore) int32 {
+	if systemSingleReplica(cluster) {
+		return systemReplicasSingle
+	}
+	return systemReplicasHA
+}
+
+// systemIncarnationKey is the ConfigMap key recording the System data plane's
+// incarnation: a counter bumped on every recreate (a replica-count switch) so the
+// new, empty cluster binds local PVs backed by FRESH directories instead of
+// mounting the previous incarnation's Garage metadata (which pins a different
+// replication factor and a layout of node IDs that no longer exist — a state
+// Garage cannot recover from).
+const systemIncarnationKey = "system-incarnation"
+
+// firstSystemIncarnation is the incarnation of a System cluster that was never
+// recreated. It renders the legacy (incarnation-less) PV names and data
+// directories, so upgrading a running cluster is a no-op.
+const firstSystemIncarnation int32 = 1
 
 // labelSystemLocalNode marks a controller-provisioned System local PV and records
 // the node (its kubernetes.io/hostname value) its nodeAffinity pins it to. Its
@@ -190,6 +231,22 @@ func replicationFactorFromConfigMap(cm *corev1.ConfigMap) int32 {
 	return int32(n)
 }
 
+// systemIncarnationFromConfigMap returns the System data-plane incarnation
+// recorded in an existing garage.toml ConfigMap. A missing or unparseable value
+// reads back as firstSystemIncarnation: clusters provisioned before the counter
+// existed keep the legacy PV names and data directories they are already bound
+// to, so nothing moves on upgrade.
+func systemIncarnationFromConfigMap(cm *corev1.ConfigMap) int32 {
+	if cm == nil {
+		return firstSystemIncarnation
+	}
+	n, err := strconv.Atoi(cm.Data[systemIncarnationKey])
+	if err != nil || n < int(firstSystemIncarnation) {
+		return firstSystemIncarnation
+	}
+	return int32(n)
+}
+
 // configHash is a short content hash of garage.toml, stamped onto the pod
 // template so the workload rolls when the config changes (Garage reads the file
 // only at startup, and every node must run the same replication_factor).
@@ -208,13 +265,13 @@ func lightweightReplicas(cluster *v1alpha1.ObjectStore) int32 {
 	return replicationFactor(cluster)
 }
 
-// desiredReplicas is the number of Garage data-plane pods for a cluster: a fixed
+// desiredReplicas is the number of Garage data-plane pods for a cluster:
 // systemReplicas for System (independent of the master count), otherwise
 // lightweightReplicas (which spec.storage.nodes may override). It also drives the
 // initial replication factor (clamped to this count) and the layout reconcile.
 func desiredReplicas(cluster *v1alpha1.ObjectStore) int32 {
 	if cluster.Spec.Type == v1alpha1.ClusterTypeSystem {
-		return systemReplicas
+		return systemReplicas(cluster)
 	}
 	return lightweightReplicas(cluster)
 }
@@ -253,15 +310,22 @@ api_bind_addr = "[::]:%d"
 }
 
 // buildConfigMap returns the ConfigMap holding garage.toml with the given
-// replication factor.
-func buildConfigMap(cluster *v1alpha1.ObjectStore, namespace string, rf int32) *corev1.ConfigMap {
+// replication factor. For System it also records the data-plane incarnation, the
+// counter that keeps a recreated cluster off the previous incarnation's data
+// directories; the key lives outside garage.toml so bumping it does not roll the
+// pods by itself (the factor change already does).
+func buildConfigMap(cluster *v1alpha1.ObjectStore, namespace string, rf, incarnation int32) *corev1.ConfigMap {
+	data := map[string]string{configFileName: renderConfig(rf)}
+	if cluster.Spec.Type == v1alpha1.ClusterTypeSystem {
+		data[systemIncarnationKey] = strconv.FormatInt(int64(incarnation), 10)
+	}
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      configName(cluster),
 			Namespace: namespace,
 			Labels:    commonLabels(cluster),
 		},
-		Data: map[string]string{configFileName: renderConfig(rf)},
+		Data: data,
 	}
 }
 
@@ -492,17 +556,18 @@ func buildStatefulSet(cluster *v1alpha1.ObjectStore, namespace, image, cfgHash s
 	}
 }
 
-// buildSystemStatefulSet returns the StatefulSet for the System profile: a fixed
+// buildSystemStatefulSet returns the StatefulSet for the System profile: a
 // systemReplicas count backed by node-sticky local PVs on control-plane nodes.
 // The replica count is independent of the master count — replicas spread
 // one-per-node when several control-plane nodes exist (soft anti-affinity) and
-// co-locate on the single master otherwise. Pods start in parallel (no ordinal
-// barrier). Storage is a per-ordinal PVC on the WaitForFirstConsumer
-// systemLocalStorageClass: the controller pre-creates a pool of hostPath-backed,
-// nodeAffinity-pinned PVs (ensureSystemLocalPVs), so each replica sticks to its
-// node and finds its data again after a restart. This keeps a constant
-// replication factor and Garage quorum across master-count changes; the layout
-// is reconciled in mesh.go as replicas move and rejoin.
+// co-locate on the single master otherwise; in single-replica mode the one pod
+// simply lands on whichever master the scheduler picks and stays there. Pods
+// start in parallel (no ordinal barrier). Storage is a per-ordinal PVC on the
+// WaitForFirstConsumer systemLocalStorageClass: the controller pre-creates a pool
+// of hostPath-backed, nodeAffinity-pinned PVs (ensureSystemLocalPVs), so each
+// replica sticks to its node and finds its data again after a restart. This keeps
+// a constant replication factor and Garage quorum across master-count changes;
+// the layout is reconciled in mesh.go as replicas move and rejoin.
 func buildSystemStatefulSet(cluster *v1alpha1.ObjectStore, namespace, image, cfgHash string) *appsv1.StatefulSet {
 	spec := podSpec(cluster, image) // data comes from volumeClaimTemplates
 
@@ -555,7 +620,7 @@ func buildSystemStatefulSet(cluster *v1alpha1.ObjectStore, namespace, image, cfg
 		SecurityContext: &corev1.SecurityContext{RunAsUser: ptrInt64(0), RunAsGroup: ptrInt64(0)},
 	}}
 
-	replicas := systemReplicas
+	replicas := systemReplicas(cluster)
 	sc := systemLocalStorageClass
 	return &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
@@ -599,9 +664,26 @@ func shortHash(s string) string {
 }
 
 // systemLocalPVName is the deterministic name of the index-th pool PV pinned to
-// node. Deterministic naming makes the pool reconcile idempotent.
-func systemLocalPVName(cluster *v1alpha1.ObjectStore, node string, index int32) string {
-	return fmt.Sprintf("%s-local-%s-%d", resourceName(cluster), shortHash(node), index)
+// node for the given incarnation. Deterministic naming makes the pool reconcile
+// idempotent; carrying the incarnation keeps a recreated cluster from binding a
+// leftover PV of the previous one (whose directory holds incompatible data).
+// firstSystemIncarnation keeps the original, incarnation-less name.
+func systemLocalPVName(cluster *v1alpha1.ObjectStore, node string, incarnation, index int32) string {
+	if incarnation <= firstSystemIncarnation {
+		return fmt.Sprintf("%s-local-%s-%d", resourceName(cluster), shortHash(node), index)
+	}
+	return fmt.Sprintf("%s-local-%s-i%d-%d", resourceName(cluster), shortHash(node), incarnation, index)
+}
+
+// systemLocalPVPath is the on-node directory backing that pool PV. A recreated
+// cluster (incarnation > firstSystemIncarnation) gets a directory of its own, so
+// it starts from empty storage instead of the previous incarnation's Garage
+// metadata; the old directories are left on disk untouched (Retain semantics).
+func systemLocalPVPath(cluster *v1alpha1.ObjectStore, node string, incarnation, index int32) string {
+	if incarnation <= firstSystemIncarnation {
+		return fmt.Sprintf("%s/%s/%s-%d", hostPathBase, cluster.Name, shortHash(node), index)
+	}
+	return fmt.Sprintf("%s/%s/i%d/%s-%d", hostPathBase, cluster.Name, incarnation, shortHash(node), index)
 }
 
 // buildSystemLocalPV builds one node-sticky local PV for the System pool: a
@@ -609,14 +691,14 @@ func systemLocalPVName(cluster *v1alpha1.ObjectStore, node string, index int32) 
 // on first mount — no node agent needed) pinned to node via nodeAffinity, on the
 // WaitForFirstConsumer systemLocalStorageClass, with Retain so PVC/PV deletion
 // never wipes data. The capacity is nominal (hostPath does not enforce it).
-func buildSystemLocalPV(cluster *v1alpha1.ObjectStore, node string, index int32) *corev1.PersistentVolume {
+func buildSystemLocalPV(cluster *v1alpha1.ObjectStore, node string, incarnation, index int32) *corev1.PersistentVolume {
 	hostPathType := corev1.HostPathDirectoryOrCreate
 	labels := commonLabels(cluster)
 	labels[labelSystemLocalNode] = node
 	sc := systemLocalStorageClass
 	return &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:   systemLocalPVName(cluster, node, index),
+			Name:   systemLocalPVName(cluster, node, incarnation, index),
 			Labels: labels,
 		},
 		Spec: corev1.PersistentVolumeSpec{
@@ -626,7 +708,7 @@ func buildSystemLocalPV(cluster *v1alpha1.ObjectStore, node string, index int32)
 			StorageClassName:              sc,
 			PersistentVolumeSource: corev1.PersistentVolumeSource{
 				HostPath: &corev1.HostPathVolumeSource{
-					Path: fmt.Sprintf("%s/%s/%s-%d", hostPathBase, cluster.Name, shortHash(node), index),
+					Path: systemLocalPVPath(cluster, node, incarnation, index),
 					Type: &hostPathType,
 				},
 			},

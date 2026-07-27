@@ -23,7 +23,9 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	objectv1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 )
@@ -240,6 +242,72 @@ func fullHighRedundancySpecs() {
 			Expect(secretName).NotTo(BeEmpty())
 
 			Expect(runS3ProbeJob(ctx, "s3-probe-full-hr", suiteCfg.namespace, secretName)).To(Succeed())
+		})
+
+		It("keeps serving S3 when one filer is lost, and keeps the data across a volume-server restart", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+			defer cancel()
+
+			Expect(secretName).NotTo(BeEmpty())
+			const marker = "full-hr-marker.txt"
+			const markerBody = "written before the SeaweedFS failover"
+
+			By("writing a marker object")
+			Expect(s3PutMarker(ctx, "s3-full-hr-write", suiteCfg.namespace, secretName, marker, markerBody)).To(Succeed())
+
+			// HighRedundancy exists to run several filers (the S3 gateway) behind one
+			// Service on shared PostgreSQL metadata. That only buys anything if losing a
+			// filer does not interrupt S3, which nothing checked: the profile was only
+			// ever asserted to come up.
+			filerSelector := "storage.deckhouse.io/object-store=" + oscName + ",app.kubernetes.io/component=filer"
+			filers, err := suiteClientset.CoreV1().Pods(moduleNS).List(ctx, metav1.ListOptions{LabelSelector: filerSelector})
+			Expect(err).NotTo(HaveOccurred())
+			if len(filers.Items) < 2 {
+				Skip("this cluster runs a single filer; there is no HA to fail over")
+			}
+
+			By("deleting one filer pod")
+			victim := filers.Items[0].Name
+			Expect(suiteClientset.CoreV1().Pods(moduleNS).Delete(ctx, victim, metav1.DeleteOptions{})).To(Succeed())
+
+			By("asserting S3 still serves the marker through the surviving filer")
+			Expect(s3AssertMarkerContent(ctx, "s3-full-hr-failover", suiteCfg.namespace, secretName, marker, markerBody)).To(Succeed(),
+				"a multi-filer cluster must survive losing one filer")
+
+			By("waiting for the filer set to be whole again")
+			Eventually(func(g Gomega) {
+				desired, ready, err := statefulSetReadyReplicas(ctx, oscName+"-seaweedfs-filer")
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(ready).To(Equal(desired))
+			}, 15*time.Minute, 10*time.Second).Should(Succeed())
+
+			// Volume servers hold the objects themselves, on PVCs. A restart must bring
+			// them back to their own volumes, exactly like the System profile's replicas.
+			By("restarting every volume server")
+			volumeSelector := "storage.deckhouse.io/object-store=" + oscName + ",app.kubernetes.io/component=volume"
+			volumes, err := suiteClientset.CoreV1().Pods(moduleNS).List(ctx, metav1.ListOptions{LabelSelector: volumeSelector})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(volumes.Items).NotTo(BeEmpty())
+			deleted := map[string]types.UID{}
+			for i := range volumes.Items {
+				deleted[volumes.Items[i].Name] = volumes.Items[i].UID
+				Expect(suiteClientset.CoreV1().Pods(moduleNS).Delete(ctx, volumes.Items[i].Name, metav1.DeleteOptions{})).To(Succeed())
+			}
+
+			Eventually(func(g Gomega) {
+				pods, err := suiteClientset.CoreV1().Pods(moduleNS).List(ctx, metav1.ListOptions{LabelSelector: volumeSelector})
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(pods.Items).To(HaveLen(len(deleted)))
+				for i := range pods.Items {
+					p := &pods.Items[i]
+					g.Expect(deleted[p.Name]).NotTo(Equal(p.UID), "pod %s is still the pre-restart instance", p.Name)
+					g.Expect(p.Status.Phase).To(Equal(corev1.PodRunning))
+				}
+			}, 15*time.Minute, 10*time.Second).Should(Succeed())
+			Expect(waitOSCReady(ctx, oscName)).To(Succeed())
+
+			By("asserting the object survived the volume-server restart")
+			Expect(s3AssertMarkerContent(ctx, "s3-full-hr-durable", suiteCfg.namespace, secretName, marker, markerBody)).To(Succeed())
 		})
 
 		It("deletes the HighRedundancy Full access, bucket and cluster", func() {

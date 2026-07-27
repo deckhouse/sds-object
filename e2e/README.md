@@ -59,7 +59,7 @@ profile so CI needs no extra storage modules:
 
 | `E2E_OSC_TYPE` | Backend | Extra requirements |
 |----------------|---------|--------------------|
-| `System` (default) | Garage (StatefulSet, fixed 3 replicas on control-plane, node-sticky local PV) | none |
+| `System` (default) | Garage (StatefulSet on control-plane, node-sticky local PV; 3 replicas, or 1 with `systemBucket.singleReplica`) | none |
 | `Lightweight` | Garage (StatefulSet + PVC) | `E2E_STORAGE_CLASS` + a CSI/local-volume module enabled in `cluster_config.yml` |
 | `Full` | SeaweedFS | `E2E_STORAGE_CLASS` + `managed-postgres` module |
 | `Heavy` | Ceph RGW | `sds-elastic` module + a Ready `ElasticCluster` (`E2E_ELASTIC_CLUSTER_REF`) |
@@ -68,14 +68,60 @@ When you point `E2E_OSC_TYPE` at a heavier profile, enable the corresponding
 modules in `tests/cluster_config.yml` first (see the comments there). The suite
 fails fast in `BeforeSuite` if a profile's required env knob is missing.
 
+## Data-safety specs
+
+`orphans` ([tests/orphans_test.go](tests/orphans_test.go)) audits the backend's own
+state after a teardown — that no access key and no bucket survive their CRs, and
+that the short-lived owner key the driver mints to empty a non-empty bucket is
+revoked. It runs the `garage` CLI inside a data-plane pod (nothing in Kubernetes
+reflects this state), so it covers the Garage-backed profiles only.
+
+`reclaim` ([tests/reclaim_test.go](tests/reclaim_test.go)) covers when the module
+is allowed to destroy data: a `Bucket` with `reclaimPolicy: Retain` (the default)
+must leave the backend bucket and its objects alone, so re-declaring the same
+Bucket adopts the data back, while `Delete` still empties and removes it; and an
+`ObjectStore`'s reclaim policy decides whether its data-plane PVCs survive its
+deletion (Kubernetes never GCs a StatefulSet's PVCs, so it is entirely the
+controller's call). The cluster half needs a StorageClass for two throwaway
+Lightweight stores and skips without one.
+
+## System-specific specs
+
+Three spec groups cover the shipped `system` store beyond the generic
+create/bucket/access flow:
+
+- `system-bucket` ([tests/system_test.go](tests/system_test.go)): the shipped CRs,
+  the replica/factor/pool shape, and — on Commander runs only
+  (`E2E_COMMANDER_URL`) — the master-count transitions 1→3→1 with the automatic
+  rebalance.
+- `system-durability` ([tests/system_durability_test.go](tests/system_durability_test.go)):
+  the data-safety mechanisms, without needing Commander. A full data-plane restart
+  must bring every replica back to its own volume on its own node with the data
+  intact, and a recycled replica (the step a rebalance is made of) must come back
+  with its original Garage node identity restored from the identity Secret.
+- `system-bucket-toggle` ([tests/system_toggle_test.go](tests/system_toggle_test.go)):
+  `systemBucket.enabled` off (the shipped ObjectStore, Bucket, policy and
+  StorageClass go; the replica PVCs stay, since the store is Retain) and back on.
+  **Disruptive** — see `E2E_SKIP_SYSTEM_RECREATE` below.
+- `system-single-replica` ([tests/system_single_replica_test.go](tests/system_single_replica_test.go)):
+  the `systemBucket.singleReplica` setting, including the controller being
+  restarted mid-recreate. **Destructive** — see `E2E_SKIP_SYSTEM_RECREATE` below.
+
 ## Why one shared cluster + Ordered specs
 
 The validation and delete specs build on the cluster and bucket created by the
 first specs, so the suite uses a **single shared `ObjectStore`** inside
 one `Describe(..., Ordered)`. Spec registration goes through builder functions
 called in explicit order from the root container
-(`createSpecs → validationSpecs → deleteSpecs`); the deletion specs run last.
-`RandomizeAllSpecs` stays **off**.
+(`createSpecs → validationSpecs → … → deleteSpecs → systemSingleReplicaSpecs`);
+the deletion specs run near the end, and the destructive `system-single-replica`
+switch runs after them. `RandomizeAllSpecs` stays **off**.
+
+`FailFast` is **off** as well (matching the root container's `ContinueOnFailure`): a
+run costs a provisioned cluster and well over an hour, so stopping at the first
+failure would surface one finding per run. The flip side is that the specs share
+fixtures, so a failure can knock over the ones behind it — when reading a failing
+run, start from the **first** failure; the later ones may be its consequences.
 
 ## Requirements
 
@@ -126,7 +172,8 @@ called in explicit order from the root container
 
 - `E2E_OSC_NAME`: name of the shared `ObjectStore`, defaults to `e2e-osc`.
 - `E2E_OSC_TYPE`: profile, one of `System` (default) / `Lightweight` / `Full` / `Heavy`.
-- `E2E_REDUNDANCY`: `Single` (default) / `Replicated` / `HighRedundancy`.
+- `E2E_REDUNDANCY`: `None` (default) / `Standard` / `High`. Ignored for `System`,
+  whose replica count comes from the module setting `systemBucket.singleReplica`.
 - `E2E_STORAGE_CLASS`: StorageClass for the PVCs; **required** for `Lightweight`/`Full`.
 - `E2E_OSC_SIZE`: cluster storage size, defaults to `5Gi`.
 - `E2E_ELASTIC_CLUSTER_REF`: `ElasticCluster` name; **required** for `Heavy`.
@@ -138,6 +185,12 @@ called in explicit order from the root container
 - `E2E_PROBE_JOB_TIMEOUT`: Go duration bounding the probe Job, defaults to 5m.
 - `E2E_KEEP_CLUSTER_ON_FAILURE`: when truthy and at least one spec failed, the
   nested cluster is **not** torn down in `AfterSuite`, so you can inspect it.
+- `E2E_SKIP_SYSTEM_RECREATE`: when truthy, skips the two specs that drive the
+  `systemBucket` switches through the ModuleConfig: `system-bucket-toggle`
+  (unships and re-ships the system storage) and `system-single-replica` (which
+  **recreates the system store empty** in both directions — that is the setting's
+  documented behaviour — and takes two recreates' worth of time). Both run last in
+  the suite, so nothing else depends on the system store or its data.
 
 ## Quick start
 

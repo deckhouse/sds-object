@@ -39,9 +39,11 @@ import (
 // module templates (templates/system-object-storage.yaml), gated by the
 // sdsObject.systemBucket.enabled config value (default true). It asserts the
 // three CRs exist and carry the expected shape:
-//   - a cluster-scoped `system` ObjectStore of type System, whose
-//     redundancy is not set on System (it runs a fixed 3-replica Garage),
-//     with reclaimPolicy Retain;
+//   - a cluster-scoped `system` ObjectStore of type System with reclaimPolicy
+//     Retain and redundancy unset, i.e. the default 3-replica Garage (the suite
+//     skips when sdsObject.systemBucket.singleReplica renders redundancy: None,
+//     since every replica-count assertion below, and the master-count rebalance
+//     scenario, are specific to the 3-replica profile);
 //   - a cluster-scoped `system` Bucket referencing it;
 //   - a `system-d8-namespaces` BucketClaimPolicy allowing the d8-*
 //     namespaces via a pattern.
@@ -78,9 +80,14 @@ func systemBucketSpecs() {
 			reclaim, _, _ := unstructured.NestedString(osc.Object, "spec", "reclaimPolicy")
 			Expect(reclaim).To(Equal(string(objectv1alpha1.ClusterReclaimRetain)))
 
-			By("asserting redundancy is not set on the System store (it runs a fixed 3-replica Garage)")
-			_, hasRedundancy, _ := unstructured.NestedString(osc.Object, "spec", "redundancy")
-			Expect(hasRedundancy).To(BeFalse(), "spec.redundancy must not be set on a System ObjectStore")
+			By("asserting the System store runs the default 3-replica profile (redundancy unset)")
+			redundancy, hasRedundancy, _ := unstructured.NestedString(osc.Object, "spec", "redundancy")
+			if hasRedundancy && redundancy == string(objectv1alpha1.RedundancyNone) {
+				Skip("system ObjectStore is in single-replica mode (sdsObject.systemBucket.singleReplica is true); " +
+					"this suite covers the default 3-replica profile")
+			}
+			Expect(hasRedundancy).To(BeFalse(),
+				"spec.redundancy on a System ObjectStore is either unset (3 replicas) or None (single replica)")
 
 			By("asserting the system Bucket references the system cluster")
 			osb, err := suiteDyn.Resource(bucketGVR).Get(ctx, systemBucket, metav1.GetOptions{})

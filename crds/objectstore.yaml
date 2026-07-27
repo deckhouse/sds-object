@@ -56,7 +56,7 @@ spec:
                   message: "spec.elasticClusterRef is immutable after creation."
                 - rule: "oldSelf == null || !has(oldSelf.reclaimPolicy) || self.reclaimPolicy == oldSelf.reclaimPolicy"
                   message: "spec.reclaimPolicy is immutable after creation."
-                - rule: "oldSelf == null || (has(self.redundancy) == has(oldSelf.redundancy) && (!has(self.redundancy) || self.redundancy == oldSelf.redundancy))"
+                - rule: "oldSelf == null || self.type == 'System' || (has(self.redundancy) == has(oldSelf.redundancy) && (!has(self.redundancy) || self.redundancy == oldSelf.redundancy))"
                   message: "spec.redundancy is immutable after creation (changing the replication factor on a live cluster is not supported)."
                 - rule: "self.type != 'Heavy' || (has(self.elasticClusterRef) && size(self.elasticClusterRef) > 0)"
                   message: "spec.elasticClusterRef is required when spec.type is Heavy."
@@ -64,8 +64,8 @@ spec:
                   message: "spec.elasticClusterRef is only allowed when spec.type is Heavy."
                 - rule: "!(self.type in ['Lightweight', 'Full']) || (has(self.storage) && has(self.storage.class) && size(self.storage.class) > 0)"
                   message: "spec.storage.class is required when spec.type is Lightweight or Full."
-                - rule: "self.type != 'System' || !has(self.redundancy)"
-                  message: "spec.redundancy must not be set when spec.type is System (it runs a fixed 3-replica Garage, so the replication factor is not configurable)."
+                - rule: "self.type != 'System' || !has(self.redundancy) || self.redundancy == 'None'"
+                  message: "spec.redundancy for spec.type System is either unset (3 replicas) or None (a single replica); Standard and High are not configurable there."
                 - rule: "self.type != 'System' || !has(self.storage) || !has(self.storage.sizePerNode)"
                   message: "spec.storage.sizePerNode must not be set when spec.type is System (System uses managed node-sticky local PVs on control-plane nodes)."
               properties:
@@ -74,9 +74,10 @@ spec:
                   description: |
                     Cluster profile. Selects the backend and placement model:
 
-                    - `System` — Garage, deployed as a StatefulSet with a fixed
-                      3-replica count on control-plane nodes with node-sticky
-                      local PVs (replicas independent of the master count). For
+                    - `System` — Garage, deployed as a StatefulSet on
+                      control-plane nodes with node-sticky local PVs: 3 replicas
+                      by default, or a single one with `redundancy: None`. The
+                      count is independent of the master count. For
                       platform/system needs (backups, registry, logs).
                       `storage.class` is ignored.
                     - `Lightweight` — Garage, deployed as a StatefulSet backed by
@@ -140,9 +141,16 @@ spec:
                       coding), requires more nodes.
 
                     Immutable after creation: changing the replication factor on
-                    a live cluster is not supported. Must not be set for `System`:
-                    it runs a fixed 3-replica Garage, so the factor is not
-                    configurable.
+                    a live cluster is not supported.
+
+                    For `System` the only accepted value is `None`, which runs a
+                    single Garage replica (factor 1) instead of the default 3, and
+                    it is the one case where the field may be changed afterwards:
+                    the module sets it from
+                    `sdsObject.systemBucket.singleReplica`. Switching it
+                    RECREATES the system store — the data plane is torn down and
+                    rebuilt empty, so every stored object is lost (buckets are
+                    recreated and access keys re-issued automatically).
                   enum:
                     - None
                     - Standard
@@ -290,6 +298,9 @@ spec:
                     Reference to the Secret (in the module namespace) holding the
                     backend admin credentials used by the controller to manage
                     buckets and access keys.
+
+                    Not published for `Heavy`: its RGW credentials are owned by
+                    Rook and live in the sds-elastic namespace, not this module's.
                   properties:
                     name:
                       type: string

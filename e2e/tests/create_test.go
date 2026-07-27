@@ -23,7 +23,10 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	objectv1alpha1 "github.com/deckhouse/sds-object/api/v1alpha1"
 )
@@ -145,6 +148,68 @@ func createSpecs() {
 
 			By("running the mc probe Job against the bucket endpoint")
 			Expect(runS3ProbeJob(ctx, "s3-probe", suiteCfg.namespace, secretName)).To(Succeed())
+		})
+
+		It("publishes the admin Secret reference and the observed generation", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+			defer cancel()
+
+			// status.adminSecretRef is the contract that tells an operator which Secret
+			// holds the backend admin credentials the controller manages buckets with;
+			// observedGeneration is how a client knows the status it is reading belongs
+			// to the spec it applied. Neither was checked anywhere.
+			osc, err := suiteDyn.Resource(objectStoreGVR).Get(ctx, suiteCfg.oscName, metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred())
+
+			observed, found, err := unstructured.NestedInt64(osc.Object, "status", "observedGeneration")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(found).To(BeTrue(), "status.observedGeneration must be published")
+			Expect(observed).To(Equal(osc.GetGeneration()), "a Ready store must have observed its current spec")
+
+			if expectedBackend() != string(objectv1alpha1.BackendGarage) {
+				// Only the Garage driver publishes an admin Secret today; the others
+				// authenticate differently (SeaweedFS filer, Ceph RGW admin ops).
+				return
+			}
+			secretName, err := getStringField(ctx, objectStoreGVR, "", suiteCfg.oscName, "status", "adminSecretRef", "name")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(secretName).NotTo(BeEmpty(), "status.adminSecretRef.name must be published")
+			_, err = suiteClientset.CoreV1().Secrets(moduleNS).Get(ctx, secretName, metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred(), "the referenced admin Secret must exist in %s", moduleNS)
+		})
+
+		It("reports the data-plane capacity in status", func() {
+			if expectedBackend() != string(objectv1alpha1.BackendGarage) {
+				Skip("only the Garage driver reports capacity today (SeaweedFS/Ceph RGW report none)")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+
+			// status.capacity.total is the Garage layout total: the per-node capacity
+			// assigned to every data-plane node. Deriving the expectation from the
+			// StatefulSet's own PVC request keeps it honest across profiles (System's
+			// managed 10Gi default, Lightweight's storage.sizePerNode).
+			// Used/available/usedPercent are not populated by this driver yet, so
+			// nothing is asserted about them.
+			sts, err := suiteClientset.AppsV1().StatefulSets(moduleNS).Get(ctx, suiteCfg.oscName+"-garage", metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred(), "get Garage StatefulSet")
+			Expect(sts.Spec.Replicas).NotTo(BeNil())
+			Expect(sts.Spec.VolumeClaimTemplates).To(HaveLen(1))
+			perNode := sts.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests[corev1.ResourceStorage]
+			want := perNode.Value() * int64(*sts.Spec.Replicas)
+
+			Eventually(func() (int64, error) {
+				raw, err := getStringField(ctx, objectStoreGVR, "", suiteCfg.oscName, "status", "capacity", "total")
+				if err != nil {
+					return 0, err
+				}
+				total, err := resource.ParseQuantity(raw)
+				if err != nil {
+					return 0, err
+				}
+				return total.Value(), nil
+			}, 3*time.Minute, pollInterval).Should(Equal(want),
+				"status.capacity.total must be the per-node capacity times the data-plane node count")
 		})
 	})
 }

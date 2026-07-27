@@ -206,7 +206,8 @@ type ObjectStoreStatus struct {
 
 	// AdminSecretRef references the Secret (in the module namespace) holding
 	// the backend admin credentials used by the controller to manage buckets
-	// and access keys.
+	// and access keys. Not published for Heavy, whose RGW credentials are
+	// Rook-owned and live in the sds-elastic namespace.
 	// +optional
 	AdminSecretRef *LocalSecretReference `json:"adminSecretRef,omitempty"`
 
