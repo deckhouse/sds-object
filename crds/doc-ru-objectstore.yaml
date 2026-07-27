@@ -103,8 +103,11 @@ spec:
                     удалении ObjectStore.
 
                     - `Retain` (по умолчанию) — данные сохраняются. Для `Heavy`
-                      пулы Ceph RGW сохраняются (`preservePoolsOnDelete: true`)
-                      и CephObjectStore не удаляется; для остальных профилей
+                      пулы Ceph RGW сохраняются (`preservePoolsOnDelete: true`),
+                      поэтому сохранённые объекты не теряются; сам
+                      CephObjectStore при этом удаляется — если оставить его,
+                      кластер Ceph останется занятым и `ElasticCluster` уже
+                      никогда не удалить. Для остальных профилей
                       PVC/hostPath-данные остаются на месте.
                     - `Delete` — данные бэкенда (PVC, hostPath, пулы Ceph RGW)
                       уничтожаются.

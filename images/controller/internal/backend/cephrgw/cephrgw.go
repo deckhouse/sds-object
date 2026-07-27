@@ -129,14 +129,24 @@ func (d *Driver) EnsureCluster(ctx context.Context, cluster *v1alpha1.ObjectStor
 	return state, nil
 }
 
-// DeleteCluster removes the CephObjectStore only when the cluster reclaim
-// policy is Delete. With the default Retain the store (and thus all bucket
-// data) is left intact — deleting it would destroy the RGW pools regardless of
-// any per-bucket Retain policy.
+// DeleteCluster removes the CephObjectStore the module rendered for the cluster.
+// The reclaim policy is honoured through the CR's preservePoolsOnDelete field
+// rather than by keeping the CR around, so Retain still preserves the RGW pools
+// and everything stored in them.
 func (d *Driver) DeleteCluster(ctx context.Context, cluster *v1alpha1.ObjectStore) error {
-	if cluster.Spec.ReclaimPolicy != v1alpha1.ClusterReclaimDelete {
-		return nil
-	}
+	// The CephObjectStore is removed under BOTH reclaim policies, because the CR is
+	// not what holds the data: preservePoolsOnDelete decides that, and it was set
+	// from the reclaim policy when the CR was rendered (Retain -> true). So deleting
+	// it under Retain leaves the RGW pools and every object in them untouched, which
+	// is what Retain promises.
+	//
+	// Leaving the CR behind instead strands it. Nothing else removes it: its
+	// ownerReference is no help, because sds-elastic's validating webhook rejects
+	// requests to vendored Rook resources from anyone it does not know — the garbage
+	// collector included — so the CR outlives the ObjectStore it belonged to. And
+	// while it exists Rook keeps the Ceph object store alive, so sds-elastic can
+	// never finish tearing the ElasticCluster down: its finalizer waits on volumes
+	// that our leftover keeps in use.
 	store := newUnstructured(cephObjectStoreGVK)
 	ns, name := objectStoreKey(cluster)
 	store.SetNamespace(ns)

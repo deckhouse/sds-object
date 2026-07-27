@@ -204,8 +204,10 @@ spec:
 
                     - `Retain` (default) — persisted data is preserved. For
                       `Heavy` the Ceph RGW pools are kept
-                      (`preservePoolsOnDelete: true`) and the CephObjectStore is
-                      not deleted, so no stored objects are lost. For other
+                      (`preservePoolsOnDelete: true`), so no stored objects are
+                      lost; the CephObjectStore itself is still removed, because
+                      leaving it behind would keep the Ceph cluster in use and
+                      block the ElasticCluster from ever being deleted. For other
                       profiles the PVCs/hostPath data are left in place.
                     - `Delete` — the backend data (PVCs, hostPath data, or Ceph
                       RGW pools) is destroyed.
