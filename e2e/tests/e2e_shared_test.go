@@ -875,6 +875,18 @@ func createOSBPolicy(ctx context.Context, u *unstructured.Unstructured) error {
 	return err
 }
 
+// ensureOSBPolicy creates the policy unless it is already there. Policies are not
+// tied to a Bucket's lifecycle, so a spec that re-declares a bucket may find the
+// policy from an earlier spec still in place — and failing on AlreadyExists would
+// report a fixture collision as a product failure.
+func ensureOSBPolicy(ctx context.Context, u *unstructured.Unstructured) error {
+	err := createOSBPolicy(ctx, u)
+	if apierrors.IsAlreadyExists(err) {
+		return nil
+	}
+	return err
+}
+
 func createOSBAccess(ctx context.Context, u *unstructured.Unstructured) error {
 	_, err := suiteDyn.Resource(bucketAccessGVR).Namespace(u.GetNamespace()).Create(ctx, u, metav1.CreateOptions{})
 	return err

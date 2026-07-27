@@ -110,7 +110,9 @@ func reclaimSpecs() {
 					"the reconciler must adopt the existing backend bucket instead of failing on it")
 
 				By("granting access again and reading the marker back")
-				Expect(createOSBPolicy(ctx, buildOSBPolicy(policyName(retainBucket), retainBucket, []string{suiteCfg.namespace}))).To(Succeed())
+				// The policy from the previous spec is still there (it is not tied to the
+				// Bucket's lifecycle), so tolerate it rather than recreate it.
+				Expect(ensureOSBPolicy(ctx, buildOSBPolicy(policyName(retainBucket), retainBucket, []string{suiteCfg.namespace}))).To(Succeed())
 				Expect(createBucketClaim(ctx, buildBucketClaim(claimName(retainBucket), suiteCfg.namespace, retainBucket))).To(Succeed())
 				Expect(createOSBAccess(ctx, buildOSBAccess(accessName(retainBucket), suiteCfg.namespace, claimName(retainBucket), objectv1alpha1.AccessReadWrite))).To(Succeed())
 				Expect(waitAccessReady(ctx, suiteCfg.namespace, accessName(retainBucket))).To(Succeed())
