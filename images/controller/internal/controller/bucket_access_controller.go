@@ -187,6 +187,11 @@ func (r *BucketAccessReconciler) enqueueByClaim(ctx context.Context, o client.Ob
 }
 
 func (r *BucketAccessReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	// Bound the reconcile: a backend that stops answering must not take the
+	// worker with it (see withReconcileTimeout).
+	ctx, cancel := withReconcileTimeout(ctx, r.Cfg.ReconcileTimeout)
+	defer cancel()
+
 	r.Log.Info(fmt.Sprintf("[Reconcile] start for BucketAccess %s", req.NamespacedName))
 
 	access := &v1alpha1.BucketAccess{}
@@ -198,7 +203,7 @@ func (r *BucketAccessReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	if access.DeletionTimestamp != nil {
-		return r.reconcileDelete(ctx, access)
+		return ctrl.Result{}, r.reconcileDelete(ctx, access)
 	}
 
 	if !controllerutil.ContainsFinalizer(access, Finalizer) {
@@ -211,9 +216,9 @@ func (r *BucketAccessReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	return r.reconcileNormal(ctx, access)
 }
 
-func (r *BucketAccessReconciler) reconcileDelete(ctx context.Context, access *v1alpha1.BucketAccess) (ctrl.Result, error) {
+func (r *BucketAccessReconciler) reconcileDelete(ctx context.Context, access *v1alpha1.BucketAccess) error {
 	if !controllerutil.ContainsFinalizer(access, Finalizer) {
-		return ctrl.Result{}, nil
+		return nil
 	}
 
 	// Resolve the bound bucket + cluster to revoke the backend key. Distinguish a
@@ -229,10 +234,10 @@ func (r *BucketAccessReconciler) reconcileDelete(ctx context.Context, access *v1
 			if bucket != nil && cluster != nil {
 				driver, derr := r.Registry.For(cluster)
 				if derr != nil {
-					return ctrl.Result{}, derr
+					return derr
 				}
 				if derr := driver.DeleteAccess(ctx, cluster, bucket, access); derr != nil {
-					return ctrl.Result{}, derr
+					return derr
 				}
 			}
 			// bucket/cluster no longer resolvable: the backend (and its key) is
@@ -243,14 +248,14 @@ func (r *BucketAccessReconciler) reconcileDelete(ctx context.Context, access *v1
 		r.Log.Info(fmt.Sprintf("[reconcileDelete] access %s/%s: claim %q not found; releasing", access.Namespace, access.Name, access.Spec.BucketClaimName))
 	default:
 		// Transient error reading the claim: retry rather than orphan the key.
-		return ctrl.Result{}, err
+		return err
 	}
 
 	controllerutil.RemoveFinalizer(access, Finalizer)
 	if err := r.Client.Update(ctx, access); err != nil {
-		return ctrl.Result{}, err
+		return err
 	}
-	return ctrl.Result{}, nil
+	return nil
 }
 
 func (r *BucketAccessReconciler) reconcileNormal(ctx context.Context, access *v1alpha1.BucketAccess) (ctrl.Result, error) {

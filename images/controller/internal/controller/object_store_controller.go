@@ -121,6 +121,11 @@ func enqueueSystemObjectStores(c client.Client) handler.MapFunc {
 }
 
 func (r *ObjectStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	// Bound the reconcile: a backend that stops answering must not take the
+	// worker with it (see withReconcileTimeout).
+	ctx, cancel := withReconcileTimeout(ctx, r.Cfg.ReconcileTimeout)
+	defer cancel()
+
 	r.Log.Info(fmt.Sprintf("[Reconcile] start for ObjectStore %q", req.Name))
 
 	cluster := &v1alpha1.ObjectStore{}
@@ -132,7 +137,7 @@ func (r *ObjectStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	if cluster.DeletionTimestamp != nil {
-		return r.reconcileDelete(ctx, cluster)
+		return ctrl.Result{}, r.reconcileDelete(ctx, cluster)
 	}
 
 	if !controllerutil.ContainsFinalizer(cluster, Finalizer) {
@@ -145,9 +150,9 @@ func (r *ObjectStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	return r.reconcileNormal(ctx, cluster)
 }
 
-func (r *ObjectStoreReconciler) reconcileDelete(ctx context.Context, cluster *v1alpha1.ObjectStore) (ctrl.Result, error) {
+func (r *ObjectStoreReconciler) reconcileDelete(ctx context.Context, cluster *v1alpha1.ObjectStore) error {
 	if !controllerutil.ContainsFinalizer(cluster, Finalizer) {
-		return ctrl.Result{}, nil
+		return nil
 	}
 
 	driver, err := r.Registry.For(cluster)
@@ -156,14 +161,14 @@ func (r *ObjectStoreReconciler) reconcileDelete(ctx context.Context, cluster *v1
 		// drop the finalizer so the CR is not stuck forever.
 		r.Log.Warning(fmt.Sprintf("[reconcileDelete] %q: %v; removing finalizer", cluster.Name, err))
 	} else if err := driver.DeleteCluster(ctx, cluster); err != nil {
-		return ctrl.Result{}, err
+		return err
 	}
 
 	controllerutil.RemoveFinalizer(cluster, Finalizer)
 	if err := r.Client.Update(ctx, cluster); err != nil {
-		return ctrl.Result{}, err
+		return err
 	}
-	return ctrl.Result{}, nil
+	return nil
 }
 
 func (r *ObjectStoreReconciler) reconcileNormal(ctx context.Context, cluster *v1alpha1.ObjectStore) (ctrl.Result, error) {

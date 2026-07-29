@@ -32,6 +32,7 @@ const (
 	MaxConcurrentReconcilesEnv = "MAX_CONCURRENT_RECONCILES"
 	RequeueIntervalEnv         = "REQUEUE_INTERVAL_SECONDS"
 	SecurityResyncIntervalEnv  = "SECURITY_RESYNC_INTERVAL_SECONDS"
+	ReconcileTimeoutEnv        = "RECONCILE_TIMEOUT_SECONDS"
 	GarageImageEnv             = "GARAGE_IMAGE"
 	SeaweedFSImageEnv          = "SEAWEEDFS_IMAGE"
 	ClusterDomainEnv           = "CLUSTER_DOMAIN"
@@ -47,6 +48,14 @@ const (
 	// grant after a missed watch event) before the reconciler re-drives it and
 	// re-checks the policy. Cheap safety net under the watch chain (300s = 5m).
 	DefaultSecurityResyncIntervalSeconds = 300
+	// DefaultReconcileTimeoutSeconds bounds a single reconcile. Reconcilers talk
+	// to backends over HTTP, exec into data-plane pods and wait on the API
+	// server; a reconcile context carries no deadline of its own, so one call
+	// that never returns takes its worker with it — and with
+	// MaxConcurrentReconciles at 1 that is the whole controller, silently, until
+	// the pod is restarted. A deadline turns that into an error, a log line
+	// naming the object, and a retry.
+	DefaultReconcileTimeoutSeconds = 300
 )
 
 type Options struct {
@@ -60,6 +69,9 @@ type Options struct {
 	// deny-by-default revocation chain self-heals within minutes instead of
 	// waiting for the ~10h informer resync.
 	SecurityResyncInterval time.Duration
+	// ReconcileTimeout bounds a single Reconcile call, so a backend that stops
+	// answering cannot wedge a controller worker indefinitely.
+	ReconcileTimeout time.Duration
 	// GarageImage is the module registry reference for the Garage server
 	// image, injected via the GARAGE_IMAGE env var from Helm.
 	GarageImage string
@@ -115,6 +127,13 @@ func NewConfig() *Options {
 	if v := os.Getenv(SecurityResyncIntervalEnv); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			opts.SecurityResyncInterval = time.Duration(n) * time.Second
+		}
+	}
+
+	opts.ReconcileTimeout = time.Duration(DefaultReconcileTimeoutSeconds) * time.Second
+	if v := os.Getenv(ReconcileTimeoutEnv); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			opts.ReconcileTimeout = time.Duration(n) * time.Second
 		}
 	}
 

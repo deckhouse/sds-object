@@ -138,6 +138,11 @@ func (r *BucketReconciler) enqueueBucketsByCluster(ctx context.Context, o client
 }
 
 func (r *BucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	// Bound the reconcile: a backend that stops answering must not take the
+	// worker with it (see withReconcileTimeout).
+	ctx, cancel := withReconcileTimeout(ctx, r.Cfg.ReconcileTimeout)
+	defer cancel()
+
 	r.Log.Info(fmt.Sprintf("[Reconcile] start for Bucket %q", req.Name))
 
 	bucket := &v1alpha1.Bucket{}
@@ -149,7 +154,7 @@ func (r *BucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	if bucket.DeletionTimestamp != nil {
-		return r.reconcileDelete(ctx, bucket)
+		return ctrl.Result{}, r.reconcileDelete(ctx, bucket)
 	}
 
 	if !controllerutil.ContainsFinalizer(bucket, Finalizer) {
@@ -162,9 +167,9 @@ func (r *BucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	return r.reconcileNormal(ctx, bucket)
 }
 
-func (r *BucketReconciler) reconcileDelete(ctx context.Context, bucket *v1alpha1.Bucket) (ctrl.Result, error) {
+func (r *BucketReconciler) reconcileDelete(ctx context.Context, bucket *v1alpha1.Bucket) error {
 	if !controllerutil.ContainsFinalizer(bucket, Finalizer) {
-		return ctrl.Result{}, nil
+		return nil
 	}
 
 	cluster, err := r.getCluster(ctx, bucket.Spec.ObjectStoreRef)
@@ -177,23 +182,23 @@ func (r *BucketReconciler) reconcileDelete(ctx context.Context, bucket *v1alpha1
 	case err != nil:
 		// Transient (API unavailable, etc.): keep the finalizer and retry rather
 		// than release prematurely and orphan the backend bucket.
-		return ctrl.Result{}, err
+		return err
 	default:
 		driver, derr := r.Registry.For(cluster)
 		if derr != nil {
 			// Backend not resolvable: do not silently skip teardown — requeue.
-			return ctrl.Result{}, derr
+			return derr
 		}
 		if derr := driver.DeleteBucket(ctx, cluster, bucket); derr != nil {
-			return ctrl.Result{}, derr
+			return derr
 		}
 	}
 
 	controllerutil.RemoveFinalizer(bucket, Finalizer)
 	if err := r.Client.Update(ctx, bucket); err != nil {
-		return ctrl.Result{}, err
+		return err
 	}
-	return ctrl.Result{}, nil
+	return nil
 }
 
 func (r *BucketReconciler) reconcileNormal(ctx context.Context, bucket *v1alpha1.Bucket) (ctrl.Result, error) {

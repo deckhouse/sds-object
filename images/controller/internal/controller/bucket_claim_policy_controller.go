@@ -86,6 +86,11 @@ func (r *BucketClaimPolicyReconciler) enqueueByBucket(ctx context.Context, o cli
 }
 
 func (r *BucketClaimPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	// Bound the reconcile: a backend that stops answering must not take the
+	// worker with it (see withReconcileTimeout).
+	ctx, cancel := withReconcileTimeout(ctx, r.Cfg.ReconcileTimeout)
+	defer cancel()
+
 	policy := &v1alpha1.BucketClaimPolicy{}
 	if err := r.Client.Get(ctx, req.NamespacedName, policy); err != nil {
 		if apierrors.IsNotFound(err) {
