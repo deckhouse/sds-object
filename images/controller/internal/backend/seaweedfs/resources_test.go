@@ -17,6 +17,7 @@ limitations under the License.
 package seaweedfs
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -46,6 +47,55 @@ func TestNamesAndEndpoint(t *testing.T) {
 	if got := s3Endpoint(c, "d8-sds-object", "internal.cluster.local"); got != "http://media-seaweedfs.d8-sds-object.svc.internal.cluster.local:8333" {
 		t.Errorf("s3Endpoint=%q", got)
 	}
+}
+
+// TestMainServicePublishesEveryDialedPort keeps the Service in sync with the
+// addresses the driver actually dials. Every endpoint helper resolves to the
+// main Service, so a port used by one of them but missing from the Service is a
+// silent blackhole: the filer pods listen on it, the packets go nowhere, and the
+// only symptom is an i/o timeout minutes later. Derived from the helpers rather
+// than hard-coded, so adding a helper that dials a new port fails here.
+func TestMainServicePublishesEveryDialedPort(t *testing.T) {
+	const ns, domain = "d8-sds-object", "cluster.local"
+	c := cluster("media", v1alpha1.RedundancyStandard)
+
+	svc := buildMainService(c, ns)
+	published := map[int32]bool{}
+	for _, p := range svc.Spec.Ports {
+		published[p.Port] = true
+	}
+
+	for name, target := range map[string]string{
+		"s3HostPort":      s3HostPort(c, ns, domain),
+		"s3Endpoint":      s3Endpoint(c, ns, domain),
+		"filerEndpoint":   filerEndpoint(c, ns, domain),
+		"filerGRPCTarget": filerGRPCTarget(c, ns, domain),
+	} {
+		host, port := splitHostPort(t, target)
+		if host != svcName(c)+"."+ns+".svc."+domain {
+			t.Errorf("%s targets host %q, not the main Service; this test no longer covers it", name, host)
+			continue
+		}
+		if !published[port] {
+			t.Errorf("%s dials port %d, which the main Service does not publish (ports: %v)", name, port, svc.Spec.Ports)
+		}
+	}
+}
+
+// splitHostPort extracts host and port from an endpoint helper's output, with or
+// without an http:// scheme.
+func splitHostPort(t *testing.T, target string) (string, int32) {
+	t.Helper()
+	hostPort := strings.TrimPrefix(target, "http://")
+	idx := strings.LastIndex(hostPort, ":")
+	if idx < 0 {
+		t.Fatalf("no port in %q", target)
+	}
+	port, err := strconv.Atoi(hostPort[idx+1:])
+	if err != nil {
+		t.Fatalf("port in %q: %v", target, err)
+	}
+	return hostPort[:idx], int32(port)
 }
 
 func TestTopology(t *testing.T) {

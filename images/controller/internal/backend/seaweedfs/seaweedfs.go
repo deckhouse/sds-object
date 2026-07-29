@@ -22,12 +22,12 @@ limitations under the License.
 // PostgreSQL metadata store provisioned via the managed-postgres module (see
 // postgres.go).
 //
-// Bucket/credential provisioning uses SeaweedFS's filer-stored S3 IAM config
-// (/etc/iam/identity.json, managed over the filer HTTP API; the S3 gateway
-// subscribes to filer metadata and reloads it) plus the S3 API for the bucket
-// itself. EnsureCluster bootstraps an admin identity used for bucket
-// create/delete; each BucketAccess gets its own identity scoped to
-// its bucket.
+// Bucket/credential provisioning uses SeaweedFS's filer-stored S3 IAM state —
+// one file per identity under /etc/iam/identities/, managed over the filer gRPC
+// API; the S3 gateway watches that directory and reloads on change (see iam.go)
+// — plus the S3 API for the bucket itself. EnsureCluster bootstraps an admin
+// identity used for bucket create/delete; each BucketAccess gets its own
+// identity scoped to its bucket.
 package seaweedfs
 
 import (
@@ -35,7 +35,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"sync"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -73,10 +72,9 @@ type Driver struct {
 	namespace     string
 	image         string
 	clusterDomain string
-	// identityLocks serializes read-modify-write of each cluster's filer
-	// identity.json (keyed by cluster name), so concurrent reconciles do not
-	// lose each other's updates. See mutateIdentities.
-	identityLocks sync.Map
+	// identityFilesOverride, when set (tests), replaces the filer-backed identity
+	// store returned by identityFilesFor.
+	identityFilesOverride identityFiles
 }
 
 var _ backend.Driver = (*Driver)(nil)
@@ -273,29 +271,28 @@ func (d *Driver) DeleteBucket(ctx context.Context, cluster *v1alpha1.ObjectStore
 	return s3util.DeleteBucket(ctx, mc, backend.BucketDisplayName(bucket))
 }
 
-// ensureAdminIdentity makes sure the admin Secret exists and the matching
-// admin identity is present in the filer IAM config.
+// ensureAdminIdentity makes sure the admin Secret exists and the matching admin
+// identity file is present on the filer. The write is unconditional: the admin
+// identity is this driver's own file, and writing it can affect no other
+// identity (see iam.go on the per-identity layout).
 func (d *Driver) ensureAdminIdentity(ctx context.Context, cluster *v1alpha1.ObjectStore) error {
 	ak, sk, err := d.ensureAdminSecret(ctx, cluster)
 	if err != nil {
 		return err
 	}
-
-	return d.mutateIdentities(ctx, cluster, func(cfg *identityConfig) (bool, error) {
-		return cfg.upsert(s3Identity{
-			Name:        adminIdentityName,
-			Credentials: []s3Credential{{AccessKey: ak, SecretKey: sk}},
-			Actions:     []string{actionAdmin},
-		}), nil
+	return d.identityFilesFor(cluster).writeIdentity(ctx, &s3Identity{
+		Name:        adminIdentityName,
+		Credentials: []s3Credential{{AccessKey: ak, SecretKey: sk}},
+		Actions:     []string{actionAdmin},
 	})
 }
 
 // ensureAdminSecret creates the cluster admin Secret on first reconcile and
 // returns its credentials. It never overwrites existing values.
-func (d *Driver) ensureAdminSecret(ctx context.Context, cluster *v1alpha1.ObjectStore) (string, string, error) {
+func (d *Driver) ensureAdminSecret(ctx context.Context, cluster *v1alpha1.ObjectStore) (ak, sk string, err error) {
 	key := client.ObjectKey{Namespace: d.namespace, Name: adminSecretName(cluster)}
 	existing := &corev1.Secret{}
-	err := d.client.Get(ctx, key, existing)
+	err = d.client.Get(ctx, key, existing)
 	if err == nil {
 		return string(existing.Data[secretKeyAccessKey]), string(existing.Data[secretKeySecretKey]), nil
 	}
@@ -303,11 +300,11 @@ func (d *Driver) ensureAdminSecret(ctx context.Context, cluster *v1alpha1.Object
 		return "", "", err
 	}
 
-	ak, err := randomHex(16)
+	ak, err = randomHex(16)
 	if err != nil {
 		return "", "", err
 	}
-	sk, err := randomHex(32)
+	sk, err = randomHex(32)
 	if err != nil {
 		return "", "", err
 	}
