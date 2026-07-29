@@ -26,9 +26,10 @@ import (
 )
 
 // EnsureAccess provisions an IAM identity scoped to the bucket for the given
-// access. SeaweedFS stores credentials in the filer IAM config, so the secret
-// key is recoverable and always returned; mintFresh replaces it with a new
-// random pair (rotation), which revokes the previous key.
+// access — one per-identity file on the filer, touching no other identity's
+// credentials. SeaweedFS stores the secret key retrievably, so it is always
+// returned; mintFresh replaces the pair with a new random one (rotation), which
+// revokes the previous key.
 func (d *Driver) EnsureAccess(ctx context.Context, cluster *v1alpha1.ObjectStore, bucket *v1alpha1.Bucket, access *v1alpha1.BucketAccess, mintFresh bool) (backend.AccessState, error) {
 	adminAK, _, err := d.adminCreds(ctx, cluster)
 	if err != nil {
@@ -40,31 +41,31 @@ func (d *Driver) EnsureAccess(ctx context.Context, cluster *v1alpha1.ObjectStore
 
 	name := backend.BucketDisplayName(bucket)
 	identityName := backend.AccessResourceName(access)
+	files := d.identityFilesFor(cluster)
 
-	// Serialize the whole read-decide-write cycle so a concurrent reconcile
-	// cannot clobber the identity we issue here (or vice versa).
 	var accessKey, secretKey string
-	if err := d.mutateIdentities(ctx, cluster, func(cfg *identityConfig) (bool, error) {
-		accessKey, secretKey = "", ""
-		if !mintFresh {
-			if cur, ok := findCredentials(cfg, identityName); ok {
-				accessKey, secretKey = cur.AccessKey, cur.SecretKey
-			}
+	if !mintFresh {
+		existing, found, err := files.readIdentity(ctx, identityName)
+		if err != nil {
+			return backend.AccessState{}, err
 		}
-		if accessKey == "" || secretKey == "" {
-			var e error
-			if accessKey, e = randomHex(16); e != nil {
-				return false, e
-			}
-			if secretKey, e = randomHex(32); e != nil {
-				return false, e
-			}
+		if found && len(existing.Credentials) > 0 {
+			accessKey, secretKey = existing.Credentials[0].AccessKey, existing.Credentials[0].SecretKey
 		}
-		return cfg.upsert(s3Identity{
-			Name:        identityName,
-			Credentials: []s3Credential{{AccessKey: accessKey, SecretKey: secretKey}},
-			Actions:     bucketActions(name, access.Spec.Permission),
-		}), nil
+	}
+	if accessKey == "" || secretKey == "" {
+		if accessKey, err = randomHex(16); err != nil {
+			return backend.AccessState{}, err
+		}
+		if secretKey, err = randomHex(32); err != nil {
+			return backend.AccessState{}, err
+		}
+	}
+
+	if err := files.writeIdentity(ctx, &s3Identity{
+		Name:        identityName,
+		Credentials: []s3Credential{{AccessKey: accessKey, SecretKey: secretKey}},
+		Actions:     bucketActions(name, access.Spec.Permission),
 	}); err != nil {
 		return backend.AccessState{}, err
 	}
@@ -78,7 +79,9 @@ func (d *Driver) EnsureAccess(ctx context.Context, cluster *v1alpha1.ObjectStore
 }
 
 // DeleteAccess removes the IAM identity issued for the access. Idempotent and
-// tolerant of an already-deleted cluster.
+// tolerant of an already-deleted cluster; an identity file that cannot be
+// confirmed gone is an error, so the access keeps its finalizer and retries
+// rather than releasing while a live credential may remain.
 func (d *Driver) DeleteAccess(ctx context.Context, cluster *v1alpha1.ObjectStore, _ *v1alpha1.Bucket, access *v1alpha1.BucketAccess) error {
 	adminAK, _, err := d.adminCreds(ctx, cluster)
 	if err != nil {
@@ -91,17 +94,5 @@ func (d *Driver) DeleteAccess(ctx context.Context, cluster *v1alpha1.ObjectStore
 		return nil
 	}
 
-	return d.mutateIdentities(ctx, cluster, func(cfg *identityConfig) (bool, error) {
-		return cfg.remove(backend.AccessResourceName(access)), nil
-	})
-}
-
-// findCredentials returns the first credential pair of the named identity.
-func findCredentials(cfg *identityConfig, name string) (s3Credential, bool) {
-	for i := range cfg.Identities {
-		if cfg.Identities[i].Name == name && len(cfg.Identities[i].Credentials) > 0 {
-			return cfg.Identities[i].Credentials[0], true
-		}
-	}
-	return s3Credential{}, false
+	return d.identityFilesFor(cluster).deleteIdentity(ctx, backend.AccessResourceName(access))
 }

@@ -198,6 +198,14 @@ func dataPVC(cluster *v1alpha1.ObjectStore, size resource.Quantity) corev1.Persi
 
 // buildMainService is the ClusterIP Service exposing S3 (and filer) on the
 // filer pods. This is the cluster's S3 endpoint.
+//
+// The filer gRPC port has to be here too: the controller reaches the filer
+// through this Service for both the IAM identity files (iam.go) and the bucket
+// quota (quota.go), and both speak the SeaweedFiler gRPC API. Without the port
+// in the Service, those dials are silently blackholed (i/o timeout) even though
+// the pods listen on it. Sharing the Service with S3 is safe because every
+// profile keeps the filer metadata store consistent across the pods behind it:
+// leveldb profiles run a single filer, HighRedundancy shares one Postgres.
 func buildMainService(cluster *v1alpha1.ObjectStore, namespace string) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: svcName(cluster), Namespace: namespace, Labels: commonLabels(cluster)},
@@ -206,6 +214,7 @@ func buildMainService(cluster *v1alpha1.ObjectStore, namespace string) *corev1.S
 			Ports: []corev1.ServicePort{
 				{Name: "s3", Port: s3Port, TargetPort: intstr.FromInt(s3Port)},
 				{Name: "filer", Port: filerPort, TargetPort: intstr.FromInt(filerPort)},
+				{Name: "filer-grpc", Port: filerGRPC, TargetPort: intstr.FromInt(filerGRPC)},
 			},
 		},
 	}
@@ -343,7 +352,7 @@ func buildVolumeStatefulSet(cluster *v1alpha1.ObjectStore, namespace, image stri
 // Replicated the filer uses the built-in leveldb2 store on a local `data` PVC,
 // so it runs as a single replica. The store is selected entirely by the mounted
 // filer.toml Secret. Started WITHOUT -s3.config so the gateway uses the
-// filer-stored IAM config (/etc/iam/identity.json) the access reconciler
+// filer-stored IAM state (/etc/iam/identities/) the access reconciler
 // manages and the gateway reloads automatically.
 func buildFilerStatefulSet(cluster *v1alpha1.ObjectStore, namespace, image string) *appsv1.StatefulSet {
 	mounts := []corev1.VolumeMount{{Name: "config", MountPath: configMount}}
