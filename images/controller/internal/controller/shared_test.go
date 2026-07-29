@@ -17,8 +17,10 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -98,5 +100,30 @@ func TestAggregateReady(t *testing.T) {
 	sb.setCondition("Ready", metav1.ConditionTrue, reasonReady, "")
 	if !aggregateReady(sb) {
 		t.Errorf("aggregateReady(True)=false, want true")
+	}
+}
+
+// TestWithReconcileTimeout pins the bound that keeps one stuck backend call from
+// taking a controller with it: a configured timeout must reach the context, and an
+// unset one (tests, or a deliberately disabled bound) must leave it alone rather
+// than expire immediately.
+func TestWithReconcileTimeout(t *testing.T) {
+	bounded, cancel := withReconcileTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	deadline, ok := bounded.Deadline()
+	if !ok {
+		t.Fatalf("a configured timeout must put a deadline on the context")
+	}
+	if remaining := time.Until(deadline); remaining <= 0 || remaining > 30*time.Second {
+		t.Errorf("remaining=%v, want (0, 30s]", remaining)
+	}
+
+	unbounded, cancel := withReconcileTimeout(context.Background(), 0)
+	defer cancel()
+	if _, ok := unbounded.Deadline(); ok {
+		t.Errorf("an unset timeout must not bound the context")
+	}
+	if err := unbounded.Err(); err != nil {
+		t.Errorf("an unset timeout must leave the context usable, got %v", err)
 	}
 }

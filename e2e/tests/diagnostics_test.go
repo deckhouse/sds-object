@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 
@@ -37,17 +38,39 @@ import (
 func dumpFailedSpecDiagnostics(ctx context.Context) {
 	GinkgoWriter.Printf("\n========== sds-object e2e diagnostics ==========\n")
 
-	dumpDynamic(ctx, objectStoreGVR, "", suiteCfg.oscName, "ObjectStore")
-	dumpDynamic(ctx, bucketGVR, "", suiteCfg.bucketName, "Bucket")
+	// Every ObjectStore and Bucket, not just the shared ones: the profile specs
+	// each bring up their own store, and a dump naming only the primary is silent
+	// about exactly the object that failed — a Full store stuck below Ready cost a
+	// whole diagnosis cycle to that gap, because its BackendReady message (the one
+	// sentence that says why) was never printed.
+	dumpAllDynamic(ctx, objectStoreGVR, "ObjectStore")
+	dumpAllDynamic(ctx, bucketGVR, "Bucket")
 	dumpDynamic(ctx, bucketClaimPolicyGVR, "", policyName(suiteCfg.bucketName), "BucketClaimPolicy")
 	dumpDynamic(ctx, bucketAccessGVR, suiteCfg.namespace, accessName(suiteCfg.bucketName), "BucketAccess")
 
 	dumpPods(ctx, moduleNS)
+	dumpControllerLease(ctx)
 	dumpControllerLog(ctx)
 	dumpEvents(ctx, moduleNS)
 	dumpEvents(ctx, suiteCfg.namespace)
 
 	GinkgoWriter.Printf("================================================\n\n")
+}
+
+// dumpAllDynamic prints the status of every object of a cluster-scoped kind.
+func dumpAllDynamic(ctx context.Context, gvr schema.GroupVersionResource, kind string) {
+	list, err := suiteDyn.Resource(gvr).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		GinkgoWriter.Printf("  %s list: %v\n", kind, err)
+		return
+	}
+	if len(list.Items) == 0 {
+		GinkgoWriter.Printf("  %s: none\n", kind)
+		return
+	}
+	for i := range list.Items {
+		dumpObject(&list.Items[i], kind, "")
+	}
 }
 
 func dumpDynamic(ctx context.Context, gvr schema.GroupVersionResource, ns, name, kind string) {
@@ -65,8 +88,14 @@ func dumpDynamic(ctx context.Context, gvr schema.GroupVersionResource, ns, name,
 		return
 	}
 
+	dumpObject(obj, kind, ns)
+}
+
+// dumpObject prints one object's phase and conditions, messages included — the
+// message is usually the whole answer.
+func dumpObject(obj *unstructured.Unstructured, kind, ns string) {
 	phase, _, _ := unstructured.NestedString(obj.Object, "status", "phase")
-	GinkgoWriter.Printf("  %s %s: phase=%q\n", kind, formatRef(ns, name), phase)
+	GinkgoWriter.Printf("  %s %s: phase=%q\n", kind, formatRef(ns, obj.GetName()), phase)
 
 	conds, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
 	for _, c := range conds {
@@ -80,6 +109,32 @@ func dumpDynamic(ctx context.Context, gvr schema.GroupVersionResource, ns, name,
 		msg, _, _ := unstructured.NestedString(cm, "message")
 		GinkgoWriter.Printf("    - %s=%s reason=%q msg=%q\n", t, st, reason, msg)
 	}
+}
+
+// controllerLeaseName is the leader-election Lease the controller holds; its
+// holder and renew time tell apart "the leader stopped working" from "leadership
+// moved", which the log alone cannot.
+const controllerLeaseName = "sds-object-controller"
+
+// dumpControllerLease prints who holds the controller's leader lease and how
+// stale the renewal is. A controller that stops reconciling looks the same in the
+// log either way — wedged on a call, or no longer the leader — and this is the
+// cheapest thing that separates the two.
+func dumpControllerLease(ctx context.Context) {
+	lease, err := suiteClientset.CoordinationV1().Leases(moduleNS).Get(ctx, controllerLeaseName, metav1.GetOptions{})
+	if err != nil {
+		GinkgoWriter.Printf("  controller lease: %v\n", err)
+		return
+	}
+	holder, renew := "<none>", "<never>"
+	if lease.Spec.HolderIdentity != nil {
+		holder = *lease.Spec.HolderIdentity
+	}
+	if lease.Spec.RenewTime != nil {
+		renew = fmt.Sprintf("%s (%s ago)", lease.Spec.RenewTime.Format(time.RFC3339),
+			time.Since(lease.Spec.RenewTime.Time).Truncate(time.Second))
+	}
+	GinkgoWriter.Printf("  controller lease: holder=%s renewed=%s\n", holder, renew)
 }
 
 // controllerLogTail is how much of the controller log a failure dump carries:

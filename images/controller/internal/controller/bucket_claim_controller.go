@@ -148,6 +148,11 @@ func (r *BucketClaimReconciler) enqueueByPolicy(ctx context.Context, o client.Ob
 }
 
 func (r *BucketClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	// Bound the reconcile: a backend that stops answering must not take the
+	// worker with it (see withReconcileTimeout).
+	ctx, cancel := withReconcileTimeout(ctx, r.Cfg.ReconcileTimeout)
+	defer cancel()
+
 	r.Log.Info(fmt.Sprintf("[Reconcile] start for BucketClaim %s", req.NamespacedName))
 
 	claim := &v1alpha1.BucketClaim{}

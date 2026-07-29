@@ -23,6 +23,7 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -139,6 +140,23 @@ func derivePhase(conditions []metav1.Condition, stageOrder []string) string {
 		return v1alpha1.PhaseInProgress
 	}
 	return v1alpha1.PhaseReady
+}
+
+// withReconcileTimeout bounds a single reconcile. Reconcilers talk to backends
+// over HTTP, exec into data-plane pods and wait on the API server, and a
+// reconcile context carries no deadline of its own — so one call that never
+// returns takes its worker with it. With MaxConcurrentReconciles at 1 that is the
+// entire controller: every other object of that kind silently stops being
+// reconciled until the pod restarts, which is exactly what an e2e run caught (the
+// ObjectStore worker entered a reconcile and nothing was reconciled for the next
+// half hour). A deadline turns that into an error naming the object, and a retry.
+//
+// A zero timeout (unset config, as in tests) leaves the context untouched.
+func withReconcileTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 // aggregateReady reports whether the builder's most recent write of the
