@@ -41,7 +41,9 @@ jobs:
       cluster_config: e2e/tests/cluster_config.ci.yml
       # Create a fresh cluster through Deckhouse Commander for each run.
       cluster_provider: commander
-      # Check out the same storage-e2e ref for scripts / cmd / Go code.
+      # Check out the same storage-e2e ref for scripts / cmd / Go code. The run
+      # script replaces the module's storage-e2e dependency with this checkout, so
+      # this — not the go.mod pin — decides which harness code the suite runs.
       storage_e2e_ref: main
       # Install the image built for this PR (build_dev publishes the pr<N> tag).
       module_image_tag: pr${{ github.event.pull_request.number }}
