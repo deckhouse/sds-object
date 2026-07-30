@@ -49,6 +49,7 @@ func dumpFailedSpecDiagnostics(ctx context.Context) {
 	dumpDynamic(ctx, bucketAccessGVR, suiteCfg.namespace, accessName(suiteCfg.bucketName), "BucketAccess")
 
 	dumpPods(ctx, moduleNS)
+	dumpNodes(ctx)
 	dumpControllerLease(ctx)
 	dumpControllerLog(ctx)
 	dumpEvents(ctx, moduleNS)
@@ -185,9 +186,66 @@ func dumpPods(ctx context.Context, ns string) {
 	GinkgoWriter.Printf("  pods in %s (%d):\n", ns, len(pods.Items))
 	for i := range pods.Items {
 		p := &pods.Items[i]
-		GinkgoWriter.Printf("    - %s phase=%s ready=%v restarts=%d\n",
-			p.Name, p.Status.Phase, podReady(p), podRestarts(p))
+		GinkgoWriter.Printf("    - %s phase=%s ready=%v restarts=%d node=%s%s\n",
+			p.Name, p.Status.Phase, podReady(p), podRestarts(p), nodeOrUnassigned(p), schedulingNote(p))
 	}
+}
+
+func nodeOrUnassigned(p *corev1.Pod) string {
+	if p.Spec.NodeName == "" {
+		return "<unassigned>"
+	}
+	return p.Spec.NodeName
+}
+
+// schedulingNote returns the scheduler's own explanation for a pod that has not
+// been placed. Without it a Pending pod reads as "something is wrong somewhere":
+// a run lost three hours to two Pending Garage pods whose PodScheduled reason
+// (unschedulable, and why) was never printed.
+func schedulingNote(p *corev1.Pod) string {
+	for _, c := range p.Status.Conditions {
+		if c.Type == corev1.PodScheduled && c.Status != corev1.ConditionTrue {
+			return fmt.Sprintf(" scheduling=%s/%s", c.Reason, trim(c.Message, 200))
+		}
+	}
+	return ""
+}
+
+// dumpNodes prints the cluster's nodes: a data-plane pod that cannot be placed is
+// usually a statement about the nodes, not about the module, and the control-plane
+// count in particular drives the System profile's placement.
+func dumpNodes(ctx context.Context) {
+	nodes, err := suiteClientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		GinkgoWriter.Printf("  nodes: %v\n", err)
+		return
+	}
+	GinkgoWriter.Printf("  nodes (%d):\n", len(nodes.Items))
+	for i := range nodes.Items {
+		n := &nodes.Items[i]
+		role := "worker"
+		if _, ok := n.Labels["node-role.kubernetes.io/control-plane"]; ok {
+			role = "control-plane"
+		}
+		var taints []string
+		for _, t := range n.Spec.Taints {
+			taints = append(taints, t.Key+"="+t.Value+":"+string(t.Effect))
+		}
+		GinkgoWriter.Printf("    - %s role=%s ready=%s unschedulable=%v taints=%v\n",
+			n.Name, role, nodeReadyState(n), n.Spec.Unschedulable, taints)
+	}
+}
+
+func nodeReadyState(n *corev1.Node) string {
+	for _, c := range n.Status.Conditions {
+		if c.Type == corev1.NodeReady {
+			if c.Status == corev1.ConditionTrue {
+				return "True"
+			}
+			return fmt.Sprintf("%s (%s: %s)", c.Status, c.Reason, trim(c.Message, 120))
+		}
+	}
+	return "<unknown>"
 }
 
 func dumpEvents(ctx context.Context, ns string) {

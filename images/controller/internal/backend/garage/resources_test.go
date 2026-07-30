@@ -283,7 +283,10 @@ func TestBuildSystemStatefulSet(t *testing.T) {
 	if idVol == nil {
 		t.Fatalf("expected a node-identity volume")
 	}
-	if idVol.Secret == nil || idVol.Secret.SecretName != nodeIdentitySecretName(systemCluster()) {
+	if idVol.Secret == nil {
+		t.Fatalf("node-identity volume=%+v, want it backed by secret %q", idVol.VolumeSource, nodeIdentitySecretName(systemCluster()))
+	}
+	if idVol.Secret.SecretName != nodeIdentitySecretName(systemCluster()) {
 		t.Errorf("node-identity volume=%+v, want secret %q", idVol.VolumeSource, nodeIdentitySecretName(systemCluster()))
 	}
 	if idVol.Secret.Optional == nil || !*idVol.Secret.Optional {

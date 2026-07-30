@@ -310,9 +310,28 @@ func (r *BucketAccessReconciler) reconcileNormal(ctx context.Context, access *v1
 		authorized, authzReason = ok, reason
 	}
 
-	// Gate on the claim being Bound to a Ready bucket AND on the independent
+	// A bucket that exists but is not Ready is a health signal, not a revocation
+	// one: its backend is restarting, unreachable or still coming up. Revoking on
+	// it destroys working credentials for as long as the outage lasts — a full
+	// data-plane restart of the System store took every issued key with it — and
+	// re-issuing afterwards silently rotates the caller's key. So this case waits:
+	// the grant and the credentials Secret are left alone.
+	//
+	// Revocation stays for the cases that express intent rather than health: the
+	// claim is no longer bound to a bucket, the bound bucket or its store is gone,
+	// or the namespace is no longer authorized for it.
+	bucketUnhealthy := bucket != nil && cluster != nil && claimBound(claim) && authorized &&
+		bucketReadyState(bucket) != string(metav1.ConditionTrue)
+	if bucketUnhealthy {
+		status.setCondition(v1alpha1.BucketAccessConditionAccessGranted, metav1.ConditionFalse, reasonInProgress,
+			fmt.Sprintf("Bucket %q is not Ready; keeping the issued credentials", bucket.Name))
+		gateAfter(status, bucketAccessStageOrder, v1alpha1.BucketAccessConditionAccessGranted)
+		return r.finish(ctx, access, status, observed, nil)
+	}
+
+	// Gate on the claim being Bound to a bucket AND on the independent
 	// authorization check.
-	if !claimBound(claim) || bucket == nil || cluster == nil || bucketReadyState(bucket) != string(metav1.ConditionTrue) || !authorized {
+	if !claimBound(claim) || bucket == nil || cluster == nil || !authorized {
 		// The claim is not usable (or access is no longer authorized): enforce
 		// revocation of any prior grant.
 		if access.Status != nil && access.Status.AccessKeyID != "" {
@@ -331,8 +350,8 @@ func (r *BucketAccessReconciler) reconcileNormal(ctx context.Context, access *v1
 			}
 			observed.revoked = true
 		}
-		reason, message := "WaitingForClaim", fmt.Sprintf("BucketClaim %q is not Bound to a Ready bucket", access.Spec.BucketClaimName)
-		if !authorized && bucket != nil && cluster != nil && bucketReadyState(bucket) == string(metav1.ConditionTrue) && claimBound(claim) {
+		reason, message := "WaitingForClaim", fmt.Sprintf("BucketClaim %q is not Bound to a bucket", access.Spec.BucketClaimName)
+		if !authorized && bucket != nil && cluster != nil && claimBound(claim) {
 			// The only failing gate is authorization: report it explicitly.
 			reason, message = "DeniedByPolicy", authzReason
 		}
